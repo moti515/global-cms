@@ -1,0 +1,38 @@
+name: Telegram Family Media Sync
+
+on:
+  schedule:
+    - cron: '0 5 * * *'  # 08:00 за Києвом
+    - cron: '0 15 * * *' # 18:00 за Києвом
+  workflow_dispatch:      # Дозволяє запускати вручну через кнопку на GitHub
+
+jobs:
+  sync-media:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-node: '3.10'
+        cache: 'pip'
+
+    - name: Install FFmpeg
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run sync script
+      env:
+        GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: python main.py
