@@ -1,0 +1,34 @@
+name: Weekly Photo Exchange Sync
+
+on:
+  schedule:
+    # Запуск щонеділі о 12:00 за UTC (15:00 за Києвом)
+    - cron: '0 12 * * 0'
+  workflow_dispatch: # Дозволяє запускати вручну кнопкою
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update && sudo apt-get install -y ffmpeg
+        python -m pip install --upgrade pip
+        pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow requests
+
+    - name: Run script for Photo Exchanger
+      env:
+        GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      # Зверніть увагу на аргумент 'exchange' в кінці команди!
+      run: python main.py exchange
