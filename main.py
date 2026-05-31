@@ -12,6 +12,7 @@ from PIL.ExifTags import TAGS, GPSTAGS
 
 # Налаштування
 FOLDER_ID = '1MFTlnTVwOuPysxtdS-FzQSZAhFnbzTwz'
+TRASH_FOLDER_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
 def get_gdrive_service():
@@ -243,13 +244,18 @@ def main():
             success = send_media_group(batch, caption)
             
             if success:
-                print("✅ Успішно надіслано. Переміщаємо надісланий контент у Кошик на Google Диску...")
+                print(f"✅ Успішно надіслано. Переміщаємо файли в папку Кошик ({TRASH_FOLDER_ID})...")
                 for uploaded_item in batch:
                     try:
-                        service.files().update(fileId=uploaded_item['id'], body={'trashed': True}).execute()
-                        print(f"🗑️ Переміщено в кошик: {uploaded_item['name']}")
+                        service.files().update(
+                            fileId=uploaded_item['id'],
+                            addParents=TRASH_FOLDER_ID,
+                            removeParents=FOLDER_ID,
+                            fields='id, parents'
+                        ).execute()
+                        print(f"📦 Переміщено до проміжного кошика: {uploaded_item['name']}")
                     except Exception as e:
-                        print(f"❌ Не вдалося перемістити в кошик {uploaded_item['name']}: {e}")
+                        print(f"❌ Не вдалося перемістити {uploaded_item['name']}: {e}")
             else:
                 print(f"Помилка публікації альбому для {caption}")
         # КЛЮЧОВЕ: Після того, як перша група (всі її батчі) повністю оброблена,
