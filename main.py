@@ -11,6 +11,10 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from PIL import Image
 from PIL.ExifTags import TAGS, GPSTAGS
+from pillow_heif import register_heif_opener
+
+# Реєструємо підтримку HEIC форматів для Pillow
+register_heif_opener()
 
 # Загальний проміжний кошик для обох режимів
 TRASH_FOLDER_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
@@ -84,15 +88,25 @@ def get_location_name(lat, lon):
         print(f"⚠️ Попередження: Помилка геокодування OSM: {e}")
     return None
 
-def compress_video(input_path, output_path):
-    """Стискає відео через FFmpeg, якщо воно перевищує ліміт Telegram (50MB)"""
-    print(f"Стискаємо відео {input_path} під ліміт 50MB...")
-    # Налаштування для безпечного стиснення в формат mp4 (H.264 + AAC)
+def convert_to_mp4(input_path, output_path):
+    print(f"🎬 Оптимізуємо/стискаємо відео {input_path} в стандартний MP4...")
     cmd = [
         'ffmpeg', '-y', '-i', input_path,
         '-vcodec', 'libx264', '-crf', '28',
         '-preset', 'faster', '-acodec', 'aac',
-        '-b:a', '128k', output_path
+        '-b:a', '128k', '-pix_fmt', 'yuv420p',
+        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        output_path
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def gif_to_mp4(input_path, output_path):
+    print(f"🎞️ Конвертуємо анімацію GIF {input_path} в MP4 відео...")
+    cmd = [
+        'ffmpeg', '-y', '-i', input_path,
+        '-movflags', 'faststart', '-pix_fmt', 'yuv420p',
+        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        output_path
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -167,6 +181,7 @@ def main():
         return
     
     gdrive_files = results.get('files', [])
+    gdrive_files = [f for f in gdrive_files if f['id'] != TRASH_FOLDER_ID]
     if not gdrive_files:
         print("Папка порожня. Немає контенту для публікації.")
         return
@@ -176,10 +191,19 @@ def main():
     os.makedirs('downloaded', exist_ok=True)
     
     for f in gdrive_files:
-        if not (f['mimeType'].startswith('image/') or f['mimeType'].startswith('video/')):
-            print(f"⏭️ Пропускаємо непідтримуваний файл: {f['name']} ({f['mimeType']})")
+        mime_type = f['mimeType']
+        lower_name = f['name'].lower()
+        
+        # Перевірка на підтримувані медіа-розширення
+        is_valid_media = (
+            mime_type.startswith(('image/', 'video/')) or 
+            lower_name.endswith(('.heic', '.heif', '.mov', '.mkv', '.avi', '.gif'))
+        )
+
+        if not is_valid_media:
+            print(f"⏭️ Пропускаємо непідтримуваний файл: {f['name']} ({mime_type})")
             continue
-            
+                   
         local_path = os.path.join('downloaded', f['name'])
         print(f"Завантаження {f['name']}...")
         
@@ -196,18 +220,19 @@ def main():
             print(f"❌ Не вдалося завантажити файл {f['name']}: {e}")
             continue
         
-        # Аналіз метаданих
+        # 1. Зчитування метаданих (до будь-яких конвертацій)
         file_date = None
         location = None
         
-        if f['mimeType'].startswith('image/'):
+        if mime_type.startswith('image/') or lower_name.endswith(('.heic', '.heif')):
             exif_date, lat, lon = get_exif_data(local_path)
             if exif_date:
                 try:
                     file_date = datetime.strptime(exif_date, '%Y:%m:%d %H:%M:%S').strftime('%d.%m.%Y')
-                except: pass
+                except:
+                    pass
             if lat and lon:
-                time.sleep(1)  # Пауза для OpenStreetMap
+                time.sleep(1)
                 location = get_location_name(lat, lon)
                 
         # Якщо дату не знайдено в EXIF або це відео, беремо дату створення з Google Диску
@@ -218,21 +243,51 @@ def main():
             except:
                 file_date = datetime.now().strftime('%d.%m.%Y')
             
-        # Обробка великих відео (> 50 MB)
-        if f['mimeType'].startswith('video/') and os.path.getsize(local_path) > 49 * 1024 * 1024:
-            compressed_path = os.path.join('downloaded', 'cmp_' + f['name'])
-            compress_video(local_path, compressed_path)
-            if os.path.exists(compressed_path) and os.path.getsize(compressed_path) <= 49 * 1024 * 1024:
+        # 2. Конвертація форматів для 100% сумісності з Telegram альбомами
+
+        # Випадок А: Це анімація GIF
+        if mime_type == 'image/gif' or lower_name.endswith('.gif'):
+            mp4_path = os.path.join('downloaded', f['name'].rsplit('.', 1)[0] + '_gif.mp4')
+            gif_to_mp4(local_path, mp4_path)
+            if os.path.exists(mp4_path):
                 os.remove(local_path)
-                local_path = compressed_path
-            else:
-                print(f"Не вдалося стиснути {f['name']} нижче 50MB, пропускаємо.")
+                local_path = mp4_path
+                mime_type = 'video/mp4'
+                
+        # Випадок Б: Це iPhone фото (HEIC)
+        elif mime_type in ['image/heic', 'image/heif'] or lower_name.endswith(('.heic', '.heif')):
+            print(f"📸 Конвертуємо HEIC-фото {f['name']} в JPG для Telegram...")
+            jpg_path = os.path.join('downloaded', f['name'].rsplit('.', 1)[0] + '.jpg')
+            try:
+                with Image.open(local_path) as img:
+                    img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
+                os.remove(local_path)
+                local_path = jpg_path
+                mime_type = 'image/jpeg'
+            except Exception as e:
+                print(f"❌ Помилка конвертації HEIC: {e}")
                 continue
+
+        # Випадок В: Це відео (Не MP4 або більше 49MB)
+        elif mime_type.startswith('video/') or lower_name.endswith(('.mov', '.avi', '.mkv')):
+            is_large = os.path.getsize(local_path) > 49 * 1024 * 1024
+            is_not_mp4 = not lower_name.endswith('.mp4') or mime_type != 'video/mp4'
+            
+            if is_large or is_not_mp4:
+                compressed_path = os.path.join('downloaded', 'opt_' + f['name'].rsplit('.', 1)[0] + '.mp4')
+                convert_to_mp4(local_path, compressed_path)
+                if os.path.exists(compressed_path) and os.path.getsize(compressed_path) <= 49 * 1024 * 1024:
+                    os.remove(local_path)
+                    local_path = compressed_path
+                    mime_type = 'video/mp4'
+                elif is_large:
+                    print(f"❌ Не вдалося оптимізувати відео {f['name']} під ліміт 50MB, пропускаємо.")
+                    continue
                 
         processed_items.append({
             'id': f['id'],
             'name': f['name'],
-            'mime': f['mimeType'],
+            'mime': mime_type,
             'local_path': local_path,
             'date': file_date,
             'location': location or "Невідоме місце"
