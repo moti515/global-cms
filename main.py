@@ -257,7 +257,7 @@ def main():
                 caption += f" 📍 {loc}"
                 
             print(f"Надсилання альбому для {caption} (Елементів: {len(batch)})...")
-            success = send_media_group(batch, caption)
+            success = send_media_group(batch, caption, CHAT_ID)
             
             if success:
                 print(f"✅ Успішно надіслано. Переміщаємо файли в папку Кошик ({TRASH_FOLDER_ID})...")
