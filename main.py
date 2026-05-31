@@ -167,7 +167,7 @@ def main():
         print(f"Завантаження {f['name']}...")
         
         # Завантажуємо файл
-       try:
+        try:
             request = service.files().get_media(fileId=f['id'])
             fh = io.FileIO(local_path, 'wb')
             downloader = MediaIoBaseDownload(fh, request)
