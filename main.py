@@ -15,9 +15,19 @@ FOLDER_ID = '1MFTlnTVwOuPysxtdS-FzQSZAhFnbzTwz'
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
 def get_gdrive_service():
-    key_dict = json.loads(os.environ['GDRIVE_SERVICE_ACCOUNT_KEY'])
-    creds = service_account.Credentials.from_service_account_info(key_dict, scopes=SCOPES)
-    return build('drive', 'v3', credentials=creds)
+    try:
+        key_dict = json.loads(os.environ['GDRIVE_SERVICE_ACCOUNT_KEY'])
+        creds = service_account.Credentials.from_service_account_info(key_dict, scopes=SCOPES)
+        return build('drive', 'v3', credentials=creds)
+    except KeyError:
+        print("❌ ПОМИЛКА: Секрет GDRIVE_SERVICE_ACCOUNT_KEY не знайдено в GitHub Secrets!")
+        raise
+    except json.JSONDecodeError:
+        print("❌ ПОМИЛКА: Вміст GDRIVE_SERVICE_ACCOUNT_KEY не є коректним JSON файлом!")
+        raise
+    except Exception as e:
+        print(f"❌ ПОМИЛКА ініціалізації Google Drive сервісу: {e}")
+        raise
 
 def get_exif_data(image_path):
     """Витягує дату та GPS з фото"""
@@ -50,7 +60,7 @@ def get_exif_data(image_path):
                 if geotagging.get('GPSLatitudeRef') == 'S': lat = -lat
                 if geotagging.get('GPSLongitudeRef') == 'W': lon = -lon
     except Exception as e:
-        print(f"Помилка читання EXIF для {image_path}: {e}")
+        print(f"⚠️ Попередження: Не вдалося прочитати EXIF для {image_path}: {e}")
     return date_str, lat, lon
 
 def get_location_name(lat, lon):
@@ -69,7 +79,7 @@ def get_location_name(lat, lon):
         elif country:
             return country
     except Exception as e:
-        print(f"Помилка геокодування: {e}")
+        print(f"⚠️ Попередження: Помилка геокодування OSM: {e}")
     return None
 
 def compress_video(input_path, output_path):
@@ -88,6 +98,11 @@ def send_media_group(media_batch, caption):
     """Відправляє групу медіафайлів (до 10 штук) в Telegram"""
     token = os.environ['TELEGRAM_BOT_TOKEN']
     chat_id = os.environ['TELEGRAM_CHAT_ID']
+
+    if not token or not chat_id:
+        print("❌ ПОМИЛКА: Відсутні TELEGRAM_BOT_TOKEN або TELEGRAM_CHAT_ID in Secrets!")
+        return False
+        
     url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
     
     media = []
@@ -109,45 +124,60 @@ def send_media_group(media_batch, caption):
     try:
         res = requests.post(url, data=payload, files=files, timeout=120).json()
         for f in files.values(): f.close()
-        return res.get('ok', False)
+            
+        if not res.get('ok'):
+            print(f"❌ Помилка Telegram API: {res.get('description')}")
+            return False
+        return True
     except Exception as e:
         print(f"Помилка відправки в Telegram: {e}")
         for f in files.values(): f.close()
         return False
 
 def main():
+    print("🚀 Старт синхронізації медіа...")
     service = get_gdrive_service()
     
     # Отримуємо список файлів з папки
-    results = service.files().list(
-        q=f"'{FOLDER_ID}' in parents and trashed = false",
-        fields="nextPageToken, files(id, name, mimeType, createdTime, size)",
-        pageSize=50
-    ).execute()
+    try:
+        results = service.files().list(
+            q=f"'{FOLDER_ID}' in parents and trashed = false",
+            fields="nextPageToken, files(id, name, mimeType, createdTime, size)",
+            pageSize=50
+        ).execute()
+    except Exception as e:
+        print(f"❌ ПОМИЛКА під час отримання списку файлів з Google Диску: {e}")
+        return
     
     gdrive_files = results.get('files', [])
     if not gdrive_files:
         print("Папка порожня. Немає контенту для публікації.")
         return
 
+    print(f"Знайдено файлів у папці: {len(gdrive_files)}")
     processed_items = []
     os.makedirs('downloaded', exist_ok=True)
     
     for f in gdrive_files:
         if not (f['mimeType'].startswith('image/') or f['mimeType'].startswith('video/')):
+            print(f"⏭️ Пропускаємо непідтримуваний файл: {f['name']} ({f['mimeType']})")
             continue
             
         local_path = os.path.join('downloaded', f['name'])
         print(f"Завантаження {f['name']}...")
         
         # Завантажуємо файл
-        request = service.files().get_media(fileId=f['id'])
-        fh = io.FileIO(local_path, 'wb')
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-        fh.close()
+       try:
+            request = service.files().get_media(fileId=f['id'])
+            fh = io.FileIO(local_path, 'wb')
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            fh.close()
+        except Exception as e:
+            print(f"❌ Не вдалося завантажити файл {f['name']}: {e}")
+            continue
         
         # Аналіз метаданих
         file_date = None
@@ -160,12 +190,16 @@ def main():
                     file_date = datetime.strptime(exif_date, '%Y:%m:%d %H:%M:%S').strftime('%d.%m.%Y')
                 except: pass
             if lat and lon:
+                time.sleep(1)  # Пауза для OpenStreetMap
                 location = get_location_name(lat, lon)
                 
         # Якщо дату не знайдено в EXIF або це відео, беремо дату створення з Google Диску
         if not file_date:
-            dt = datetime.strptime(f['createdTime'], '%Y-%m-%dT%H:%M:%S.%fZ')
-            file_date = dt.strftime('%d.%m.%Y')
+            try:
+                dt = datetime.strptime(f['createdTime'], '%Y-%m-%dT%H:%M:%S.%fZ')
+                file_date = dt.strftime('%d.%m.%Y')
+            except:
+                file_date = datetime.now().strftime('%d.%m.%Y')
             
         # Обробка великих відео (> 50 MB)
         if f['mimeType'].startswith('video/') and os.path.getsize(local_path) > 49 * 1024 * 1024:
@@ -195,9 +229,9 @@ def main():
             groups[key] = []
         groups[key].append(item)
         
-    # Відправка груп (ліміт 10 медіа на один альбом)
+    # Публікація ТІЛЬКИ однієї групи файлів
     for (date, loc), items in groups.items():
-        # Ділимо масив на пачки по 10 файлів
+        # Робимо копію ліміту в 10 медіа, якщо всередині цієї ОДНІЄЇ групи забагато файлів
         for i in range(0, len(items), 10):
             batch = items[i:i+10]
             
@@ -209,14 +243,18 @@ def main():
             success = send_media_group(batch, caption)
             
             if success:
-                print("Успішно надіслано. Видаляємо файли з Google Диску...")
+                print("✅ Успішно надіслано. Переміщаємо надісланий контент у Кошик на Google Диску...")
                 for uploaded_item in batch:
                     try:
-                        service.files().delete(fileId=uploaded_item['id']).execute()
+                        service.files().update(fileId=uploaded_item['id'], body={'trashed': True}).execute()
+                        print(f"🗑️ Переміщено в кошик: {uploaded_item['name']}")
                     except Exception as e:
-                        print(f"Не вдалося видалити {uploaded_item['name']}: {e}")
+                        print(f"❌ Не вдалося перемістити в кошик {uploaded_item['name']}: {e}")
             else:
                 print(f"Помилка публікації альбому для {caption}")
-
+        # КЛЮЧОВЕ: Після того, як перша група (всі її батчі) повністю оброблена,
+        # ми зупиняємо роботу і виходимо. Інші дати/місця чекають наступного запуску.
+        print(f"🏁 Першу групу ({caption}) успішно оброблено. Завершуємо роботу.")
+        return
 if __name__ == '__main__':
     main()
