@@ -10,8 +10,7 @@ from googleapiclient.http import MediaIoBaseDownload
 from PIL import Image
 from PIL.ExifTags import TAGS, GPSTAGS
 
-# Налаштування
-FOLDER_ID = '1MFTlnTVwOuPysxtdS-FzQSZAhFnbzTwz'
+# Загальний проміжний кошик для обох режимів
 TRASH_FOLDER_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
@@ -95,13 +94,12 @@ def compress_video(input_path, output_path):
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def send_media_group(media_batch, caption):
+def send_media_group(media_batch, caption, chat_id):
     """Відправляє групу медіафайлів (до 10 штук) в Telegram"""
     token = os.environ['TELEGRAM_BOT_TOKEN']
-    chat_id = os.environ['TELEGRAM_CHAT_ID']
-
+    
     if not token or not chat_id:
-        print("❌ ПОМИЛКА: Відсутні TELEGRAM_BOT_TOKEN або TELEGRAM_CHAT_ID in Secrets!")
+        print("❌ ПОМИЛКА: Відсутній TELEGRAM_BOT_TOKEN або цільовий CHAT_ID!")
         return False
         
     url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
@@ -136,6 +134,22 @@ def send_media_group(media_batch, caption):
         return False
 
 def main():
+    # Визначаємо режим роботи через аргументи командного рядка
+    mode = sys.argv[1] if len(sys.argv) > 1 else 'family'
+    
+    if mode == 'exchange':
+        FOLDER_ID = '1U6QKj7RkEI17gw3V0nMb2RsK6gyDf5no'
+        CHAT_ID = '-1003606633217'
+        print("🌟 РЕЖИМ: ФОТООБМІННИК (Канал -1003606633217)")
+    else:
+        FOLDER_ID = '1MFTlnTVwOuPysxtdS-FzQSZAhFnbzTwz'
+        CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
+        print("👪 РЕЖИМ: СІМЕЙНИЙ АРХІВ (Основний чат)")
+
+    if not CHAT_ID:
+        print("❌ ПОМИЛКА: Не вказано ID цільового чату/каналу!")
+        return
+        
     print("🚀 Старт синхронізації медіа...")
     service = get_gdrive_service()
     
