@@ -6,6 +6,10 @@ on:
     - cron: '0 15 * * *' # 18:00 за Києвом
   workflow_dispatch:      # Дозволяє запускати вручну через кнопку на GitHub
 
+# Переводимо екшени на Node 24, щоб прибрати попередження GitHub
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   sync-media:
     runs-on: ubuntu-latest
@@ -17,7 +21,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-node: '3.10'
+        python-version: '3.10'  # Виправлено: тепер тут правильний параметр
         cache: 'pip'
 
     - name: Install FFmpeg
