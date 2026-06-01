@@ -24,7 +24,7 @@ jobs:
       run: |
         sudo apt-get update && sudo apt-get install -y ffmpeg
         python -m pip install --upgrade pip
-        pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow requests
+        pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow pillow-heif requests
 
     - name: Run script for Photo Exchanger
       env:
