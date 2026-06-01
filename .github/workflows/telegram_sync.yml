@@ -21,13 +21,8 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.12'  # Просто зміни з 3.10 на 3.12
+        python-version: '3.12'
         cache: 'pip'
-
-    - name: Install FFmpeg
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg
 
     - name: Install dependencies
       run: |
