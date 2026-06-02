@@ -2,7 +2,8 @@ name: Auto-Sync Google Sheets Registry
 
 on:
   schedule:
-    - cron: '5 * * * *'  # Запуск кожну годину на 5-й хвилині
+    # Запуск щонеділі о 20:05 UTC (23:05 за Києвом)
+    - cron: '5 20 * * 0'
   workflow_dispatch:     # Можливість запустити вручную кнопкою
 
 jobs:
