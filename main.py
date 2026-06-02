@@ -24,7 +24,7 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 # Розширений список підтримуваних медіа-форматів
 VALID_EXTENSIONS = (
     '.3gp', '.avi', '.gif', '.heic', '.heif', '.jpeg', '.jpg', 
-    '.mkv', '.mov', '.mp4', '.mpeg', '.mpg', '.tif', '.tiff', '.webp', '.png'
+    '.mkv', '.mov', '.mp4', '.mpeg', '.mpg', '.tif', '.tiff', '.webp', '.png', '.swf'
 )
 
 def get_gdrive_service():
@@ -215,7 +215,7 @@ def main():
     try:
         results = service.files().list(
             q=f"'{FOLDER_ID}' in parents and trashed = false",
-            fields="nextPageToken, files(id, name, mimeType, createdTime, size)",
+            fields="nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size)",
             pageSize=50
         ).execute()
     except Exception as e:
@@ -276,11 +276,13 @@ def main():
             except:
                 pass
             
-        # Якщо дату не знайдено в EXIF або це відео, беремо дату створення з Google Диску
+        # Розумний бекап дати: порівнюємо createdTime та modifiedTime з Диску, обираємо НАЙСТАРШУ
         if not file_date:
             try:
-                dt = datetime.strptime(f['createdTime'], '%Y-%m-%dT%H:%M:%S.%fZ')
-                file_date = dt.strftime('%d.%m.%Y')
+                dt_created = datetime.strptime(f['createdTime'], '%Y-%m-%dT%H:%M:%S.%fZ')
+                dt_modified = datetime.strptime(f['modifiedTime'], '%Y-%m-%dT%H:%M:%S.%fZ')
+                earliest_dt = min(dt_created, dt_modified)
+                file_date = earliest_dt.strftime('%d.%m.%Y')
             except:
                 file_date = datetime.now().strftime('%d.%m.%Y')
 
@@ -315,9 +317,9 @@ def main():
                 continue
 
         # Випадок В: Це відео (Не MP4 або більше 49MB)
-        elif mime_type.startswith('video/') or lower_name.endswith(('.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg')):
+        elif mime_type.startswith('video/') or lower_name.endswith(('.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg', '.swf')):
             is_large = os.path.getsize(local_path) > 49 * 1024 * 1024
-            is_not_mp4 = not lower_name.endswith('.mp4') or mime_type != 'video/mp4'
+            is_not_mp4 = not lower_name.endswith('.mp4') or mime_type != 'video/mp4' or lower_name.endswith('.swf')
             
             if is_large or is_not_mp4:
                 compressed_path = os.path.join('downloaded', 'opt_' + f['name'].rsplit('.', 1)[0] + '.mp4')
