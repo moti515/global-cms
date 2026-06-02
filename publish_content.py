@@ -17,7 +17,6 @@ register_heif_opener()
 IG_USER_ID = "17841429409435438"
 META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "EAAXCuIxnsWQBRpJP7hbZBPchMZBcZBucLPArTryPFNhhrl9mbHHWZBP8jpKTUjeHgERWwZBbdDa9b3c2as9LQZC83RRHzFCrF5km4vVnL8IRowwiCDMorqugQHymZBYNRShZA67sUUOBvoyHKcqh6AaQB5KQBBDywUBWr6ZCLLE7sMVaKLglNzyNYlPxadJu8HQ5t")
 SPREADSHEET_ID = '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0'
-TEMP_PUBLIC_FOLDER_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
 FB_PAGE_ID = "1313824565399163"  # ID вашої сторінки Facebook "Friday and other days"
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
@@ -79,7 +78,6 @@ def generate_multimodal_caption(image_path, category):
     if not gemini_key:
         return "Усміхніться! 😉 #гумор #меблі"
         
-    # Використовуємо модель 1.5-flash, яка ідеально і дешево аналізує картинки
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
     
     try:
@@ -110,18 +108,33 @@ def generate_multimodal_caption(image_path, category):
         print(f"⚠️ Очі ШІ підвели, ставимо текстовий дефолт. Помилка: {e}")
         return "Трохи гумору вам у стрічку! Як вам? 👇😂"
 
-def make_file_public_and_get_link(drive_service, file_id):
-    user_permission = {'type': 'anyone', 'role': 'reader'}
-    drive_service.permissions().create(fileId=file_id, body=user_permission).execute()
-    file_info = drive_service.files().get(fileId=file_id, fields='webContentLink').execute()
-    return file_info.get('webContentLink')
+def upload_to_temporary_host(file_path):
+    """Завантажує локальний файл на безкоштовний хостинг для отримання прямого публічного лінку для Meta API"""
+    print("📤 Завантажуємо тимчасовий файл на публічний хостинг для Meta...")
+    
+    # Спроба 1: Catbox.moe (Працює чудово, тримає прямі лінки на фото та відео)
+    try:
+        url = "https://catbox.moe/user/api.php"
+        with open(file_path, 'rb') as f:
+            files = {'fileToUpload': f}
+            data = {'reqtype': 'fileupload'}
+            res = requests.post(url, data=data, files=files, timeout=30)
+            if res.status_code == 200 and res.text.strip().startswith("https://"):
+                return res.text.strip()
+    except Exception as e:
+        print(f"⚠️ Перший хостинг повернув помилку: {e}. Пробуємо резервний...")
+        
+    # Спроба 2: Резервний варіант через transfer.sh
+    try:
+        with open(file_path, 'rb') as f:
+            res = requests.put(f"https://transfer.sh/{os.path.basename(file_path)}", data=f, timeout=30)
+            if res.status_code == 200:
+                return res.text.strip()
+    except Exception as e:
+        raise Exception(f"Не вдалося отримати публічний лінк через жоден сервіс: {e}")
 
 def publish_to_meta_platforms(media_url, media_type, is_story=False, caption=""):
     """Публікує контент в Instagram, а пости додатково дублює на Facebook Page"""
-    
-    # ----------------------------------------------------------------
-    # КРОК 1: ПУБЛІКАЦІЯ В INSTAGRAM (Пости та Сторіс)
-    # ----------------------------------------------------------------
     print("📤 Відправка контенту в Instagram...")
     ig_url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
     ig_payload = {
@@ -154,14 +167,9 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="")
         else:
             print(f"❌ Помилка публікації в Instagram: {ig_pub_res}")
 
-    # ----------------------------------------------------------------
-    # КРОК 2: КРОСПОСТИНГ У FACEBOOK (Тільки для Постів)
-    # ----------------------------------------------------------------
     if not is_story:
         print("📤 Дублювання поста на Сторінку Facebook...")
-        
         if media_type == "video":
-            # Публікація відео на сторінку FB
             fb_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
             fb_payload = {
                 "file_url": media_url,
@@ -169,7 +177,6 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="")
                 "access_token": META_ACCESS_TOKEN
             }
         else:
-            # Публікація фото на сторінку FB
             fb_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
             fb_payload = {
                 "url": media_url,
@@ -221,14 +228,13 @@ def main():
             selected_item = match_files[0]
             break
             
-    if not selected_item: selected_item = min_pool[0]
+    if not selected_item: min_pool[0]
 
     file_id = selected_item["data"][0]
     orig_name = selected_item["data"][1]
     category_name = selected_item["data"][2]
     row_line = selected_item["row_idx"]
     
-    # --- БЛОК ПЕРЕВІРКИ ФОРМАТІВ ТА ДОКУМЕНТІВ (PDF, DJVU тощо) ---
     lower_name = orig_name.lower()
     if lower_name.endswith(DOCUMENT_EXTENSIONS):
         print(f"📄 Знайдено текстовий документ/книгу ({orig_name}). Пропускаємо публікацію.")
@@ -243,14 +249,13 @@ def main():
     os.makedirs('temp_media', exist_ok=True)
     local_path = os.path.join('temp_media', orig_name)
     
-    print(f"📥 Завантажуємо медіа: {orig_name}...")
+    print(f"📥 Завантажуємо медіа з Google Диску: {orig_name}...")
     request = drive.files().get_media(fileId=file_id)
     with open(local_path, 'wb') as fh:
         downloader = MediaIoBaseDownload(fh, request)
         done = False
         while not done: _, done = downloader.next_chunk()
 
-    # Конвертація
     mime_type = "image/jpeg" if lower_name.endswith(('.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp')) else "video/mp4"
     final_upload_path = local_path
     
@@ -265,11 +270,10 @@ def main():
         final_upload_path = jpg_path
         mime_type = "image/jpeg"
 
-    # --- ПІДГОТОВКА ЗОБРАЖЕННЯ ДЛЯ ОЧЕЙ ШІ (ГЕНЕРАЦІЯ ОПИСУ) ---
+    # Аналіз зображення ШІ для постів
     caption_text = ""
     if mode == 'post':
         analysis_image = final_upload_path
-        # Якщо це відео, «відкушуємо» перший кадр як картинку для аналізу ШІ
         if mime_type == "video/mp4":
             analysis_image = os.path.join('temp_media', 'video_frame.jpg')
             subprocess.run(['ffmpeg', '-y', '-i', final_upload_path, '-ss', '00:00:01', '-vframes', '1', analysis_image], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -278,19 +282,15 @@ def main():
         caption_text = generate_multimodal_caption(analysis_image, category_name)
         if os.path.exists(os.path.join('temp_media', 'video_frame.jpg')): os.remove(os.path.join('temp_media', 'video_frame.jpg'))
 
-    # Тимчасовий публічний лінк
-    file_metadata = {'name': os.path.basename(final_upload_path), 'parents': [TEMP_PUBLIC_FOLDER_ID]}
-    from googleapiclient.http import MediaFileUpload
-    media = MediaFileUpload(final_upload_path, mimetype=mime_type, resumable=True)
-    temp_drive_file = drive.files().create(body=file_metadata, media_body=media, fields='id').execute()
-    temp_file_id = temp_drive_file.get('id')
-    
-    public_url = make_file_public_and_get_link(drive, temp_file_id)
-    
+    # --- ПУБЛІКАЦІЯ ЧЕРЕЗ ТИМЧАСОВИЙ ХОСТИНГ ---
     try:
+        public_url = upload_to_temporary_host(final_upload_path)
+        print(f"🔗 Отримано лінк: {public_url}")
+        
+        # Передаємо посилання в Meta API
         publish_to_meta_platforms(public_url, "video" if mime_type == "video/mp4" else "image", is_story=(mode == 'story'), caption=caption_text)
         
-        # Обновлення таблиці
+        # Оновлення лічильника в Google Таблиці
         new_counter = selected_item["data"][counter_col_idx] + 1
         col_letter = "D" if mode == 'post' else "E"
         sheets.spreadsheets().values().update(
@@ -298,9 +298,11 @@ def main():
             valueInputOption='RAW', body={'values': [[new_counter]]}
         ).execute()
         print(f"📊 Лічильник оновлено на +1 (Рядок {row_line})")
+        
+    except Exception as e:
+        print(f"❌ Критична помилка під час публікації: {e}")
     finally:
-        try: drive.files().delete(fileId=temp_file_id).execute()
-        except: pass
+        # Повне очищення локального кешу на ранері GitHub Actions
         if os.path.exists(local_path): os.remove(local_path)
         if final_upload_path != local_path and os.path.exists(final_upload_path): os.remove(final_upload_path)
 
