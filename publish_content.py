@@ -18,6 +18,7 @@ IG_USER_ID = "17841429409435438"
 META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "EAAXCuIxnsWQBRpJP7hbZBPchMZBcZBucLPArTryPFNhhrl9mbHHWZBP8jpKTUjeHgERWwZBbdDa9b3c2as9LQZC83RRHzFCrF5km4vVnL8IRowwiCDMorqugQHymZBYNRShZA67sUUOBvoyHKcqh6AaQB5KQBBDywUBWr6ZCLLE7sMVaKLglNzyNYlPxadJu8HQ5t")
 SPREADSHEET_ID = '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0'
 TEMP_PUBLIC_FOLDER_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
+FB_PAGE_ID = "1313824565399163"  # ID вашої сторінки Facebook "Friday and other days"
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
 # Суворий поділ форматів
@@ -115,27 +116,75 @@ def make_file_public_and_get_link(drive_service, file_id):
     file_info = drive_service.files().get(fileId=file_id, fields='webContentLink').execute()
     return file_info.get('webContentLink')
 
-def publish_to_instagram(media_url, media_type, is_story=False, caption=""):
-    url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
-    payload = {
+def publish_to_meta_platforms(media_url, media_type, is_story=False, caption=""):
+    """Публікує контент в Instagram, а пости додатково дублює на Facebook Page"""
+    
+    # ----------------------------------------------------------------
+    # КРОК 1: ПУБЛІКАЦІЯ В INSTAGRAM (Пости та Сторіс)
+    # ----------------------------------------------------------------
+    print("📤 Відправка контенту в Instagram...")
+    ig_url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
+    ig_payload = {
         "access_token": META_ACCESS_TOKEN,
         "media_type": "STORIES" if is_story else ("VIDEO" if media_type == "video" else "IMAGE")
     }
-    if media_type == "video": payload["video_url"] = media_url
-    else: payload["image_url"] = media_url
-    if not is_story and caption: payload["caption"] = caption
-
-    res = requests.post(url, data=payload).json()
-    if "id" not in res: raise Exception(f"Помилка контейнера: {res}")
-    creation_id = res["id"]
-    
-    if media_type == "video":
-        print("⏳ Очікуємо конвертації відео на серверах інсти...")
-        time.sleep(30)
+    if media_type == "video": 
+        ig_payload["video_url"] = media_url
+    else: 
+        ig_payload["image_url"] = media_url
         
-    pub_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={"creation_id": creation_id, "access_token": META_ACCESS_TOKEN}).json()
-    if "id" not in pub_res: raise Exception(f"Помилка ефіру: {pub_res}")
-    print(f"✅ Успішно в ефірі! ID: {pub_res['id']}")
+    if not is_story and caption: 
+        ig_payload["caption"] = caption
+
+    ig_res = requests.post(ig_url, data=ig_payload).json()
+    if "id" not in ig_res: 
+        print(f"❌ Помилка створення контейнера Instagram: {ig_res}")
+    else:
+        ig_creation_id = ig_res["id"]
+        if media_type == "video":
+            print("⏳ Очікуємо обробки відео серверами Instagram...")
+            time.sleep(30)
+            
+        ig_pub_res = requests.post(
+            f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", 
+            data={"creation_id": ig_creation_id, "access_token": META_ACCESS_TOKEN}
+        ).json()
+        if "id" in ig_pub_res:
+            print(f"✅ [Instagram] Успішно в ефірі! ID: {ig_pub_res['id']}")
+        else:
+            print(f"❌ Помилка публікації в Instagram: {ig_pub_res}")
+
+    # ----------------------------------------------------------------
+    # КРОК 2: КРОСПОСТИНГ У FACEBOOK (Тільки для Постів)
+    # ----------------------------------------------------------------
+    if not is_story:
+        print("📤 Дублювання поста на Сторінку Facebook...")
+        
+        if media_type == "video":
+            # Публікація відео на сторінку FB
+            fb_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
+            fb_payload = {
+                "file_url": media_url,
+                "description": caption,
+                "access_token": META_ACCESS_TOKEN
+            }
+        else:
+            # Публікація фото на сторінку FB
+            fb_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
+            fb_payload = {
+                "url": media_url,
+                "message": caption,
+                "access_token": META_ACCESS_TOKEN
+            }
+            
+        try:
+            fb_res = requests.post(fb_url, data=fb_payload).json()
+            if "id" in fb_res or "post_id" in fb_res:
+                print(f"✅ [Facebook Page] Пост успішно продубльовано! ID: {fb_res.get('id', fb_res.get('post_id'))}")
+            else:
+                print(f"⚠️ [Facebook Page] Сервер повернув дивну відповідь: {fb_res}")
+        except Exception as e:
+            print(f"❌ Не вдалося надіслати пост у Facebook: {e}")
 
 def main():
     if len(sys.argv) < 3:
@@ -239,7 +288,7 @@ def main():
     public_url = make_file_public_and_get_link(drive, temp_file_id)
     
     try:
-        publish_to_instagram(public_url, "video" if mime_type == "video/mp4" else "image", is_story=(mode == 'story'), caption=caption_text)
+        publish_to_meta_platforms(public_url, "video" if mime_type == "video/mp4" else "image", is_story=(mode == 'story'), caption=caption_text)
         
         # Обновлення таблиці
         new_counter = selected_item["data"][counter_col_idx] + 1
