@@ -4,6 +4,7 @@ import json
 import io
 import time
 import subprocess
+import re
 from datetime import datetime
 import requests
 from google.oauth2 import service_account
@@ -19,6 +20,12 @@ register_heif_opener()
 # Загальний проміжний кошик для обох режимів
 TRASH_FOLDER_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
 SCOPES = ['https://www.googleapis.com/auth/drive']
+
+# Розширений список підтримуваних медіа-форматів
+VALID_EXTENSIONS = (
+    '.3gp', '.avi', '.gif', '.heic', '.heif', '.jpeg', '.jpg', 
+    '.mkv', '.mov', '.mp4', '.mpeg', '.mpg', '.tif', '.tiff', '.webp', '.png'
+)
 
 def get_gdrive_service():
     try:
@@ -67,6 +74,41 @@ def get_exif_data(image_path):
                 if geotagging.get('GPSLongitudeRef') == 'W': lon = -lon
     except Exception as e:
         print(f"⚠️ Попередження: Не вдалося прочитати EXIF для {image_path}: {e}")
+    return date_str, lat, lon
+
+def get_video_metadata(video_path):
+    """Витягує реальну дату зйомки та GPS з відео за допомогою ffprobe"""
+    date_str, lat, lon = None, None, None
+    try:
+        cmd = [
+            'ffprobe', '-v', 'quiet', '-print_format', 'json',
+            '-show_format', '-show_streams', video_path
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            tags = data.get('format', {}).get('tags', {})
+            
+            # 1. Шукаємо дату оригінальної зйомки/створення
+            creation_time = tags.get('creation_time')
+            if creation_time:
+                # Формат зазвичай: 2018-09-12T11:07:19.000000Z
+                try:
+                    dt = datetime.strptime(creation_time[:19], '%Y-%m-%dT%H:%M:%S')
+                    date_str = dt.strftime('%Y:%m:%d %H:%M:%S')
+                except:
+                    pass
+            
+            # 2. Шукаємо GPS (типова мітка для iPhone/Android відео)
+            # Формат зазвичай: "+50.4501+030.5234/" або подібний ISO 6709
+            loc_str = tags.get('location') or tags.get('location-eng')
+            if loc_str:
+                match = re.match(r'([+-]\d+\.\d+)([+-]\d+\.\d+)', loc_str)
+                if match:
+                    lat = float(match.group(1))
+                    lon = float(match.group(2))
+    except Exception as e:
+        print(f"⚠️ Не вдалося прочитати метадані відео {video_path}: {e}")
     return date_str, lat, lon
 
 def get_location_name(lat, lon):
@@ -195,10 +237,7 @@ def main():
         lower_name = f['name'].lower()
         
         # Перевірка на підтримувані медіа-розширення
-        is_valid_media = (
-            mime_type.startswith(('image/', 'video/')) or 
-            lower_name.endswith(('.heic', '.heif', '.mov', '.mkv', '.avi', '.gif'))
-        )
+        is_valid_media = mime_type.startswith(('image/', 'video/')) or lower_name.endswith(VALID_EXTENSIONS)
 
         if not is_valid_media:
             print(f"⏭️ Пропускаємо непідтримуваний файл: {f['name']} ({mime_type})")
@@ -220,21 +259,23 @@ def main():
             print(f"❌ Не вдалося завантажити файл {f['name']}: {e}")
             continue
         
-        # 1. Зчитування метаданих (до будь-яких конвертацій)
-        file_date = None
-        location = None
+        # Визначення дати та геолокації
+        meta_date, lat, lon = None, None, None
         
-        if mime_type.startswith('image/') or lower_name.endswith(('.heic', '.heif')):
-            exif_date, lat, lon = get_exif_data(local_path)
-            if exif_date:
-                try:
-                    file_date = datetime.strptime(exif_date, '%Y:%m:%d %H:%M:%S').strftime('%d.%m.%Y')
-                except:
-                    pass
-            if lat and lon:
-                time.sleep(1)
-                location = get_location_name(lat, lon)
-                
+        # Обробка зображень
+        if mime_type.startswith('image/') or lower_name.endswith(('.heic', '.heif', '.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff')):
+            meta_date, lat, lon = get_exif_data(local_path)
+        # Обробка відео через ffprobe
+        elif mime_type.startswith('video/') or lower_name.endswith(('.mp4', '.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg')):
+            meta_date, lat, lon = get_video_metadata(local_path)
+            
+        file_date = None
+        if meta_date:
+            try:
+                file_date = datetime.strptime(meta_date, '%Y:%m:%d %H:%M:%S').strftime('%d.%m.%Y')
+            except:
+                pass
+            
         # Якщо дату не знайдено в EXIF або це відео, беремо дату створення з Google Диску
         if not file_date:
             try:
@@ -242,6 +283,11 @@ def main():
                 file_date = dt.strftime('%d.%m.%Y')
             except:
                 file_date = datetime.now().strftime('%d.%m.%Y')
+
+        location = None
+        if lat and lon:
+            time.sleep(1) # Захист від блокування лімітів OSM Nominatim
+            location = get_location_name(lat, lon)
             
         # 2. Конвертація форматів для 100% сумісності з Telegram альбомами
 
@@ -269,7 +315,7 @@ def main():
                 continue
 
         # Випадок В: Це відео (Не MP4 або більше 49MB)
-        elif mime_type.startswith('video/') or lower_name.endswith(('.mov', '.avi', '.mkv')):
+        elif mime_type.startswith('video/') or lower_name.endswith(('.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg')):
             is_large = os.path.getsize(local_path) > 49 * 1024 * 1024
             is_not_mp4 = not lower_name.endswith('.mp4') or mime_type != 'video/mp4'
             
@@ -301,37 +347,34 @@ def main():
             groups[key] = []
         groups[key].append(item)
         
-    # Публікація ТІЛЬКИ однієї групи файлів
+    # Публікація суворо ОДНОГО альбому (макс 10 елементів) за один запуск скрипта
     for (date, loc), items in groups.items():
-        # Робимо копію ліміту в 10 медіа, якщо всередині цієї ОДНІЄЇ групи забагато файлів
-        for i in range(0, len(items), 10):
-            batch = items[i:i+10]
-            
-            caption = f"📅 {date}"
-            if loc != "Невідоме місце":
-                caption += f" 📍 {loc}"
+        batch = items[:10]  # Беремо максимум перші 10 штук з цієї групи
+        
+        caption = f"📅 {date}"
+        if loc != "Невідоме місце":
+            caption += f" 📍 {loc}"
                 
-            print(f"Надсилання альбому для {caption} (Елементів: {len(batch)})...")
-            success = send_media_group(batch, caption, CHAT_ID)
+        print(f"Надсилання альбому для {caption} (Елементів: {len(batch)})...")
+        success = send_media_group(batch, caption, CHAT_ID)
             
-            if success:
-                print(f"✅ Успішно надіслано. Переміщаємо файли в папку Кошик ({TRASH_FOLDER_ID})...")
-                for uploaded_item in batch:
-                    try:
-                        service.files().update(
-                            fileId=uploaded_item['id'],
-                            addParents=TRASH_FOLDER_ID,
-                            removeParents=FOLDER_ID,
-                            fields='id, parents'
-                        ).execute()
-                        print(f"📦 Переміщено до проміжного кошика: {uploaded_item['name']}")
-                    except Exception as e:
-                        print(f"❌ Не вдалося перемістити {uploaded_item['name']}: {e}")
-            else:
-                print(f"Помилка публікації альбому для {caption}")
-        # КЛЮЧОВЕ: Після того, як перша група (всі її батчі) повністю оброблена,
-        # ми зупиняємо роботу і виходимо. Інші дати/місця чекають наступного запуску.
-        print(f"🏁 Першу групу ({caption}) успішно оброблено. Завершуємо роботу.")
+        if success:
+            print(f"✅ Успішно надіслано. Переміщаємо файли в папку Кошик...")
+            for uploaded_item in batch:
+                try:
+                    service.files().update(
+                        fileId=uploaded_item['id'],
+                        addParents=TRASH_FOLDER_ID,
+                        removeParents=FOLDER_ID,
+                        fields='id, parents'
+                    ).execute()
+                    print(f"📦 Переміщено: {uploaded_item['name']}")
+                except Exception as e:
+                    print(f"❌ Не вдалося перемістити {uploaded_item['name']}: {e}")
+        else:
+            print(f"Помилка публікації альбому для {caption}")
+            
+        print(f"🏁 Першу партію медіа ({len(batch)} шт.) успішно оброблено. Завершуємо роботу.")
         return
 if __name__ == '__main__':
     main()
