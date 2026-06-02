@@ -175,7 +175,6 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="")
     else:
         ig_creation_id = ig_res["id"]
         
-        # ВИПРАВЛЕНО: Даємо серверам Meta час завантажити файл
         if media_type == "video":
             print("⏳ Очікуємо обробки відео серверами Instagram (30 сек)...")
             time.sleep(30)
@@ -198,14 +197,14 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="")
             fb_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
             fb_payload = {
                 "file_url": media_url,
-                "description": caption,
+                "description": caption, # Для відео залишається description
                 "access_token": META_ACCESS_TOKEN
             }
         else:
             fb_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
             fb_payload = {
                 "url": media_url,
-                "message": caption,
+                "caption": caption,   # ВИПРАВЛЕНО: саме 'caption' замість 'message' для /photos
                 "access_token": META_ACCESS_TOKEN
             }
             
