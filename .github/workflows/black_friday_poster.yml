@@ -36,7 +36,7 @@ jobs:
         META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       run: |
-        python -c "
+        python << 'EOF'
         from datetime import datetime
         import pytz
         import subprocess
@@ -49,11 +49,12 @@ jobs:
         hour = now.hour
         mode = 'story' if hour in [8, 9, 19, 20, 21] else 'post'
         
-        # Передаємо СУВОРУ назву вашого цільового аркуша контенту
-        target_tab = \"П'ятниця\"
+        # Тепер тут чистий Python рядок, апостроф більше нічого не ламає!
+        target_tab = "П'ятниця"
         
         print(f' [Система] Поточний час у Берліні: {now.strftime(\"%H:%M\")}')
-        print(f' [Система] Запуск для сторінки [П\'ятниця]: Режим [{mode.upper()}], Аркуш [{target_tab}]')
+        print(f" [Система] Запуск для сторінки [П'ятниця]: Режим [{mode.upper()}], Аркуш [{target_tab}]")
         
         # Викликаємо ваш скрипт: publish_content.py <post/story> <П'ятниця>
         subprocess.run(['python', 'publish_content.py', mode, target_tab], check=True)
+        EOF
