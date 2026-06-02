@@ -139,10 +139,25 @@ def main():
         rows_to_append = []
         ids_to_delete = []
         
-        # Обчислюємо нові файли на додавання (лічильники ставимо в 0)
+        # Обчислюємо нові файли, а також оновлюємо змінені назви/категорії
         for f_id, f_info in drive_files.items():
             if f_id not in sheet_map:
                 rows_to_append.append([f_id, f_info['name'], f_info['category'], 0, 0])
+            else:
+                # Файл вже є в таблиці, перевіряємо чи не змінилася його назва або папка (категорія)
+                existing_item = sheet_map[f_id]
+                existing_name = existing_item["data"][1]
+                existing_category = existing_item["data"][2]
+                
+                if existing_name != f_info['name'] or existing_category != f_info['category']:
+                    row_idx = existing_item["idx"]
+                    print(f"🔄 Виявлено зміни для файлу ID {f_id} (Рядок {row_idx}). Оновлюємо назву/категорію на: [{f_info['category']}] -> {f_info['name']}")
+                    
+                    # Оновлюємо колонки B (Назва) та C (Категорія) для цього рядка
+                    sheets.spreadsheets().values().update(
+                        spreadsheetId=SPREADSHEET_ID, range=f"'{tab_name}'!B{row_idx}:C{row_idx}",
+                        valueInputOption='RAW', body={'values': [[f_info['name'], f_info['category']]]}
+                    ).execute()
                 
         # Обчислюємо файли, які зникли з Диску
         for f_id, sheet_info in sheet_map.items():
