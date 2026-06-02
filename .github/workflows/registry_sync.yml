@@ -1,0 +1,26 @@
+name: Auto-Sync Google Sheets Registry
+
+on:
+  schedule:
+    - cron: '5 * * * *'  # Запуск кожну годину на 5-й хвилині
+  workflow_dispatch:     # Можливість запустити вручную кнопкою
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Python Setup
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install Dependencies
+      run: pip install google-auth google-api-python-client
+
+    - name: Run Sync
+      env:
+        GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+      run: python sync_registry.py
