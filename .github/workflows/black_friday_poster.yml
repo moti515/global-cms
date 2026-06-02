@@ -1,0 +1,62 @@
+name: Автоматична публікація контенту в Instagram
+
+on:
+  schedule:
+    # УВАГА: GitHub Actions працює за системним часом UTC. 
+    # Перераховано для вашого місцевого часу (CEST, Німеччина):
+    - cron: '0 7 * * *'   # 09:00 ранку (Час для ранкової Сторіс)
+    - cron: '0 11 * * *'  # 13:00 дня   (Час для обіднього Поста)
+    - cron: '0 18 * * *'  # 20:00 вечора (Час для вечірньої Сторіс)
+  workflow_dispatch:      # Дозволяє запускати скрипт вручну кнопкою з інтерфейсу GitHub
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Перевірка коду репозиторію
+      uses: actions/checkout@v3
+
+    - name: Налаштування Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Встановлення системних залежностей (FFmpeg)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+
+    - name: Встановлення бібліотек Python
+      run: |
+        pip install requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow pillow-heif pytz
+
+    - name: Розумний запуск публікатора контенту
+      env:
+        GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+        META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      run: |
+        python -c "
+        from datetime import datetime
+        import pytz
+        import subprocess
+
+        # Визначаємо локальний час у Німеччині
+        tz = pytz.timezone('Europe/Berlin')
+        now = datetime.now(tz)
+        
+        # Масив для точного визначення назви вкладки в таблиці
+        days = ['Понеділок', 'Вівторок', 'Середа', 'Четвер', 'П\'ятниця', 'Субота', 'Неділя']
+        current_tab = days[now.weekday()]
+        
+        # Автоматично визначаємо режим: якщо година близько 9 ранку або 8 вечора — це Сторіс, інакше Пост
+        hour = now.hour
+        mode = 'story' if hour in [8, 9, 19, 20, 21] else 'post'
+        
+        print(f' [Система] Поточний час у Берліні: {now.strftime(\"%H:%M\")}')
+        print(f' [Система] Автовизначення: Режим [{mode.upper()}], Вкладка таблиці [{current_tab}]')
+        
+        # Запускаємо наш головний скрипт з динамічними аргументами
+        subprocess.run(['python', 'publish_content.py', mode, current_tab], check=True)
+        "
