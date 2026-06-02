@@ -15,12 +15,12 @@ from pillow_heif import register_heif_opener
 register_heif_opener()
 
 IG_USER_ID = "17841429409435438"
-META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "EAAXCuIxnsWQBRpJP7hbZBPchMZBcZBucLPArTryPFNhhrl9mbHHWZBP8jpKTUjeHgERWwZBbdDa9b3c2as9LQZC83RRHzFCrF5km4vVnL8IRowwiCDMorqugQHymZBYNRShZA67sUUOBvoyHKcqh6AaQB5KQBBDywUBWr6ZCLLE7sMVaKLglNzyNYlPxadJu8HQ5t")
+# Зчитуємо токен із секретів GitHub. Старий заблокований токен видалено.
+META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "ВСТАВТЕ_СЮДИ_НОВИЙ_ТОКЕН_ЯКЩО_ТЕСТУЄТЕ_ЛОКАЛЬНО")
 SPREADSHEET_ID = '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0'
-FB_PAGE_ID = "1313824565399163"  # ID вашої сторінки Facebook "Friday and other days"
+FB_PAGE_ID = "1313824565399163" 
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
-# Суворий поділ форматів
 VALID_MEDIA_EXTENSIONS = ('.gif', '.heic', '.heif', '.jpeg', '.jpg', '.mp4', '.png', '.webp')
 DOCUMENT_EXTENSIONS = ('.pdf', '.doc', '.docx', '.djvu', '.txt', '.rtf', '.fb2', '.epub')
 
@@ -30,10 +30,9 @@ def get_services():
     return build('drive', 'v3', credentials=creds), build('sheets', 'v4', credentials=creds)
 
 def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="непідтримуваний формат"):
-    """Записує помилку формату на службовий аркуш навпроти папки"""
     try:
         res = sheets_service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID, range="'⚙️ Налаштуванняfolder_name'!A2:E"
+            spreadsheetId=SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:E"
         ).execute()
         rows = res.get('values', [])
         
@@ -73,12 +72,13 @@ def get_active_rules_ordered():
     return active_rules
 
 def generate_multimodal_caption(image_path, category):
-    """ШІ аналізує саме ЗОБРАЖЕННЯ (або кадр відео) і генерує точний гумор"""
+    """ШІ аналізує зображення. Виправлено версію API на v1 для стабільної роботи"""
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if not gemini_key:
         return "Усміхніться! 😉 #гумор #меблі"
         
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+    # ВИПРАВЛЕНО: v1beta змінено на v1
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={gemini_key}"
     
     try:
         with open(image_path, "rb") as f:
@@ -111,22 +111,20 @@ def generate_multimodal_caption(image_path, category):
         return "Трохи гумору вам у стрічку! Як вам? 👇😂"
 
 def upload_to_temporary_host(file_path):
-    """Багатоступеневе завантаження на публічні хостинги, стійкі до блокувань GitHub Actions"""
     print("📤 Завантажуємо тимчасовий файл на публічні хостинги...")
     
-    # КРОК 1: Tmpfiles.org (Чудова пропускна здатність на GitHub)
+    # КРОК 1: Tmpfiles.org
     try:
         url = "https://tmpfiles.org/api/v1/upload"
         with open(file_path, 'rb') as f:
             res = requests.post(url, files={'file': f}, timeout=30).json()
             if res.get("status") == "success":
                 viewer_url = res["data"]["url"]
-                # Конвертуємо у пряме скачування (Meta API не приймає сторінки-прев'ю)
                 return viewer_url.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/")
     except Exception as e:
         print(f"⚠️ Tmpfiles.org не спрацював: {e}. Пробуємо резервний варіант...")
         
-    # КРОК 2: Pixeldrain.com (Надійне резервне сховище)
+    # КРОК 2: Pixeldrain.com
     try:
         url = "https://pixeldrain.com/api/file"
         with open(file_path, 'rb') as f:
@@ -151,7 +149,6 @@ def upload_to_temporary_host(file_path):
     raise Exception("Усі доступні тимчасові хостинги заблоковані мережею або лежать.")
 
 def publish_to_meta_platforms(media_url, media_type, is_story=False, caption=""):
-    """Публікує контент в Instagram, а пости додатково дублює на Facebook Page"""
     print("📤 Відправка контенту в Instagram...")
     ig_url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
     ig_payload = {
@@ -204,7 +201,7 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="")
         try:
             fb_res = requests.post(fb_url, data=fb_payload).json()
             if "id" in fb_res or "post_id" in fb_res:
-                print(f"✅ [Facebook Page] Пост успішно продубльовано! ID: {fb_res.get('id', fb_res.get('post_id'))}")
+                print(f"✅ [Facebook Page] Пост успешно продублировано! ID: {fb_res.get('id', fb_res.get('post_id'))}")
             else:
                 print(f"⚠️ [Facebook Page] Сервер повернув дивну відповідь: {fb_res}")
         except Exception as e:
@@ -298,7 +295,6 @@ def main():
         caption_text = generate_multimodal_caption(analysis_image, category_name)
         if os.path.exists(os.path.join('temp_media', 'video_frame.jpg')): os.remove(os.path.join('temp_media', 'video_frame.jpg'))
 
-    # Запуск публікації через оновлені хости
     try:
         public_url = upload_to_temporary_host(final_upload_path)
         print(f"🔗 Успішно згенеровано пряме посилання: {public_url}")
