@@ -15,8 +15,7 @@ from pillow_heif import register_heif_opener
 register_heif_opener()
 
 IG_USER_ID = "17841429409435438"
-# Зчитуємо токен із секретів GitHub. Старий заблокований токен видалено.
-META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "ВСТАВТЕ_СЮДИ_НОВИЙ_ТОКЕН_ЯКЩО_ТЕСТУЄТЕ_ЛОКАЛЬНО")
+META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "ВСТАВТЕ_СЮДИ_НОВИЙ_PAGE_ACCESS_TOKEN")
 SPREADSHEET_ID = '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0'
 FB_PAGE_ID = "1313824565399163" 
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
@@ -72,29 +71,29 @@ def get_active_rules_ordered():
     return active_rules
 
 def generate_multimodal_caption(image_path, category):
-    """ШІ аналізує зображення. Виправлено версію API на v1 для стабільної роботи"""
+    """ШІ аналізує зображення за допомогою точного синтаксису Google AI Studio (camelCase)"""
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if not gemini_key:
         return "Усміхніться! 😉 #гумор #меблі"
         
-    # ВИПРАВЛЕНО: v1beta змінено на v1
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+    # Використовуємо найактуальніші моделі для стабільної версії v1
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]
     
     try:
         with open(image_path, "rb") as f:
             image_bytes = f.read()
-            
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
         
         prompt = f"Ти топ-маркетолог розважальної сторінки. Подивись на цю картинку/мем. Напиши до неї ОДИН короткий, влучний і дуже смішний коментар (або життєву фразу/жарт) українською мовою. Врахуй, що сьогодні контекст публікації: категорія '{category}'. Додай відповідні емодзі. Не використовуй нудних і офіційних вступів."
         
+        # КРИТИЧНО ПРАВИЛЬНО: inlineData та mimeType замість snake_case
         payload = {
             "contents": [{
                 "parts": [
                     {"text": prompt},
                     {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
+                        "inlineData": {  
+                            "mimeType": "image/jpeg",  
                             "data": base64_image
                         }
                     }
@@ -102,12 +101,19 @@ def generate_multimodal_caption(image_path, category):
             }]
         }
         
-        res = requests.post(url, json=payload, timeout=20).json()
-        return res['candidates'][0]['content']['parts'][0]['text']
+        for model in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={gemini_key}"
+            try:
+                res = requests.post(url, json=payload, timeout=20).json()
+                if 'candidates' in res and res['candidates']:
+                    return res['candidates'][0]['content']['parts'][0]['text']
+            except Exception:
+                continue # Якщо модель недоступна або застаріла, пробуємо наступну зі списку
+                
+        print("⚠️ Жодна з моделей Gemini не відповіла успішно, активовано дефолт.")
+        return "Трохи гумору вам у стрічку! Як вам? 👇😂"
     except Exception as e:
-        print(f"⚠️ Очі ШІ підвели, ставимо текстовий дефолт. Помилка: {e}")
-        if 'res' in locals():
-            print(f"🔍 Технічна відповідь від сервера Gemini: {res}")
+        print(f"⚠️ Помилка обробки запиту до ШІ: {e}")
         return "Трохи гумору вам у стрічку! Як вам? 👇😂"
 
 def upload_to_temporary_host(file_path):
@@ -168,9 +174,14 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="")
         print(f"❌ Помилка створення контейнера Instagram: {ig_res}")
     else:
         ig_creation_id = ig_res["id"]
+        
+        # ВИПРАВЛЕНО: Даємо серверам Meta час завантажити файл
         if media_type == "video":
-            print("⏳ Очікуємо обробки відео серверами Instagram...")
+            print("⏳ Очікуємо обробки відео серверами Instagram (30 сек)...")
             time.sleep(30)
+        else:
+            print("⏳ Очікуємо завантаження фото серверами Instagram (12 сек)...")
+            time.sleep(12)
             
         ig_pub_res = requests.post(
             f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", 
@@ -201,9 +212,9 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="")
         try:
             fb_res = requests.post(fb_url, data=fb_payload).json()
             if "id" in fb_res or "post_id" in fb_res:
-                print(f"✅ [Facebook Page] Пост успешно продублировано! ID: {fb_res.get('id', fb_res.get('post_id'))}")
+                print(f"✅ [Facebook Page] Пост успішно продубльовано! ID: {fb_res.get('id', fb_res.get('post_id'))}")
             else:
-                print(f"⚠️ [Facebook Page] Сервер повернув дивну відповідь: {fb_res}")
+                print(f"⚠️ [Facebook Page] Сервер повернув дивну відповідь (перевірте тип токена!): {fb_res}")
         except Exception as e:
             print(f"❌ Не вдалося надіслати пост у Facebook: {e}")
 
