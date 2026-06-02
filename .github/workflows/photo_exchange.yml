@@ -3,7 +3,7 @@ name: Weekly Photo Exchange Sync
 on:
   schedule:
     # Запуск щонеділі о 12:00 за UTC (15:00 за Києвом)
-    - cron: '0 12 * * 0'
+    - cron: '27 12 * * 0' # Щонеділі о 15:27 за Києвом
   workflow_dispatch: # Дозволяє запускати вручну кнопкою
 
 jobs:
