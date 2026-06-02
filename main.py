@@ -258,7 +258,8 @@ def main():
         except Exception as e:
             print(f"❌ Не вдалося завантажити файл {f['name']}: {e}")
             continue
-        
+
+        # Витяг первинних метаданих з файлу
         # Визначення дати та геолокації
         meta_date, lat, lon = None, None, None
         
@@ -268,24 +269,49 @@ def main():
         # Обробка відео через ffprobe
         elif mime_type.startswith('video/') or lower_name.endswith(('.mp4', '.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg')):
             meta_date, lat, lon = get_video_metadata(local_path)
-            
-        file_date = None
+
+        # --- ІНТЕЛЕКТУАЛЬНИЙ БЛОК ВАЛІДАЦІЇ ДАТИ ---
+        final_dt = None
+        now = datetime.now()
+
+        # Крок 1: Спроба розпарсити дату з метаданих файлу (EXIF / ffprobe)
         if meta_date:
             try:
-                file_date = datetime.strptime(meta_date, '%Y:%m:%d %H:%M:%S').strftime('%d.%m.%Y')
+                dt_parsed = datetime.strptime(meta_date, '%Y:%m:%d %H:%M:%S')
+                # Валідація: дата має бути від 2010 року і не з майбутнього
+                if dt_parsed.year >= 2010 and dt_parsed <= now:
+                    final_dt = dt_parsed
+                else:
+                    print(f"⚠️ Метадані файлу {f['name']} містять нелогічну дату: {meta_date}. Шукаємо заміну на Диску.")
             except:
                 pass
             
-        # Розумний бекап дати: порівнюємо createdTime та modifiedTime з Диску, обираємо НАЙСТАРШУ
-        if not file_date:
+        # Крок 2: Резервний аналіз дат створення/зміни на самому Google Диску
+        if not final_dt:
             try:
-                dt_created = datetime.strptime(f['createdTime'], '%Y-%m-%dT%H:%M:%S.%fZ')
-                dt_modified = datetime.strptime(f['modifiedTime'], '%Y-%m-%dT%H:%M:%S.%fZ')
-                earliest_dt = min(dt_created, dt_modified)
-                file_date = earliest_dt.strftime('%d.%m.%Y')
-            except:
-                file_date = datetime.now().strftime('%d.%m.%Y')
+                # Обрізаємо до секунд [:19], щоб уникнути проблем із мілісекундами
+                dt_created = datetime.strptime(f['createdTime'][:19], '%Y-%m-%dT%H:%M:%S')
+                dt_modified = datetime.strptime(f['modifiedTime'][:19], '%Y-%m-%dT%H:%M:%S')
+                
+                # Беремо найстарішу з двох дат
+                earliest_gdrive = min(dt_created, dt_modified)
+                
+                # Валідація дати з Диску
+                if earliest_gdrive.year >= 2010 and earliest_gdrive <= now:
+                    final_dt = earliest_gdrive
+                else:
+                    print(f"⚠️ Дати на Диску для {f['name']} за межами логіки (2010-сьогодні).")
+            except Exception as e:
+                print(f"⚠️ Помилка зчитування дат з Диску для {f['name']}: {e}")
 
+        # Крок 3: Якщо абсолютно всі дати пошкоджені або нелогічні — ставимо сьогоднішню
+        if not final_dt:
+            print(f"🛑 Не вдалося знайти адекватну дату для {f['name']}. Присвоєно поточну дату.")
+            final_dt = now
+            
+        file_date = final_dt.strftime('%d.%m.%Y')
+        # -------------------------------------------
+        
         location = None
         if lat and lon:
             time.sleep(1) # Захист від блокування лімітів OSM Nominatim
