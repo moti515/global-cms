@@ -33,7 +33,7 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
     """Записує помилку формату на службовий аркуш навпроти папки"""
     try:
         res = sheets_service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:E"
+            spreadsheetId=SPREADSHEET_ID, range="'⚙️ Налаштуванняfolder_name'!A2:E"
         ).execute()
         rows = res.get('values', [])
         
@@ -106,13 +106,37 @@ def generate_multimodal_caption(image_path, category):
         return res['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
         print(f"⚠️ Очі ШІ підвели, ставимо текстовий дефолт. Помилка: {e}")
+        if 'res' in locals():
+            print(f"🔍 Технічна відповідь від сервера Gemini: {res}")
         return "Трохи гумору вам у стрічку! Як вам? 👇😂"
 
 def upload_to_temporary_host(file_path):
-    """Завантажує локальний файл на безкоштовний хостинг для отримання прямого публічного лінку для Meta API"""
-    print("📤 Завантажуємо тимчасовий файл на публічний хостинг для Meta...")
+    """Багатоступеневе завантаження на публічні хостинги, стійкі до блокувань GitHub Actions"""
+    print("📤 Завантажуємо тимчасовий файл на публічні хостинги...")
     
-    # Спроба 1: Catbox.moe (Працює чудово, тримає прямі лінки на фото та відео)
+    # КРОК 1: Tmpfiles.org (Чудова пропускна здатність на GitHub)
+    try:
+        url = "https://tmpfiles.org/api/v1/upload"
+        with open(file_path, 'rb') as f:
+            res = requests.post(url, files={'file': f}, timeout=30).json()
+            if res.get("status") == "success":
+                viewer_url = res["data"]["url"]
+                # Конвертуємо у пряме скачування (Meta API не приймає сторінки-прев'ю)
+                return viewer_url.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/")
+    except Exception as e:
+        print(f"⚠️ Tmpfiles.org не спрацював: {e}. Пробуємо резервний варіант...")
+        
+    # КРОК 2: Pixeldrain.com (Надійне резервне сховище)
+    try:
+        url = "https://pixeldrain.com/api/file"
+        with open(file_path, 'rb') as f:
+            res = requests.post(url, files={'file': f}, timeout=30).json()
+            if res.get("success") is True or "id" in res:
+                return f"https://pixeldrain.com/api/file/{res['id']}"
+    except Exception as e:
+        print(f"⚠️ Pixeldrain не спрацював: {e}. Пробуємо фінальний варіант...")
+
+    # КРОК 3: Catbox.moe
     try:
         url = "https://catbox.moe/user/api.php"
         with open(file_path, 'rb') as f:
@@ -122,16 +146,9 @@ def upload_to_temporary_host(file_path):
             if res.status_code == 200 and res.text.strip().startswith("https://"):
                 return res.text.strip()
     except Exception as e:
-        print(f"⚠️ Перший хостинг повернув помилку: {e}. Пробуємо резервний...")
-        
-    # Спроба 2: Резервний варіант через transfer.sh
-    try:
-        with open(file_path, 'rb') as f:
-            res = requests.put(f"https://transfer.sh/{os.path.basename(file_path)}", data=f, timeout=30)
-            if res.status_code == 200:
-                return res.text.strip()
-    except Exception as e:
-        raise Exception(f"Не вдалося отримати публічний лінк через жоден сервіс: {e}")
+        print(f"⚠️ Catbox не спрацював: {e}")
+
+    raise Exception("Усі доступні тимчасові хостинги заблоковані мережею або лежать.")
 
 def publish_to_meta_platforms(media_url, media_type, is_story=False, caption=""):
     """Публікує контент в Instagram, а пости додатково дублює на Facebook Page"""
@@ -228,7 +245,7 @@ def main():
             selected_item = match_files[0]
             break
             
-    if not selected_item: min_pool[0]
+    if not selected_item: selected_item = min_pool[0]
 
     file_id = selected_item["data"][0]
     orig_name = selected_item["data"][1]
@@ -270,7 +287,6 @@ def main():
         final_upload_path = jpg_path
         mime_type = "image/jpeg"
 
-    # Аналіз зображення ШІ для постів
     caption_text = ""
     if mode == 'post':
         analysis_image = final_upload_path
@@ -282,15 +298,13 @@ def main():
         caption_text = generate_multimodal_caption(analysis_image, category_name)
         if os.path.exists(os.path.join('temp_media', 'video_frame.jpg')): os.remove(os.path.join('temp_media', 'video_frame.jpg'))
 
-    # --- ПУБЛІКАЦІЯ ЧЕРЕЗ ТИМЧАСОВИЙ ХОСТИНГ ---
+    # Запуск публікації через оновлені хости
     try:
         public_url = upload_to_temporary_host(final_upload_path)
-        print(f"🔗 Отримано лінк: {public_url}")
+        print(f"🔗 Успішно згенеровано пряме посилання: {public_url}")
         
-        # Передаємо посилання в Meta API
         publish_to_meta_platforms(public_url, "video" if mime_type == "video/mp4" else "image", is_story=(mode == 'story'), caption=caption_text)
         
-        # Оновлення лічильника в Google Таблиці
         new_counter = selected_item["data"][counter_col_idx] + 1
         col_letter = "D" if mode == 'post' else "E"
         sheets.spreadsheets().values().update(
@@ -301,8 +315,8 @@ def main():
         
     except Exception as e:
         print(f"❌ Критична помилка під час публікації: {e}")
+        sys.exit(1)
     finally:
-        # Повне очищення локального кешу на ранері GitHub Actions
         if os.path.exists(local_path): os.remove(local_path)
         if final_upload_path != local_path and os.path.exists(final_upload_path): os.remove(final_upload_path)
 
