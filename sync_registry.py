@@ -161,4 +161,30 @@ def sync_tab_with_drive(drive_service, sheets_service, tab_name, active_folders)
         sheets_service.spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body={"requests": requests}).execute()
 
 def get_sheet_id(sheets_service, title):
-    meta =
+    meta = sheets_service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+    for s in meta.get('sheets', []):
+        if s['properties']['title'] == title:
+            return s['properties']['sheetId']
+    return 0
+
+def main():
+    print("🔄 Запуск інтелектуального синхронізатора реєстру контенту...")
+    drive, sheets = get_services()
+    
+    # Конфігуруємо службовий аркуш налаштувань папок
+    init_settings_sheet(sheets)
+    
+    # Отримуємо папки в роботі
+    active_folders = load_active_folders(sheets)
+    print(f"📂 Знайдено активних папок для сканування: {len(active_folders)}")
+    
+    unique_tabs = list(set([f['tab'] for f in active_folders]))
+    
+    for tab in unique_tabs:
+        print(f"🗂️ Синхронізація аркуша '{tab}'...")
+        sync_tab_with_drive(drive, sheets, tab, active_folders)
+        
+    print(f"✨ Синхронізацію успішно завершено. Все під контролем!")
+
+if __name__ == '__main__':
+    main()
