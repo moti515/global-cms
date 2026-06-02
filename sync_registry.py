@@ -7,7 +7,7 @@ from googleapiclient.discovery import build
 SPREADSHEET_ID = '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0'
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
-# Базові папки, які ви надали (для стартової ініціалізації службового аркуша)
+# Базові папки для стартової ініціалізації службового аркуша
 INITIAL_FOLDERS = [
     {"id": "1k6Fe4nWpkQixHHoOqKyMusFowcnE7frX", "name": "П'ятниця", "tab": "П'ятниця"},
     {"id": "1sIIKtq2bVK4qpkw2rlXIBtQDrgHinqV2", "name": "Чорна п'ятниця", "tab": "П'ятниця"},
@@ -20,7 +20,7 @@ INITIAL_FOLDERS = [
     {"id": "1HOy6tugF53KQeoxgtAIdstHIE54UpzJp", "name": "Неділя", "tab": "П'ятниця"},
     {"id": "1zL9q6Lcsz9PAROtWAXe5Ihmtwmx879T4", "name": "Субота", "tab": "П'ятниця"},
     {"id": "1q9tO2_tmlacquT6149bFmF05NHMItbUh", "name": "Четвер", "tab": "П'ятниця"},
-    {"id": "1lRzoFfv3wIrAKE5pZatqeukpmQXJym9-", "name": "Середа", "tab": "П'ятниця"},
+    {"id": "1lRzoFfv3wIrAKE5pZatqeukpmQXJym9-", "name": "Середа", "tab": "П'ytниця"},
     {"id": "1f7EIhQZFhMo83vmjfwtw98_QMWaLTYnE", "name": "Вівторок", "tab": "П'ятниця"},
     {"id": "10xYhETrClFEm91oWOtY_NgfMt6ZsL9fq", "name": "Різне", "tab": "П'ятниця"}
 ]
@@ -33,16 +33,24 @@ def get_services():
     return drive, sheets
 
 def ensure_sheet_exists(sheets_service, title, headers):
-    """Перевіряє наявність аркуша, створює його та додає заголовки, якщо його немає"""
+    """Перевіряє наявність аркуша (створює якщо немає) та НАЯВНІСТЬ ЗАГОЛОВКІВ (додає якщо порожньо)"""
     meta = sheets_service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
     sheets = [s['properties']['title'] for s in meta.get('sheets', [])]
     
+    # Крок 1: Якщо аркуша взагалі немає в книзі — створюємо його
     if title not in sheets:
-        print(f"🔹 Створення нового аркуша: {title}")
+        print(f"🔹 Аркуша '{title}' не знайдено. Створюємо...")
         body = {'requests': [{'addSheet': {'properties': {'title': title}}}]}
         sheets_service.spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body=body).execute()
         
-        # Додаємо хедери
+    # Крок 2: Перевіряємо, чи є заголовки у першому рядку (A1:1)
+    check_headers = sheets_service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID, range=f"'{title}'!A1:1"
+    ).execute()
+    
+    # Якщо рядок заголовків порожній — записуємо їх туди
+    if not check_headers.get('values'):
+        print(f"📝 Заголовки відсутні або аркуш порожній. Прописуємо структуру для '{title}'...")
         sheets_service.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
             range=f"'{title}'!A1",
@@ -55,7 +63,7 @@ def init_settings_sheet(sheets_service):
     headers = ["ID Підпапки", "Назва підпапки", "Цільовий Аркуш", "Активно (ТАК/НІ)", "Правило обробки"]
     ensure_sheet_exists(sheets_service, "⚙️ Налаштування Папок", headers)
     
-    # Перевіряємо, чи там порожньо (крім заголовків)
+    # Перевіряємо наявність даних (починаючи з рядка 2)
     res = sheets_service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:A"
     ).execute()
@@ -85,16 +93,15 @@ def sync_tab_with_drive(drive_service, sheets_service, tab_name, active_folders)
     headers = ["ID Файлу (Google Drive)", "Назва файлу", "Категорія (Папка)", "Публікацій у Пост", "Публікацій у Сторіс"]
     ensure_sheet_exists(sheets_service, tab_name, headers)
     
-    # 1. Зчитуємо поточний стан аркуша
+    # 1. Зчитуємо поточний стан аркуша (дані починаються з рядка 2)
     raw_sheet = sheets_service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID, range=f"'{tab_name}'!A2:E"
     ).execute()
     
     sheet_rows = raw_sheet.get('values', [])
-    # Створюємо мапу {file_id: {row_index, data}} для миттєвого пошуку O(1)
-    sheet_map = {row[0]: {"idx": i + 2, "data": row} for i, row in enumerate(sheet_rows) if row}
+    sheet_map = {row[0]: {"idx": i + 2, "data": row} for i, row in enumerate(sheet_rows) if row and len(row) > 0}
     
-    # 2. Збираємо ВСІ актуальні файли з усіх активних папок, що належать цьому аркушу
+    # 2. Збираємо ВСІ актуальні файли з Google Drive для цього аркуша
     drive_files = {}
     for folder in active_folders:
         if folder['tab'] != tab_name:
@@ -118,19 +125,17 @@ def sync_tab_with_drive(drive_service, sheets_service, tab_name, active_folders)
     rows_to_append = []
     ids_to_delete = []
     
-    # На заміну (оновлення назви, якщо змінилася, або категорія)
     for f_id, f_info in drive_files.items():
         if f_id not in sheet_map:
-            # Новий файл -> ставимо лічильники на 0
+            # Новий файл заносимо з нульовими лічильниками
             rows_to_append.append([f_id, f_info['name'], f_info['category'], 0, 0])
             
     for f_id, sheet_info in sheet_map.items():
         if f_id not in drive_files:
-            # Файл видалено з Драйву -> треба видалити рядок
+            # Файлу більше немає на Диску — маркуємо рядок на видалення
             ids_to_delete.append(sheet_info['idx'])
 
-    # 4. Виконуємо операції запису/видалення
-    # Додавання нових файлів пакетом (Batch Append)
+    # 4. Пакетне виконання операцій
     if rows_to_append:
         print(f"➕ {tab_name}: Додаємо {len(rows_to_append)} нових файлів.")
         sheets_service.spreadsheets().values().append(
@@ -138,10 +143,10 @@ def sync_tab_with_drive(drive_service, sheets_service, tab_name, active_folders)
             valueInputOption='RAW', body={'values': rows_to_append}
         ).execute()
 
-    # Очищення видалених файлів (сортуємо індекси з кінця до початку, щоб не зсунути номери рядків!)
     if ids_to_delete:
         print(f"❌ {tab_name}: Видаляємо {len(ids_to_delete)} застарілих рядків.")
         requests = []
+        # Сортуємо індекси з кінця, щоб видалення не зсувало номери попередніх рядків
         for row_idx in sorted(ids_to_delete, reverse=True):
             requests.append({
                 "deleteDimension": {
@@ -156,31 +161,4 @@ def sync_tab_with_drive(drive_service, sheets_service, tab_name, active_folders)
         sheets_service.spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body={"requests": requests}).execute()
 
 def get_sheet_id(sheets_service, title):
-    meta = sheets_service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
-    for s in meta.get('sheets', []):
-        if s['properties']['title'] == title:
-            return s['properties']['sheetId']
-    return 0
-
-def main():
-    print("🔄 Запуск інтелектуального синхронізатора реєстру контенту...")
-    drive, sheets = get_services()
-    
-    # Конфігуруємо службовий аркуш
-    init_settings_sheet(sheets)
-    
-    # Отримуємо папки в роботі
-    active_folders = load_active_folders(sheets)
-    print(f"📂 Знайдено активних папок для сканування: {len(active_folders)}")
-    
-    # Визначаємо унікальні назви аркушів, які треба оновити
-    unique_tabs = list(set([f['tab'] for f in active_folders]))
-    
-    for tab in unique_tabs:
-        print(f"🗂️ Синхронізація аркуша '{tab}'...")
-        sync_tab_with_drive(drive, sheets, tab, active_folders)
-        
-    print(f"✨ Синхронізацію успішно завершено.")
-
-if __name__ == '__main__':
-    main()
+    meta =
