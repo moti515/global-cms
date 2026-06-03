@@ -66,12 +66,16 @@ def get_active_rules_ordered():
     if "31.05" <= day_month <= "15.06": active_rules.append("31 травня")
     if now.month == 11 and 23 <= now.day <= 30: active_rules.append("Чорна п'ятниця")
     
-    # Перевірка на специфічні п'ятниці (мають вищий пріоритет за звичайну П'ятницю)
+    # Перевірка на специфічні п'ятниці
     if day_of_week == 'Friday':
         if now.day == 13:
             active_rules.append("П'ятниця 13-те")
         elif now.day == 12:
             active_rules.append("П'ятниця 12-те")
+            
+    # Перевірка на вихідні (Субота та Неділя)
+    if day_of_week in ['Saturday', 'Sunday']:
+        active_rules.append("Weekend")
     
     active_rules.append(days_map[day_of_week])
     active_rules.append("Різне")
