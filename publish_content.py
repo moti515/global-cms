@@ -17,7 +17,7 @@ register_heif_opener()
 IG_USER_ID = "17841429409435438"
 META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "ВСТАВТЕ_СЮДИ_НОВИЙ_PAGE_ACCESS_TOKEN")
 SPREADSHEET_ID = '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0'
-FB_PAGE_ID = "1313824565399163" 
+FB_PAGE_ID = os.environ.get("FB_PAGE_ID")
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
 VALID_MEDIA_EXTENSIONS = ('.gif', '.heic', '.heif', '.jpeg', '.jpg', '.mp4', '.png', '.webp')
