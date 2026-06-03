@@ -176,7 +176,7 @@ def upload_to_temporary_host(file_path):
 
     raise Exception("Усі доступні тимчасові хостинги заблоковані мережею або лежать.")
 
-def publish_to_meta_platforms(media_url, media_type, is_story=False, caption=""):
+def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="", local_file_path=None):
     print("📤 Відправка контенту в Instagram...")
     ig_url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
     ig_payload = {
