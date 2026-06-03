@@ -316,7 +316,7 @@ def main():
         final_upload_path = jpg_path
         mime_type = "image/jpeg"
 
-    # 🔥 НОВИЙ БЛОК: Оптимізація будь-якої картинки під формат Сторіс (1080x1920) без обрізання
+    # 🔥 ОПТИМІЗАЦІЯ ФОТО ПІД СТОРІС (1080x1920)
     if mode == 'story' and mime_type == "image/jpeg":
         print("📐 Режим Сторіс: вписуємо зображення у формат 1080x1920, щоб уникнути кропу...")
         story_path = os.path.join('temp_media', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
@@ -349,6 +349,29 @@ def main():
             final_upload_path = story_path
         except Exception as e:
             print(f"⚠️ Не вдалося відформатувати Сторіс: {e}. Буде надіслано оригінал.")
+
+    # ОПТИМІЗАЦІЯ ВІДЕО ПІД СТОРІС (1080x1920)
+    elif mode == 'story' and mime_type == "video/mp4":
+        print("📐 Режим Сторіс для ВІДЕО: інтелектуально вписуємо у формат 1080x1920 через ffmpeg...")
+        story_video_path = os.path.join('temp_media', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.mp4')
+        
+        # Фільтр ffmpeg стискає відео пропорційно під 1080x1920 і додає чорні поля (padding)
+        ffmpeg_cmd = [
+            'ffmpeg', '-y', '-i', final_upload_path,
+            '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black',
+            '-movflags', 'faststart',
+            '-pix_fmt', 'yuv420p',
+            story_video_path
+        ]
+        
+        result = subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if result.returncode == 0:
+            if final_upload_path != local_path and os.path.exists(final_upload_path): 
+                os.remove(final_upload_path)
+            final_upload_path = story_video_path
+            print("✅ Відео успішно конвертовано у вертикальний формат з полями!")
+        else:
+            print("⚠️ Не вдалося обробити відео через ffmpeg, буде надіслано оригінал (можливе обрізання).")
 
     caption_text = ""
     if mode == 'post':
