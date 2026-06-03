@@ -316,6 +316,40 @@ def main():
         final_upload_path = jpg_path
         mime_type = "image/jpeg"
 
+    # 🔥 НОВИЙ БЛОК: Оптимізація будь-якої картинки під формат Сторіс (1080x1920) без обрізання
+    if mode == 'story' and mime_type == "image/jpeg":
+        print("📐 Режим Сторіс: вписуємо зображення у формат 1080x1920, щоб уникнути кропу...")
+        story_path = os.path.join('temp_media', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
+        try:
+            with Image.open(final_upload_path) as img:
+                img = img.convert('RGB')
+                orig_w, orig_h = img.size
+                
+                target_w, target_h = 1080, 1920
+                # Створюємо нейтральне темне полотно-контейнер (колір 20, 20, 20)
+                canvas = Image.new('RGB', (target_w, target_h), (20, 20, 20))
+                
+                # Обчислюємо коефіцієнт стиснення/розширення (Fit)
+                scale = min(target_w / orig_w, target_h / orig_h)
+                new_w = int(orig_w * scale)
+                new_h = int(orig_h * scale)
+                
+                resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                
+                # Центруємо картинку на полотні сторіс
+                paste_x = (target_w - new_w) // 2
+                paste_y = (target_h - new_h) // 2
+                canvas.paste(resized_img, (paste_x, paste_y))
+                canvas.save(story_path, 'JPEG', quality=95)
+                
+            # Видаляємо проміжний тимчасовий jpg (якщо він створювався раніше)
+            if final_upload_path != local_path and os.path.exists(final_upload_path):
+                os.remove(final_upload_path)
+                
+            final_upload_path = story_path
+        except Exception as e:
+            print(f"⚠️ Не вдалося відформатувати Сторіс: {e}. Буде надіслано оригінал.")
+
     caption_text = ""
     if mode == 'post':
         analysis_image = final_upload_path
