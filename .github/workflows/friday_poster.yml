@@ -43,6 +43,7 @@ jobs:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        FB_PAGE_ID: ${{ secrets.FB_PAGE_ID_FRIDAY }}
         FORCED_MODE: ${{ github.event.inputs.forced_mode }}
       run: |
         python << 'EOF'
