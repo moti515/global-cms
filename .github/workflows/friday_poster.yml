@@ -2,24 +2,37 @@ name: Автоматична публікація контенту (П'ятни�
 
 on:
   schedule:
-    # Запуск строго за європейським часом (з урахуванням UTC на GitHub):
-    - cron: '0 7 * * *'   # 09:00 ранку (Час для ранкової Сторіс)
-    - cron: '0 11 * * *'  # 13:00 дня   (Час для обіднього Поста)
-    - cron: '0 18 * * *'  # 20:00 вечора (Час для вечірньої Сторіс)
-  workflow_dispatch:      # Кнопка для ручного запуску в інтерфейсі GitHub
+    # Запуск за UTC (налаштовано під літній/зимовий час із запасом):
+    - cron: '0 7 * * *'   # ~09:00 ранку за Берліном (Ранкова Сторіс)
+    - cron: '0 11 * * *'  # ~13:00 дня за Берліном (Обідній Пост)
+    - cron: '0 18 * * *'  # ~20:00 вечора за Берліном (Вечірня Сторіс)
+  workflow_dispatch:      # Кнопка для ручного запуску з параметрами
+    inputs:
+      forced_mode:
+        description: 'Режим публікації (auto — за часом, або примусово)'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - post
+          - story
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  
 jobs:
   publish:
     runs-on: ubuntu-latest
 
     steps:
     - name: Перевірка коду репозиторію
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Налаштування Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.12'
 
     - name: Встановлення системних залежностей (FFmpeg)
       run: |
@@ -28,6 +41,7 @@ jobs:
 
     - name: Встановлення бібліотек Python
       run: |
+        python -m pip install --upgrade pip
         pip install requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow pillow-heif pytz
 
     - name: Запуск публікатора контенту
@@ -35,8 +49,10 @@ jobs:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        FORCED_MODE: ${{ github.event.inputs.forced_mode }}
       run: |
         python << 'EOF'
+        import os
         from datetime import datetime
         import pytz
         import subprocess
@@ -44,17 +60,28 @@ jobs:
         # Визначаємо локальний час у Німеччині
         tz = pytz.timezone('Europe/Berlin')
         now = datetime.now(tz)
-        
-        # Автоматично визначаємо режим: Сторіс чи Пост залежно від години запуску
         hour = now.hour
-        mode = 'story' if hour in [8, 9, 19, 20, 21] else 'post'
         
-        # Тепер тут чистий Python рядок, апостроф більше нічого не ламає!
+        # Отримуємо значення ручного запуску (якщо є), дефолт — 'auto'
+        forced_mode = os.environ.get('FORCED_MODE', 'auto')
+
+        if forced_mode and forced_mode != 'auto':
+            mode = forced_mode
+            print(f" [Ручний запуск] Активовано ПРИМУСОВИЙ режим: [{mode.upper()}]")
+        else:
+            # Розширюємо "кишені" годин на випадок затримок GitHub Actions
+            # Ранкове вікно (9:00-11:00) та Вечірнє вікно (20:00-22:00)
+            if hour in [8, 9, 10, 19, 20, 21, 22]:
+                mode = 'story'
+            else:
+                mode = 'post'
+            print(f" [Автоматика] Визначено режим за часом: [{mode.upper()}]")
+        
         target_tab = "П'ятниця"
         
         print(f" [Система] Поточний час у Берліні: {now.strftime('%H:%M')}")
         print(f" [Система] Запуск для сторінки [П'ятниця]: Режим [{mode.upper()}], Аркуш [{target_tab}]")
         
-        # Викликаємо ваш скрипт: publish_content.py <post/story> <П'ятниця>
+        # Викликаємо головний скрипт
         subprocess.run(['python', 'publish_content.py', mode, target_tab], check=True)
         EOF
