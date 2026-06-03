@@ -213,6 +213,7 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="")
         else:
             print(f"❌ Помилка публікації в Instagram: {ig_pub_res}")
 
+    # --- БЛОК ФЕЙСБУКУ ---
     if not is_story:
         print("📤 Дублювання поста на Сторінку Facebook...")
         if media_type == "video":
@@ -238,6 +239,38 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="")
                 print(f"⚠️ [Facebook Page] Сервер повернув дивну відповідь (перевірте тип токена!): {fb_res}")
         except Exception as e:
             print(f"❌ Не вдалося надіслати пост у Facebook: {e}")
+
+    else:
+        #Публікація СТОРІС безпосередньо у Facebook
+        print("📤 Самостійне завантаження Сторіс на Сторінку Facebook...")
+        try:
+            if media_type != "video":
+                # Завантаження фото-сторіс через локальний файл (Multipart)
+                fb_story_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/stories"
+                if local_file_path and os.path.exists(local_file_path):
+                    with open(local_file_path, 'rb') as f:
+                        files = {'source': f}
+                        payload = {'access_token': META_ACCESS_TOKEN}
+                        fb_res = requests.post(fb_story_url, data=payload, files=files).json()
+                else:
+                    fb_res = {"error": {"message": "Локальний файл відсутній для завантаження фото"}}
+            else:
+                # Завантаження відео-сторіс (у FB це робиться через ендпоінт /videos з тегом STORY)
+                fb_video_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
+                if local_file_path and os.path.exists(local_file_path):
+                    with open(local_file_path, 'rb') as f:
+                        files = {'video_file': f}
+                        payload = {'access_token': META_ACCESS_TOKEN, 'video_category': 'STORY'}
+                        fb_res = requests.post(fb_video_url, data=payload, files=files).json()
+                else:
+                    fb_res = {"error": {"message": "Локальний файл відсутній для завантаження відео"}}
+
+            if "id" in fb_res or "video_id" in fb_res:
+                print(f"✅ [Facebook Page Story] Сторіс успішно опубліковано! ID: {fb_res.get('id') or fb_res.get('video_id')}")
+            else:
+                print(f"❌ [Facebook Page Story] Помилка публікації: {fb_res.get('error', {}).get('message', fb_res)}")
+        except Exception as e:
+            print(f"❌ [Facebook Page Story] Критична помилка: {e}")
 
 def main():
     if len(sys.argv) < 3:
@@ -388,7 +421,14 @@ def main():
         public_url = upload_to_temporary_host(final_upload_path)
         print(f"🔗 Успішно згенеровано пряме посилання: {public_url}")
         
-        publish_to_meta_platforms(public_url, "video" if mime_type == "video/mp4" else "image", is_story=(mode == 'story'), caption=caption_text)
+        # Передаємо локальний файл останнім параметром для FB Stories
+        publish_to_meta_platforms(
+            public_url, 
+            "video" if mime_type == "video/mp4" else "image", 
+            is_story=(mode == 'story'), 
+            caption=caption_text,
+            local_file_path=final_upload_path
+        )
         
         new_counter = selected_item["data"][counter_col_idx] + 1
         col_letter = "D" if mode == 'post' else "E"
