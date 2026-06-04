@@ -42,6 +42,7 @@ jobs:
       env:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
         # Секрети Меблевий гумор:
         IG_USER_ID: ${{ secrets.FURNITURE_H_IG_USER_ID }}
         FB_PAGE_ID: ${{ secrets.FURNITURE_H_FB_PAGE_ID }}
