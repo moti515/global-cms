@@ -46,17 +46,19 @@ jobs:
         IG_USER_ID: ${{ secrets.FRIDAY_IG_USER_ID }}
         FB_PAGE_ID: ${{ secrets.FRIDAY_FB_PAGE_ID }}
         META_ACCESS_TOKEN: ${{ secrets.FRIDAY_META_ACCESS_TOKEN }}
+        # Прокидаємо input з GitHub Actions у системну змінну для Python
+        FORCED_MODE: ${{ github.event.inputs.forced_mode }}
       run: |
         python << 'EOF'
         import os
         import subprocess
 
-        # Скрипт просто бере режим, який йому чітко передав cron-job.org через inputs
+        # Тепер змінна гарантовано підтягнеться з env секції вище
         mode = os.environ.get('FORCED_MODE', 'post')
         target_tab = "П'ятниця"
         
-        print(f" [Система] Зовнішній запуск API успішний!")
-        print(f" [Система] Режим: [{mode.upper()}], Аркуш: [{target_tab}]")
+        print(f"🚀 [Система] Зовнішній запуск API успішний!")
+        print(f"📋 [Система] Режим: [{mode.upper()}], Аркуш: [{target_tab}]")
         
         subprocess.run(['python', 'publish_content.py', mode, target_tab], check=True)
         EOF
