@@ -155,13 +155,42 @@ def generate_multimodal_caption(image_path, category, tab_name):
         else:
             return "Трохи гумору вам у стрічку! Як вам? 👇😂"
 
-def get_google_drive_direct_url(file_id):
+def get_google_drive_direct_url(file_id, local_file_path=None):
     """
-    Генерує пряме публічне посилання на файл з Google Drive.
-    Працює для розшарених папок (доступ: Усі, хто мають посилання).
+    Генерує залізобетонне пряме посилання для Meta API.
+    Якщо передано локальний файл, завантажує його на тимчасовий хостинг,
+    щоб уникнути блокувань та HTML-сторінок попереджень від Google Drive.
     """
-    print(f"🔗 Формуємо пряме посилання для Google Drive ID: {file_id}")
-    # Стандартний веб-ендпоінт для прямого скачування файлів з Google Drive
+    # 1. Спроба використати надійний шлях через тимчасовий хостинг
+    if local_file_path and os.path.exists(local_file_path):
+        print(f"☁️ Завантажуємо локальний файл {os.path.basename(local_file_path)} на тимчасовий хостинг для Meta...")
+        try:
+            with open(local_file_path, 'rb') as f:
+                res = requests.post('https://file.io', files={'file': f}).json()
+            
+            if res.get('success'):
+                direct_url = res.get('link')
+                print(f"🔗 Отримано стабільне тимчасове посилання: {direct_url}")
+                return direct_url
+            else:
+                print(f"⚠️ Сервер file.io відмовив: {res}. Пробуємо резервний хостинг...")
+        except Exception as e:
+            print(f"⚠️ Помилка основного хостингу: {e}. Пробуємо резервний...")
+            
+        # Резервний хостинг на випадок збою (transfer.sh)
+        try:
+            filename = os.path.basename(local_file_path)
+            with open(local_file_path, 'rb') as f:
+                res = requests.put(f'https://transfer.sh/{filename}', data=f)
+            if res.status_code == 200:
+                direct_url = res.text.strip()
+                print(f"🔗 Отримано резервне тимчасове посилання: {direct_url}")
+                return direct_url
+        except Exception as err:
+            print(f"❌ Не вдалося завантажити файл на жоден тимчасовий хостинг: {err}")
+
+    # 2. Аварійний дефолтний варіант (якщо локального файлу чомусь немає)
+    print(f"⚠️ Аварійний режим: формуємо стандартне посилання Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}"
 
 def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="", local_file_path=None):
@@ -426,7 +455,7 @@ def main():
 
     try:
         # Беремо пряме посилання безпосередньо з розшарованого Google Диску
-        public_url = get_google_drive_direct_url(file_id)
+        public_url = get_google_drive_direct_url(file_id, local_file_path=final_upload_path)
         print(f"🔗 Згенеровано стабільне посилання: {public_url}")
         
         # Передаємо локальний файл останнім параметром для FB Stories
