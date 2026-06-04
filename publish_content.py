@@ -421,7 +421,7 @@ def main():
             subprocess.run(['ffmpeg', '-y', '-i', final_upload_path, '-ss', '00:00:01', '-vframes', '1', analysis_image], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
         print("👁️ ШІ аналізує візуальний вміст файлу...")
-        caption_text = generate_multimodal_caption(analysis_image, category_name)
+        caption_text = generate_multimodal_caption(analysis_image, category_name, tab_name)
         if os.path.exists(os.path.join('temp_media', 'video_frame.jpg')): os.remove(os.path.join('temp_media', 'video_frame.jpg'))
 
     try:
