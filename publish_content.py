@@ -241,36 +241,8 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="",
             print(f"❌ Не вдалося надіслати пост у Facebook: {e}")
 
     else:
-        #Публікація СТОРІС безпосередньо у Facebook
-        print("📤 Самостійне завантаження Сторіс на Сторінку Facebook...")
-        try:
-            if media_type != "video":
-                # Завантаження фото-сторіс через локальний файл (Multipart)
-                fb_story_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/stories"
-                if local_file_path and os.path.exists(local_file_path):
-                    with open(local_file_path, 'rb') as f:
-                        files = {'source': f}
-                        payload = {'access_token': META_ACCESS_TOKEN}
-                        fb_res = requests.post(fb_story_url, data=payload, files=files).json()
-                else:
-                    fb_res = {"error": {"message": "Локальний файл відсутній для завантаження фото"}}
-            else:
-                # Завантаження відео-сторіс (у FB це робиться через ендпоінт /videos з тегом STORY)
-                fb_video_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
-                if local_file_path and os.path.exists(local_file_path):
-                    with open(local_file_path, 'rb') as f:
-                        files = {'video_file': f}
-                        payload = {'access_token': META_ACCESS_TOKEN, 'video_category': 'STORY'}
-                        fb_res = requests.post(fb_video_url, data=payload, files=files).json()
-                else:
-                    fb_res = {"error": {"message": "Локальний файл відсутній для завантаження відео"}}
-
-            if "id" in fb_res or "video_id" in fb_res:
-                print(f"✅ [Facebook Page Story] Сторіс успішно опубліковано! ID: {fb_res.get('id') or fb_res.get('video_id')}")
-            else:
-                print(f"❌ [Facebook Page Story] Помилка публікації: {fb_res.get('error', {}).get('message', fb_res)}")
-        except Exception as e:
-            print(f"❌ [Facebook Page Story] Критична помилка: {e}")
+        # Безпечно пропускаємо Facebook для Сторіз, оскільки Meta API не підтримує цей функціонал для сторонніх додатків
+        print("ℹ️ [Facebook] Публікація Сторіз через API обмежена політикою Meta. Пропускаємо цей крок.")
 
 def main():
     if len(sys.argv) < 3:
