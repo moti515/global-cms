@@ -9,7 +9,7 @@ SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/a
 # Ваша головна карта: "ID Кореневої папки на Диску": "Назва аркуша в Таблиці"
 ROOT_FOLDERS_MAPPING = {
     '0B2maH6ay7dwhNDRBZnFJbnR2VDA': "П'ятниця",
-    # 'ID_НОВОЇ_КОРЕНЕВОЇ_ПАПКИ': "Меблевий гумор"  <- Коли створите нову, просто розкоментуйте і впишіть сюди
+    '1XfSlOznyWp2GLvxIa8AxumrPNecvBdQk': "Меблевий гумор"
 }
 
 def get_services():
@@ -113,17 +113,21 @@ def main():
         # Ми забираємо файли з УСІХ існуючих підпаок цієї кореневої папки
         print(f"🔍 Збір файлів з усіх підпапок для аркуша '{tab_name}'...")
         drive_files = {}
+
+        # Складаємо список папок для сканування файлів: підпапки + сама коренева папка (на випадок файлів у корені)
+        folders_to_scan = [(sub_id, sub_name) for sub_id, sub_name in current_drive_subfolders.items()]
+        folders_to_scan.append((root_id, "Різне")) # Файли з самого кореня потраплять у категорію "Різне"
         
-        for sub_id, sub_name in current_drive_subfolders.items():
+        for folder_id, category_title in folders_to_scan:
             page_token_file = None
             while True:
-                q_file = f"'{sub_id}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'"
+                q_file = f"'{folder_id}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'"
                 res_files = drive.files().list(
                     q=q_file, fields="nextPageToken, files(id, name)", pageSize=1000, pageToken=page_token_file
                 ).execute()
                 
                 for f in res_files.get('files', []):
-                    drive_files[f['id']] = {"name": f['name'], "category": sub_name}
+                    drive_files[f['id']] = {"name": f['name'], "category": category_title}
                     
                 page_token_file = res_files.get('nextPageToken')
                 if not page_token_file:
