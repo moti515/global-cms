@@ -1,4 +1,4 @@
-name: Автоматична публікація контенту (П'ятниця)
+name: Publish Friday Content
 
 on:
   workflow_dispatch:      # Запуск повністю передано в руки зовнішніх API-запитів
@@ -41,10 +41,11 @@ jobs:
     - name: Запуск публікатора контенту
       env:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
-        META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        FB_PAGE_ID: ${{ secrets.FB_PAGE_ID_FRIDAY }}
-        FORCED_MODE: ${{ github.event.inputs.forced_mode }}
+        # Секрети Friday:
+        IG_USER_ID: ${{ secrets.FRIDAY_IG_USER_ID }}
+        FB_PAGE_ID: ${{ secrets.FRIDAY_FB_PAGE_ID }}
+        META_ACCESS_TOKEN: ${{ secrets.FRIDAY_META_ACCESS_TOKEN }}
       run: |
         python << 'EOF'
         import os
