@@ -157,73 +157,86 @@ def generate_multimodal_caption(image_path, category, tab_name):
 
 def get_google_drive_direct_url(file_id, local_file_path=None):
     """
-    Генерує залізобетонне пряме посилання для Meta API.
-    Завантажує локальний оброблений файл на найнадійніші розробницькі хостинги (Catbox / ImgBB / file.io),
-    щоб уникнути блокувань та HTML-сторінок від Google Drive.
+    Каскадний завантажувач медіафайлів на зовнішні хостинги з API.
+    Порядок: Catbox.moe -> ImageKit.io (Універсальний) -> ImgBB (Тільки фото) -> Google Drive API
     """
     if local_file_path and os.path.exists(local_file_path):
         filename = os.path.basename(local_file_path)
-        
-        # Визначаємо MIME-тип на основі розширення файлу
         lower_name = filename.lower()
         mime_type = "video/mp4" if lower_name.endswith('.mp4') else "image/jpeg"
         
-        # Заголовки для маскування під реальний браузер від блокувань Catbox
         browser_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
         }
         
-        # 1️⃣ Спроба через Catbox.moe (Чітка відповідність доку: reqtype + fileToUpload)
+        # 1️⃣ Спроба через Catbox.moe (Фото + Відео)
         print(f"☁️ Завантажуємо файл {filename} на Catbox.moe...")
         try:
             with open(local_file_path, 'rb') as f:
                 file_bytes = f.read()
                 
             if file_bytes:
-                # Розділяємо на звичайні поля (data) та файли (files) для імітації curl -F
                 data_payload = {'reqtype': 'fileupload'}
                 files_payload = {'fileToUpload': (filename, file_bytes, mime_type)}
                 
+                # Обмежуємо таймаут підключення до 7 секунд, щоб не блокувати скрипт
                 res = requests.post(
                     'https://catbox.moe/user/api.php',
                     data=data_payload,
                     files=files_payload,
                     headers=browser_headers,
-                    timeout=30
+                    timeout=(7, 25)
                 )
                 
                 if res.status_code == 200 and res.text.startswith('http'):
                     direct_url = res.text.strip()
-                    print(f"🔗 Отримано залізобетонне посилання від Catbox: {direct_url}")
+                    print(f"🔗 Отримано стабільне посилання від Catbox: {direct_url}")
                     return direct_url
                 else:
-                    print(f"⚠️ Catbox відмовив (Код {res.status_code}): {res.text}. Пробуємо резерв...")
+                    print(f"⚠️ Catbox недоступний (Код {res.status_code}). Пробуємо ImageKit...")
         except Exception as e:
-            print(f"⚠️ Помилка завантаження на Catbox: {e}. Пробуємо резерв...")
+            print(f"⚠️ Помилка з'єднання з Catbox: {e}. Пробуємо наступний хостинг...")
 
-        # 2️⃣ Спроба через ImgBB API (🔥 ВИПРАВЛЕНО: точний URL /1/ та структура полів)
+        # 2️⃣ Спроба через ImageKit.io (🔥 НОВИЙ УНІВЕРСАЛЬНИЙ ХОСТИНГ ДЛЯ ФОТО ТА ВІДЕО)
+        imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
+        if imagekit_key:
+            print(f"☁️ Завантажуємо файл {filename} на ImageKit.io (Універсальний фото/відео)...")
+            try:
+                with open(local_file_path, 'rb') as f:
+                    ik_bytes = f.read()
+                if ik_bytes:
+                    # Надійна авторизація через Requests за допомогою HTTP Basic Auth
+                    res = requests.post(
+                        'https://upload.imagekit.io/api/v1/files/upload',
+                        auth=(imagekit_key, ''),
+                        files={'file': (filename, ik_bytes, mime_type)},
+                        data={'fileName': filename},
+                        timeout=40
+                    )
+                    if res.status_code in [200, 201]:
+                        direct_url = res.json().get('url')
+                        print(f"🔗 Отримано залізобетонне посилання від ImageKit: {direct_url}")
+                        return direct_url
+                    else:
+                        print(f"⚠️ ImageKit відхилив запит (Код {res.status_code}): {res.text}")
+            except Exception as e:
+                print(f"⚠️ Помилка завантаження на ImageKit: {e}")
+        else:
+            print("ℹ️ Змінна IMAGEKIT_PRIVATE_KEY відсутня. Пропускаємо ImageKit.")
+
+        # 3️⃣ Спроба через ImgBB API (Тільки для Фото)
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and mime_type == "image/jpeg":
-            print(f"☁️ Завантажуємо файл {filename} на ImgBB API...")
+            print(f"☁️ Завантажуємо фото {filename} на ImgBB API...")
             try:
                 with open(local_file_path, 'rb') as f:
                     img_bytes = f.read()
                     
                 if img_bytes:
-                    # key, image та expiration передаються в тілі POST (multipart/form-data)
-                    data_payload = {
-                        'key': imgbb_key,
-                        'expiration': 86400  # Видалення через 24 години
-                    }
-                    files_payload = {
-                        'image': (filename, img_bytes, mime_type)
-                    }
-                    
-                    # 🔥 Точний ендпоінт відповідно до документації: /1/upload
                     res = requests.post(
                         'https://api.imgbb.com/1/upload',
-                        data=data_payload,
-                        files=files_payload,
+                        data={'key': imgbb_key, 'expiration': 86400},
+                        files={'image': (filename, img_bytes, mime_type)},
                         timeout=30
                     ).json()
                     
@@ -232,36 +245,13 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                         print(f"🔗 Отримано залізобетонне посилання від ImgBB: {direct_url}")
                         return direct_url
                     else:
-                        print(f"⚠️ ImgBB API повернув помилку: {res.get('error', {}).get('message')}. Пробуємо наступний хостинг...")
+                        print(f"⚠️ ImgBB повернув помилку: {res.get('error', {}).get('message')}")
             except Exception as e:
-                print(f"⚠️ Помилка завантаження на ImgBB: {e}. Пробуємо наступний хостинг...")
-        elif not imgbb_key:
-            print("ℹ️ Змінна IMGBB_API_KEY відсутня в системних змінних оточення. Пропускаємо ImgBB.")
-        else:
-            print("ℹ️ ImgBB підтримує тільки фото. Для відео пропускаємо цей крок.")
+                print(f"⚠️ Помилка завантаження на ImgBB: {e}")
+        elif mime_type == "video/mp4":
+            print("ℹ️ ImgBB підтримує тільки зображення. Пропускаємо для відео.")
 
-        # 3️⃣ Третій резервний варіант: file.io
-        print(f"☁️ Спроба через резервний file.io...")
-        try:
-            with open(local_file_path, 'rb') as f:
-                io_bytes = f.read()
-            if io_bytes:
-                res = requests.post(
-                    'https://file.io', 
-                    files={'file': (filename, io_bytes, mime_type)}, 
-                    timeout=20
-                )
-                if res.status_code == 200:
-                    res_json = res.json()
-                    if res_json.get('success'):
-                        direct_url = res_json.get('link')
-                        print(f"🔗 Отримано резервне посилання file.io: {direct_url}")
-                        return direct_url
-        except Exception as e:
-            print(f"⚠️ Не вдалося завантажити і на file.io: {e}")
-
-    # 4️⃣ Аварійний дефолтний варіант
-    print(f"🚨 Аварійний режим: повертаємось до Google Drive ID: {file_id}")
+    print(f"🚨 Всі хостинги відмовили! Аварійний режим для Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}"
     
 def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="", local_file_path=None):
@@ -458,6 +448,41 @@ def main():
         with Image.open(local_path) as img: img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
         final_upload_path = jpg_path
         mime_type = "image/jpeg"
+
+    # ОПТИМІЗАЦІЯ ПРОПОРЦІЙ ДЛЯ ЗВИЧАЙНИХ ПОСТІВ (Запобігання помилці 36003)
+    if mode == 'post' and mime_type == "image/jpeg":
+        try:
+            with Image.open(final_upload_path) as img:
+                img = img.convert('RGB')
+                w, h = img.size
+                ratio = w / h
+                
+                # Перевіряємо, чи пропорції виходять за жорсткі рамки Meta (0.8 - 1.91)
+                if ratio < 0.8 or ratio > 1.91:
+                    print(f"📐 Оптимізація Поста: Пропорції картинки ({ratio:.2f}) неприпустимі для стрічки. Коригуємо...")
+                    padded_post_path = os.path.join('temp_media', 'post_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
+                    
+                    if ratio < 0.8:
+                        # Картинка занадто вузька та висока -> розширюємо бічними полями до 4:5 (0.8)
+                        new_w = int(h * 0.8)
+                        new_h = h
+                    else:
+                        # Картинка занадто широка -> додаємо поля зверху/знизу до 1.91:1
+                        new_w = w
+                        new_h = int(w / 1.91)
+                        
+                    canvas = Image.new('RGB', (new_w, new_h), (255, 255, 255)) # Елегантне біле тло для стрічки
+                    paste_x = (new_w - w) // 2
+                    paste_y = (new_w - h) // 2 if ratio < 0.8 else (new_h - h) // 2
+                    canvas.paste(img, (paste_x, paste_y))
+                    canvas.save(padded_post_path, 'JPEG', quality=95)
+                    
+                    if final_upload_path != local_path and os.path.exists(final_upload_path):
+                        os.remove(final_upload_path)
+                    final_upload_path = padded_post_path
+                    print(f"✅ Стрічка: картинку вписано в безпечні рамки {new_w}x{new_h} за допомогою білих полів.")
+        except Exception as e:
+            print(f"⚠️ Помилка калібрування геометрії поста: {e}")
 
     # ОПТИМІЗАЦІЯ ФОТО ПІД СТОРІС (1080x1920)
     if mode == 'story' and mime_type == "image/jpeg":
