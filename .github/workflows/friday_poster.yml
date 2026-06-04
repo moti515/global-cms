@@ -43,6 +43,7 @@ jobs:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
+        IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
         # Секрети Friday:
         IG_USER_ID: ${{ secrets.FRIDAY_IG_USER_ID }}
         FB_PAGE_ID: ${{ secrets.FRIDAY_FB_PAGE_ID }}
