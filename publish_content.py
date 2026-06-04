@@ -155,10 +155,32 @@ def generate_multimodal_caption(image_path, category, tab_name):
         else:
             return "Трохи гумору вам у стрічку! Як вам? 👇😂"
 
+def delete_from_imagekit(file_id: str):
+    """Видаляє тимчасовий файл з ImageKit.io за його fileId, щоб не засмічувати хмару"""
+    if not file_id:
+        return
+
+    imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
+    if not imagekit_key:
+        print("⚠️ Змінна IMAGEKIT_PRIVATE_KEY відсутня. Автовидалення скасовано.")
+        return
+
+    url = f"https://api.imagekit.io/v1/files/{file_id}"
+    print(f"🗑️ Видаляємо тимчасовий буферний файл {file_id} з ImageKit.io...")
+    try:
+        res = requests.delete(url, auth=(imagekit_key, ''), timeout=20)
+        if res.status_code == 204:
+            print("✅ Файл успішно та безповоротно видалено з ImageKit.")
+        else:
+            print(f"⚠️ ImageKit не видалив файл (Код {res.status_code}): {res.text}")
+    except Exception as e:
+        print(f"⚠️ Помилка при виконанні запиту на видалення з ImageKit: {e}")
+
 def get_google_drive_direct_url(file_id, local_file_path=None):
     """
     Каскадний завантажувач медіафайлів на зовнішні хостинги з API.
     Порядок: Catbox.moe -> ImageKit.io (Універсальний) -> ImgBB (Тільки фото) -> Google Drive API
+    Повертає кортеж: (direct_url, imagekit_file_id)
     """
     if local_file_path and os.path.exists(local_file_path):
         filename = os.path.basename(local_file_path)
@@ -179,7 +201,6 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 data_payload = {'reqtype': 'fileupload'}
                 files_payload = {'fileToUpload': (filename, file_bytes, mime_type)}
                 
-                # Обмежуємо таймаут підключення до 7 секунд, щоб не блокувати скрипт
                 res = requests.post(
                     'https://catbox.moe/user/api.php',
                     data=data_payload,
@@ -191,32 +212,37 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 if res.status_code == 200 and res.text.startswith('http'):
                     direct_url = res.text.strip()
                     print(f"🔗 Отримано стабільне посилання від Catbox: {direct_url}")
-                    return direct_url
+                    return direct_url, None  # ImageKit не використовувався, ID = None
                 else:
                     print(f"⚠️ Catbox недоступний (Код {res.status_code}). Пробуємо ImageKit...")
         except Exception as e:
             print(f"⚠️ Помилка з'єднання з Catbox: {e}. Пробуємо наступний хостинг...")
 
-        # 2️⃣ Спроба через ImageKit.io (🔥 НОВИЙ УНІВЕРСАЛЬНИЙ ХОСТИНГ ДЛЯ ФОТО ТА ВІДЕО)
+        # 2️⃣ Спроба через ImageKit.io (Оптимізовано під фото та великі відео)
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
         if imagekit_key:
-            print(f"☁️ Завантажуємо файл {filename} на ImageKit.io (Універсальний фото/відео)...")
+            print(f"☁️ Завантажуємо файл {filename} на ImageKit.io...")
             try:
                 with open(local_file_path, 'rb') as f:
-                    ik_bytes = f.read()
-                if ik_bytes:
-                    # Надійна авторизація через Requests за допомогою HTTP Basic Auth
                     res = requests.post(
                         'https://upload.imagekit.io/api/v1/files/upload',
                         auth=(imagekit_key, ''),
-                        files={'file': (filename, ik_bytes, mime_type)},
-                        data={'fileName': filename},
-                        timeout=40
+                        files={
+                            'file': (filename, f, mime_type)
+                        },
+                        data={
+                            'fileName': filename,
+                            'useUniqueFileName': 'true'
+                        },
+                        timeout=60
                     )
+                    
                     if res.status_code in [200, 201]:
-                        direct_url = res.json().get('url')
+                        res_data = res.json()
+                        direct_url = res_data.get('url')
+                        ik_id = res_data.get('fileId')  # Перехоплюємо ID для майбутнього видалення
                         print(f"🔗 Отримано залізобетонне посилання від ImageKit: {direct_url}")
-                        return direct_url
+                        return direct_url, ik_id
                     else:
                         print(f"⚠️ ImageKit відхилив запит (Код {res.status_code}): {res.text}")
             except Exception as e:
@@ -227,7 +253,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         # 3️⃣ Спроба через ImgBB API (Тільки для Фото)
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and mime_type == "image/jpeg":
-            print(f"☁️ Завантажуємо фото {filename} на ImgBB API...")
+            print(f"☁️ Завантажуємо photo {filename} на ImgBB API...")
             try:
                 with open(local_file_path, 'rb') as f:
                     img_bytes = f.read()
@@ -243,7 +269,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                     if res.get('success'):
                         direct_url = res['data']['url']
                         print(f"🔗 Отримано залізобетонне посилання від ImgBB: {direct_url}")
-                        return direct_url
+                        return direct_url, None
                     else:
                         print(f"⚠️ ImgBB повернув помилку: {res.get('error', {}).get('message')}")
             except Exception as e:
@@ -252,7 +278,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             print("ℹ️ ImgBB підтримує тільки зображення. Пропускаємо для відео.")
 
     print(f"🚨 Всі хостинги відмовили! Аварійний режим для Google Drive ID: {file_id}")
-    return f"https://docs.google.com/uc?export=download&id={file_id}"
+    return f"https://docs.google.com/uc?export=download&id={file_id}", None
     
 def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="", local_file_path=None):
 
@@ -552,9 +578,12 @@ def main():
         caption_text = generate_multimodal_caption(analysis_image, category_name, tab_name)
         if os.path.exists(os.path.join('temp_media', 'video_frame.jpg')): os.remove(os.path.join('temp_media', 'video_frame.jpg'))
 
+    # Створюємо змінну для збереження fileId ДО блоку try, щоб вона була доступна у finally
+    ik_file_id = None
+    
     try:
-        # Беремо пряме посилання безпосередньо з розшарованого Google Диску
-        public_url = get_google_drive_direct_url(file_id, local_file_path=final_upload_path)
+        # Отримуємо посилання та ID файлу ImageKit (якщо завантажилось туди)
+        public_url, ik_file_id = get_google_drive_direct_url(file_id, local_file_path=final_upload_path)
         print(f"🔗 Згенеровано стабільне посилання: {public_url}")
         
         # Передаємо локальний файл останнім параметром для FB Stories
@@ -578,8 +607,17 @@ def main():
         print(f"❌ Критична помилка під час публікації: {e}")
         sys.exit(1)
     finally:
-        if os.path.exists(local_path): os.remove(local_path)
-        if final_upload_path != local_path and os.path.exists(final_upload_path): os.remove(final_upload_path)
+        # --- ТУТ ПРАЦЮЄ АВТОКЛІНІНГ ---
+        # 1. Видаляємо тимчасовий файл з хмари ImageKit, якщо він там створювався
+        if ik_file_id:
+            delete_from_imagekit(ik_file_id)
+            
+        # 2. Чистимо локальні файли на сервері
+        if os.path.exists(local_path): 
+            os.remove(local_path)
+        if final_upload_path != local_path and os.path.exists(final_upload_path): 
+            os.remove(final_upload_path)
+        print("🧹 Локальні тимчасові медіафайли видалено.")
 
 if __name__ == '__main__':
     main()
