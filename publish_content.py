@@ -498,15 +498,18 @@ def main():
                         new_h = int(w / 1.91)
                         
                     canvas = Image.new('RGB', (new_w, new_h), (255, 255, 255)) # Елегантне біле тло для стрічки
+                    
+                    # ПРАВИЛЬНЕ ЦЕНТРУВАННЯ БЕЗ ОБРІЗАННЯ:
                     paste_x = (new_w - w) // 2
-                    paste_y = (new_w - h) // 2 if ratio < 0.8 else (new_h - h) // 2
+                    paste_y = (new_h - h) // 2
+                    
                     canvas.paste(img, (paste_x, paste_y))
                     canvas.save(padded_post_path, 'JPEG', quality=95)
                     
                     if final_upload_path != local_path and os.path.exists(final_upload_path):
                         os.remove(final_upload_path)
                     final_upload_path = padded_post_path
-                    print(f"✅ Стрічка: картинку вписано в безпечні рамки {new_w}x{new_h} за допомогою білих полів.")
+                    print(f"✅ Стрічка: картинку вписано в безпечні рамки {new_w}x{new_h} за допомогою рівномірних полів.")
         except Exception as e:
             print(f"⚠️ Помилка калібрування геометрії поста: {e}")
 
