@@ -214,25 +214,28 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="",
 
     ig_res = requests.post(ig_url, data=ig_payload).json()
     if "id" not in ig_res: 
-        print(f"❌ Помилка створення контейнера Instagram: {ig_res}")
+        # Викидаємо помилку, якщо Meta відхилила запит
+        raise ValueError(f"❌ Помилка створення контейнера Instagram: {ig_res}")
+    
+    ig_creation_id = ig_res["id"]
+    
+    if media_type == "video":
+        print("⏳ Очікуємо обробки відео серверами Instagram (30 сек)...")
+        time.sleep(30)
     else:
-        ig_creation_id = ig_res["id"]
+        print("⏳ Очікуємо завантаження photo серверами Instagram (12 сек)...")
+        time.sleep(12)
         
-        if media_type == "video":
-            print("⏳ Очікуємо обробки відео серверами Instagram (30 сек)...")
-            time.sleep(30)
-        else:
-            print("⏳ Очікуємо завантаження фото серверами Instagram (12 сек)...")
-            time.sleep(12)
-            
-        ig_pub_res = requests.post(
-            f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", 
-            data={"creation_id": ig_creation_id, "access_token": META_ACCESS_TOKEN}
-        ).json()
-        if "id" in ig_pub_res:
-            print(f"✅ [Instagram] Успішно в ефірі! ID: {ig_pub_res['id']}")
-        else:
-            print(f"❌ Помилка публікації в Instagram: {ig_pub_res}")
+    ig_pub_res = requests.post(
+        f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", 
+        data={"creation_id": ig_creation_id, "access_token": META_ACCESS_TOKEN}
+    ).json()
+    
+    if "id" not in ig_pub_res:
+        # Викидаємо помилку, якщо фінальна публікація з тріском провалилася
+        raise ValueError(f"❌ Помилка фінальної публікації в Instagram: {ig_pub_res}")
+        
+    print(f"✅ [Instagram] Успішно в ефірі! ID: {ig_pub_res['id']}")
 
     # --- БЛОК ФЕЙСБУКУ ---
     if not is_story:
