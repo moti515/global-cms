@@ -164,14 +164,19 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     if local_file_path and os.path.exists(local_file_path):
         filename = os.path.basename(local_file_path)
         
+        # Визначаємо MIME-тип на основі розширення файлу
+        lower_name = filename.lower()
+        mime_type = "video/mp4" if lower_name.endswith('.mp4') else "image/jpeg"
+        
         # 1️⃣ Спроба через Catbox.moe (Супер-стабільний, без лімітів)
         print(f"☁️ Завантажуємо файл {filename} на Catbox.moe...")
         try:
             with open(local_file_path, 'rb') as f:
-                # 🔥 ВИПРАВЛЕНО: Передаємо файл як кортеж (ім'я, бінарні дані), 
-                # щоб серверам Catbox було зрозуміло, що це валідний завантажувач!
+                file_bytes = f.read() # Зчитуємо чисті байти
+                
+            if file_bytes:
                 payload_files = {
-                    'fileToUpload': (filename, f)
+                    'fileToUpload': (filename, file_bytes, mime_type)
                 }
                 res = requests.post(
                     'https://catbox.moe/user/api.php',
@@ -179,30 +184,35 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                     files=payload_files,
                     timeout=30
                 )
-            
-            if res.status_code == 200 and res.text.startswith('http'):
-                direct_url = res.text.strip()
-                print(f"🔗 Отримано залізобетонне посилання від Catbox: {direct_url}")
-                return direct_url
+                
+                if res.status_code == 200 and res.text.startswith('http'):
+                    direct_url = res.text.strip()
+                    print(f"🔗 Отримано залізобетонне посилання від Catbox: {direct_url}")
+                    return direct_url
+                else:
+                    print(f"⚠️ Catbox відмовив (Код {res.status_code}): {res.text}. Пробуємо резерв...")
             else:
-                print(f"⚠️ Catbox відмовив (Код {res.status_code}): {res.text}. Пробуємо резерв...")
+                print("⚠️ Файл порожній. Пропускаємо Catbox...")
         except Exception as e:
             print(f"⚠️ Помилка завантаження на Catbox: {e}. Пробуємо резерв...")
 
-        # 2️⃣ Спроба через ImgBB API (Якщо додано ключ IMGBB_API_KEY)
+        # 2️⃣ Спроба через ImgBB API (Якщо прокинуто ключ IMGBB_API_KEY)
         imgbb_key = os.environ.get("IMGBB_API_KEY")
-        if imgbb_key:
+        if imgbb_key and mime_type == "image/jpeg":
             print(f"☁️ Завантажуємо файл {filename} на ImgBB API...")
             try:
                 with open(local_file_path, 'rb') as f:
-                    # Згідно з докою: використовуємо метод POST.
-                    # Додаємо expiration=86400 (1 доба в секундах), щоб автоматично чистити хостинг
+                    img_bytes = f.read()
+                    
+                if img_bytes:
+                    # Згідно з документацією: метод POST, multipart/form-data.
+                    # Додаємо expiration=86400 (1 доба в секундах) для автовидалення
                     params = {
                         'key': imgbb_key,
                         'expiration': 86400  
                     }
                     payload_files = {
-                        'image': (filename, f)
+                        'image': (filename, img_bytes, mime_type)
                     }
                     res = requests.post(
                         'https://api.imgbb.com/v1/upload',
@@ -210,34 +220,41 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                         files=payload_files,
                         timeout=30
                     ).json()
-                
-                if res.get('success'):
-                    # Згідно з докою: відповідь містить властивість status у заголовках та дані в JSON
-                    direct_url = res['data']['url']
-                    print(f"🔗 Отримано залізобетонне посилання від ImgBB: {direct_url}")
-                    return direct_url
-                else:
-                    print(f"⚠️ ImgBB API повернув помилку: {res.get('error', {}).get('message')}. Пробуємо наступний хостинг...")
+                    
+                    if res.get('success'):
+                        direct_url = res['data']['url']
+                        print(f"🔗 Отримано залізобетонне посилання від ImgBB: {direct_url}")
+                        return direct_url
+                    else:
+                        print(f"⚠️ ImgBB API повернув помилку: {res.get('error', {}).get('message')}. Пробуємо наступний хостинг...")
             except Exception as e:
                 print(f"⚠️ Помилка завантаження на ImgBB: {e}. Пробуємо наступний хостинг...")
+        elif not imgbb_key:
+            print("ℹ️ Змінна IMGBB_API_KEY відсутня в системних змінних оточення. Пропускаємо ImgBB.")
         else:
-            print("ℹ️ Змінна IMGBB_API_KEY відсутня в секретах GitHub. Пропускаємо ImgBB.")
+            print("ℹ️ ImgBB підтримує тільки фото. Для відео пропускаємо цей крок.")
 
         # 3️⃣ Третій резервний варіант: file.io
         print(f"☁️ Спроба через резервний file.io...")
         try:
             with open(local_file_path, 'rb') as f:
-                res = requests.post('https://file.io', files={'file': f}, timeout=20)
-            if res.status_code == 200:
-                res_json = res.json()
-                if res_json.get('success'):
-                    direct_url = res_json.get('link')
-                    print(f"🔗 Отримано резервне посилання file.io: {direct_url}")
-                    return direct_url
+                io_bytes = f.read()
+            if io_bytes:
+                res = requests.post(
+                    'https://file.io', 
+                    files={'file': (filename, io_bytes, mime_type)}, 
+                    timeout=20
+                )
+                if res.status_code == 200:
+                    res_json = res.json()
+                    if res_json.get('success'):
+                        direct_url = res_json.get('link')
+                        print(f"🔗 Отримано резервне посилання file.io: {direct_url}")
+                        return direct_url
         except Exception as e:
             print(f"⚠️ Не вдалося завантажити і на file.io: {e}")
 
-    # 4️⃣ Аварійний дефолтний варіант
+    # 4️⃣ Аварійний дефолтний варіант (якщо мережа повністю лежить)
     print(f"🚨 Аварійний режим: повертаємось до Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}"
     
