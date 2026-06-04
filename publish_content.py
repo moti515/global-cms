@@ -158,13 +158,13 @@ def generate_multimodal_caption(image_path, category, tab_name):
 def get_google_drive_direct_url(file_id, local_file_path=None):
     """
     Генерує залізобетонне пряме посилання для Meta API.
-    Завантажує локальний оброблений файл на найнадійніші розробницькі хостинги (Catbox / ImgBB),
+    Завантажує локальний оброблений файл на найнадійніші розробницькі хостинги (Catbox / ImgBB / file.io),
     щоб уникнути блокувань та HTML-сторінок від Google Drive.
     """
     if local_file_path and os.path.exists(local_file_path):
         filename = os.path.basename(local_file_path)
         
-        # 1. Спроба через Catbox.moe (Супер-стабільний хостинг для розробників, без лімітів)
+        # 1️⃣ Спроба через Catbox.moe (Супер-стабільний, без лімітів)
         print(f"☁️ Завантажуємо файл {filename} на Catbox.moe...")
         try:
             with open(local_file_path, 'rb') as f:
@@ -179,11 +179,37 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 print(f"🔗 Отримано залізобетонне посилання від Catbox: {direct_url}")
                 return direct_url
             else:
-                print(f"⚠️ Catbox повернув дивну відповідь: {res.text}. Пробуємо резерв...")
+                print(f"⚠️ Catbox повернув дивну відповідь. Пробуємо резерв...")
         except Exception as e:
             print(f"⚠️ Помилка завантаження на Catbox: {e}. Пробуємо резерв...")
 
-        # 2. Резервний варіант: file.io (з обробкою текстових помилок)
+        # 2️⃣ Спроба через ImgBB API (Якщо додано ключ IMGBB_API_KEY)
+        imgbb_key = os.environ.get("IMGBB_API_KEY")
+        if imgbb_key:
+            print(f"☁️ Завантажуємо файл {filename} на ImgBB API...")
+            try:
+                with open(local_file_path, 'rb') as f:
+                    # ImgBB вимагає передачу файлу або в base64, або через multipart/form-data
+                    res = requests.post(
+                        'https://api.imgbb.com/v1/upload',
+                        params={'key': imgbb_key},
+                        files={'image': f},
+                        timeout=30
+                    ).json()
+                
+                if res.get('success'):
+                    # url — це пряме посилання на саму картинку, а не на сторінку перегляду
+                    direct_url = res['data']['url']
+                    print(f"🔗 Отримано залізобетонне посилання від ImgBB: {direct_url}")
+                    return direct_url
+                else:
+                    print(f"⚠️ ImgBB API повернув помилку: {res.get('error', {}).get('message')}. Пробуємо наступний хостинг...")
+            except Exception as e:
+                print(f"⚠️ Помилка завантаження на ImgBB: {e}. Пробуємо наступний хостинг...")
+        else:
+            print("ℹ️ Змінна IMGBB_API_KEY відсутня в секретах GitHub. Пропускаємо ImgBB.")
+
+        # 3️⃣ Резервний варіант: file.io
         print(f"☁️ Спроба через резервний file.io...")
         try:
             with open(local_file_path, 'rb') as f:
@@ -197,7 +223,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         except Exception as e:
             print(f"⚠️ Не вдалося завантажити і на file.io: {e}")
 
-    # 3. Аварійний дефолтний варіант (якщо мережа повністю лежить)
+    # 4️⃣ Аварійний дефолтний варіант (якщо мережа повністю лежить)
     print(f"🚨 Аварійний режим: повертаємось до Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}"
 
