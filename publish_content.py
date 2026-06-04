@@ -168,18 +168,24 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         print(f"☁️ Завантажуємо файл {filename} на Catbox.moe...")
         try:
             with open(local_file_path, 'rb') as f:
+                # 🔥 ВИПРАВЛЕНО: Передаємо файл як кортеж (ім'я, бінарні дані), 
+                # щоб серверам Catbox було зрозуміло, що це валідний завантажувач!
+                payload_files = {
+                    'fileToUpload': (filename, f)
+                }
                 res = requests.post(
                     'https://catbox.moe/user/api.php',
                     data={'reqtype': 'fileupload'},
-                    files={'fileToUpload': f},
+                    files=payload_files,
                     timeout=30
                 )
+            
             if res.status_code == 200 and res.text.startswith('http'):
                 direct_url = res.text.strip()
                 print(f"🔗 Отримано залізобетонне посилання від Catbox: {direct_url}")
                 return direct_url
             else:
-                print(f"⚠️ Catbox повернув дивну відповідь. Пробуємо резерв...")
+                print(f"⚠️ Catbox відмовив (Код {res.status_code}): {res.text}. Пробуємо резерв...")
         except Exception as e:
             print(f"⚠️ Помилка завантаження на Catbox: {e}. Пробуємо резерв...")
 
@@ -189,16 +195,24 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             print(f"☁️ Завантажуємо файл {filename} на ImgBB API...")
             try:
                 with open(local_file_path, 'rb') as f:
-                    # ImgBB вимагає передачу файлу або в base64, або через multipart/form-data
+                    # Згідно з докою: використовуємо метод POST.
+                    # Додаємо expiration=86400 (1 доба в секундах), щоб автоматично чистити хостинг
+                    params = {
+                        'key': imgbb_key,
+                        'expiration': 86400  
+                    }
+                    payload_files = {
+                        'image': (filename, f)
+                    }
                     res = requests.post(
                         'https://api.imgbb.com/v1/upload',
-                        params={'key': imgbb_key},
-                        files={'image': f},
+                        params=params,
+                        files=payload_files,
                         timeout=30
                     ).json()
                 
                 if res.get('success'):
-                    # url — це пряме посилання на саму картинку, а не на сторінку перегляду
+                    # Згідно з докою: відповідь містить властивість status у заголовках та дані в JSON
                     direct_url = res['data']['url']
                     print(f"🔗 Отримано залізобетонне посилання від ImgBB: {direct_url}")
                     return direct_url
@@ -209,7 +223,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         else:
             print("ℹ️ Змінна IMGBB_API_KEY відсутня в секретах GitHub. Пропускаємо ImgBB.")
 
-        # 3️⃣ Резервний варіант: file.io
+        # 3️⃣ Третій резервний варіант: file.io
         print(f"☁️ Спроба через резервний file.io...")
         try:
             with open(local_file_path, 'rb') as f:
@@ -223,10 +237,10 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         except Exception as e:
             print(f"⚠️ Не вдалося завантажити і на file.io: {e}")
 
-    # 4️⃣ Аварійний дефолтний варіант (якщо мережа повністю лежить)
+    # 4️⃣ Аварійний дефолтний варіант
     print(f"🚨 Аварійний режим: повертаємось до Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}"
-
+    
 def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="", local_file_path=None):
 
     if not IG_USER_ID or not FB_PAGE_ID or not META_ACCESS_TOKEN:
