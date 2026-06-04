@@ -14,12 +14,13 @@ from pillow_heif import register_heif_opener
 
 register_heif_opener()
 
-IG_USER_ID = "17841429409435438"
-META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "ВСТАВТЕ_СЮДИ_НОВИЙ_PAGE_ACCESS_TOKEN")
-SPREADSHEET_ID = '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0'
+# ⚙️ ДИНАМІЧНІ НАЛАШТУВАННЯ META (Тепер беруться з системних змінних)
+IG_USER_ID = os.environ.get("IG_USER_ID")
 FB_PAGE_ID = os.environ.get("FB_PAGE_ID")
-SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN")
+SPREADSHEET_ID = '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0'
 
+SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 VALID_MEDIA_EXTENSIONS = ('.gif', '.heic', '.heif', '.jpeg', '.jpg', '.mp4', '.png', '.webp')
 DOCUMENT_EXTENSIONS = ('.pdf', '.doc', '.docx', '.djvu', '.txt', '.rtf', '.fb2', '.epub')
 
@@ -68,10 +69,8 @@ def get_active_rules_ordered():
     
     # Перевірка на специфічні п'ятниці
     if day_of_week == 'Friday':
-        if now.day == 13:
-            active_rules.append("П'ятниця 13-те")
-        elif now.day == 12:
-            active_rules.append("П'ятниця 12-те")
+        if now.day == 13: active_rules.append("П'ятниця 13-те")
+        elif now.day == 12: active_rules.append("П'ятниця 12-те")
             
     # Перевірка на вихідні (Субота та Неділя)
     if day_of_week in ['Saturday', 'Sunday']:
@@ -81,34 +80,42 @@ def get_active_rules_ordered():
     active_rules.append("Різне")
     return active_rules
 
-def generate_multimodal_caption(image_path, category):
-    """ШІ аналізує зображення за допомогою актуального REST API Gemini v1beta та моделей серії 3.x"""
+def generate_multimodal_caption(image_path, category, tab_name):
+    """ШІ аналізує зображення та генерує гострий тематичний опис трьома мовами"""
     gemini_key = os.environ.get("GEMINI_API_KEY")
+    
+    # 1. Перевірка наявності ключа
     if not gemini_key:
-        return "Усміхніться! 😉 #гумор #меблі"
+        if "мебл" in tab_name.lower():
+            return "Трохи меблевого гумору вам у стрічку! Як вам? 👇😂 #меблі #інтерєр #гумор"
+        else:
+            return "Усміхніться! Гарного настрою! 😉 #гумор #розваги #п'ятниця"
         
-    # Використовуємо найактуальніші моделі серії Gemini 3.x згідно з документацією
     models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
     
+    # 2. Динамічний контекст промпту
+    topic_context = "розважальної сторінки з гострим гумором"
+    if "мебл" in tab_name.lower():
+        topic_context = "популярного пабліку про меблі, дизайн інтер'єрів та запеклі будні меблевиків (майстрів, дизайнерів, збірників)"
+
     try:
         with open(image_path, "rb") as f:
             image_bytes = f.read()
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
         
         prompt = (
-            f"Ти топ-маркетолог розважальної сторінки з гострим гумором. Подивись на цю картинку/мем. "
-            f"Напиши до неї короткий, влучний і дуже смішний коментар (або життєву фразу) ТРЬОМА мовами окремими абзацах: "
-            f"спочатку українською, потім англійською, і німецькою. "
-            f"КРИТИЧНО: Це не має бути дослівний нудний переклад! Жарт має бути адаптований (живий сленг, "
-            f"зрозумілий контекст для носіїв кожної з мов). "
-            f"Врахуй, що контекст публікації — категорія '{category}'. Додай відповідні емодзі. "
-            f"Не використовуй офіційних вступів. Формат відповіді строго такий:\n\n"
+            f"Ти топ-маркетолог {topic_context}. Подивись на цю картинку/мем. "
+            f"Напиши до неї короткий, влучний і дійсно смішний коментар (або життєву фразу/біль клієнта чи майстра) "
+            f"ТРЬОМА мовами окремими абзацами: спочатку українською, потім англійською, і німецькою. "
+            f"КРИТИЧНО: Це не має бути дослівний нудний переклад! Жарт має бути якісно адаптований (використовуй живий сленг, "
+            f"професійні жарти або зрозумілий контекст для носіїв кожної з мов). "
+            f"Врахуй, що контекст публікації — категорія '{category}' з розділу '{tab_name}'. Додай відповідні емодзі. "
+            f"Не використовуй жодних офіційних вступів чи підписів на кшталт 'Ось ваш жарт'. Формат відповіді строго такий:\n\n"
             f"🇺🇦 [Жарт українською]\n\n"
             f"🇬🇧 [Жарт англійською]\n\n"
             f"🇩🇪 [Жарт німецькою]"
         )
         
-        # Точний camelCase синтаксис структури payload
         payload = {
             "contents": [{
                 "parts": [
@@ -124,21 +131,29 @@ def generate_multimodal_caption(image_path, category):
         }
         
         for model in models_to_try:
-            # Оновлено URL: v1beta замість v1 для повної підтримки моделей 3.5 / 3.1
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
             try:
                 res = requests.post(url, json=payload, timeout=20).json()
                 if 'candidates' in res and res['candidates']:
                     return res['candidates'][0]['content']['parts'][0]['text']
             except Exception as e:
-                print(f"⚠️ Модель {model} тимчасово недоступна або виникла помилка: {e}. Пробуємо наступну...")
+                print(f"⚠️ Модель {model} тимчасово недоступна: {e}. Пробуємо наступну...")
                 continue
                 
+        # 3. Дефолт, якщо жодна модель не відповіла (наприклад, таймаут мережі)
         print("⚠️ Жодна з моделей Gemini не відповіла успішно, активовано дефолт.")
-        return "Трохи гумору вам у стрічку! Як вам? 👇😂"
+        if "мебл" in tab_name.lower():
+            return "Трохи меблевого гумору вам у стрічку! Як вам? 👇😂 #меблі #гумор"
+        else:
+            return "Трохи гумору вам у стрічку! Як вам? 👇😂 #гумор #розваги"
+            
     except Exception as e:
+        # 4. Дефолт на випадок критичної помилки коду (наприклад, битий файл зображення)
         print(f"⚠️ Помилка обробки запиту до ШІ: {e}")
-        return "Трохи гумору вам у стрічку! Як вам? 👇😂"
+        if "мебл" in tab_name.lower():
+            return "Трохи меблевого гумору вам у стрічку! Як вам? 👇😂"
+        else:
+            return "Трохи гумору вам у стрічку! Як вам? 👇😂"
 
 def get_google_drive_direct_url(file_id):
     """
@@ -150,7 +165,11 @@ def get_google_drive_direct_url(file_id):
     return f"https://docs.google.com/uc?export=download&id={file_id}"
 
 def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="", local_file_path=None):
-    print("📤 Відправка контенту в Instagram...")
+
+    if not IG_USER_ID or not FB_PAGE_ID or not META_ACCESS_TOKEN:
+        raise ValueError("❌ Відсутні обов'язкові змінні оточення: IG_USER_ID, FB_PAGE_ID або META_ACCESS_TOKEN!")
+        
+    print(f"📤 Відправка контенту в Instagram акаунт (ID: {IG_USER_ID})...")
     ig_url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
     ig_payload = {
         "access_token": META_ACCESS_TOKEN,
@@ -218,10 +237,35 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="",
         print("ℹ️ [Facebook] Публікація Сторіз через API обмежена політикою Meta. Пропускаємо цей крок.")
 
 def main():
+    # 1. Швидка перевірка кількості аргументів
     if len(sys.argv) < 3:
-        print("Приклад: python publish_content.py post П'ятниця")
+        print("❌ Помилка: Відсутні обов'язкові аргументи.")
+        print("\n📋 ПРАВИЛЬНИЙ ФОРМАТ ЗАПУСКУ:")
+        print("  python publish_content.py [mode] \"[sheet_name]\"")
+        print("\n💡 Доступні режими [mode]:")
+        print("  post  - публікація згенерованого поста у стрічку")
+        print("  story - оптимізація та публікація у Сторіс")
+
+        # Динамічно показуємо список аркушів із вашої таблиці
+        try:
+            _, sheets = get_services()
+            spreadsheet = sheets.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+            # Збираємо назви всіх аркушів, крім службового з налаштуваннями
+            available_sheets = [
+                f'"{sheet["properties"]["title"]}"' 
+                for sheet in spreadsheet.get('sheets', [])
+                if "налаштування" not in sheet["properties"]["title"].lower()
+            ]
+            if available_sheets:
+                print(f"\n📁 Можливі назви аркушів [sheet_name] у вашій таблиці:")
+                print(f"  {', '.join(available_sheets)}")
+                print(f"\nПриклад запуску: python publish_content.py post {available_sheets[0]}")
+        except Exception:
+            # На випадок, якщо немає інтернету або токенів, показуємо загальний універсальний приклад
+            print("\nПриклад запуску: python publish_content.py post \"Назва_Аркуша\"")
         return
         
+    # Перепризначення аргументів, якщо перевірку пройдено
     mode = sys.argv[1].lower()
     tab_name = sys.argv[2]
     counter_col_idx = 3 if mode == 'post' else 4
@@ -230,7 +274,9 @@ def main():
     
     res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{tab_name}'!A2:E").execute()
     rows = res.get('values', [])
-    if not rows: return
+    if not rows: 
+        print(f"ℹ️ Немає даних на аркуші '{tab_name}'")
+        return
         
     valid_rows = []
     for i, r in enumerate(rows):
@@ -241,19 +287,35 @@ def main():
                 valid_rows.append({"row_idx": i + 2, "data": r})
             except ValueError: continue
 
+    if not valid_rows:
+        print("ℹ️ Немає валідних рядків для обробки.")
+        return
+
+    # 📊 Знаходимо мінімальну кількість публікацій та формуємо пул кандидатів
     min_count = min(r["data"][counter_col_idx] for r in valid_rows)
     min_pool = [r for r in valid_rows if r["data"][counter_col_idx] == min_count]
     
-    active_categories = get_active_rules_ordered()
     selected_item = None
-    for category in active_categories:
-        match_files = [item for item in min_pool if item["data"][2] == category]
-        if match_files:
-            selected_item = match_files[0]
-            break
-            
-    if not selected_item: selected_item = min_pool[0]
 
+    # 🔀 РОЗДІЛЕННЯ ЛОГІКИ ВИБОРУ КОНТЕНТУ ЗАЛЕЖНО ВІД АРКУША
+    if "мебл" in tab_name.lower():
+        # Для меблевого гумору правила дат не потрібні — просто беремо перший файл із мінімальним лічильником
+        selected_item = min_pool[0]
+        print(f"🪑 Режим Меблів: календарні правила пропущено. Обрано файл з пулу мінімальних публікацій.")
+    else:
+        # Для "П'ятниці" (та інших загальних аркушів) залишаємо роботу за календарними правилами
+        active_categories = get_active_rules_ordered()
+        for category in active_categories:
+            match_files = [item for item in min_pool if item["data"][2] == category]
+            if match_files:
+                selected_item = match_files[0]
+                print(f"📅 Режим Календаря: знайдено збіг за категорією '{category}'")
+                break
+        
+        # Якщо календарне правило не знайшло точного збігу, беремо просто перший з мінімальних
+        if not selected_item: 
+            selected_item = min_pool[0]
+            
     file_id = selected_item["data"][0]
     orig_name = selected_item["data"][1]
     category_name = selected_item["data"][2]
@@ -294,7 +356,7 @@ def main():
         final_upload_path = jpg_path
         mime_type = "image/jpeg"
 
-    # 🔥 ОПТИМІЗАЦІЯ ФОТО ПІД СТОРІС (1080x1920)
+    # ОПТИМІЗАЦІЯ ФОТО ПІД СТОРІС (1080x1920)
     if mode == 'story' and mime_type == "image/jpeg":
         print("📐 Режим Сторіс: вписуємо зображення у формат 1080x1920, щоб уникнути кропу...")
         story_path = os.path.join('temp_media', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
@@ -382,7 +444,7 @@ def main():
             spreadsheetId=SPREADSHEET_ID, range=f"'{tab_name}'!{col_letter}{row_line}",
             valueInputOption='RAW', body={'values': [[new_counter]]}
         ).execute()
-        print(f"📊 Лічильник оновлено на +1 (Рядок {row_line})")
+        print(f"📊 Лічильник оновлено на +1 для аркуша '{tab_name}' (Рядок {row_line})")
         
     except Exception as e:
         print(f"❌ Критична помилка під час публікації: {e}")
