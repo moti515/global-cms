@@ -138,43 +138,14 @@ def generate_multimodal_caption(image_path, category):
         print(f"⚠️ Помилка обробки запиту до ШІ: {e}")
         return "Трохи гумору вам у стрічку! Як вам? 👇😂"
 
-def upload_to_temporary_host(file_path):
-    print("📤 Завантажуємо тимчасовий файл на публічні хостинги...")
-    
-    # КРОК 1: Tmpfiles.org
-    try:
-        url = "https://tmpfiles.org/api/v1/upload"
-        with open(file_path, 'rb') as f:
-            res = requests.post(url, files={'file': f}, timeout=30).json()
-            if res.get("status") == "success":
-                viewer_url = res["data"]["url"]
-                return viewer_url.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/")
-    except Exception as e:
-        print(f"⚠️ Tmpfiles.org не спрацював: {e}. Пробуємо резервний варіант...")
-        
-    # КРОК 2: Pixeldrain.com
-    try:
-        url = "https://pixeldrain.com/api/file"
-        with open(file_path, 'rb') as f:
-            res = requests.post(url, files={'file': f}, timeout=30).json()
-            if res.get("success") is True or "id" in res:
-                return f"https://pixeldrain.com/api/file/{res['id']}"
-    except Exception as e:
-        print(f"⚠️ Pixeldrain не спрацював: {e}. Пробуємо фінальний варіант...")
-
-    # КРОК 3: Catbox.moe
-    try:
-        url = "https://catbox.moe/user/api.php"
-        with open(file_path, 'rb') as f:
-            files = {'fileToUpload': f}
-            data = {'reqtype': 'fileupload'}
-            res = requests.post(url, data=data, files=files, timeout=30)
-            if res.status_code == 200 and res.text.strip().startswith("https://"):
-                return res.text.strip()
-    except Exception as e:
-        print(f"⚠️ Catbox не спрацював: {e}")
-
-    raise Exception("Усі доступні тимчасові хостинги заблоковані мережею або лежать.")
+def get_google_drive_direct_url(file_id):
+    """
+    Генерує пряме публічне посилання на файл з Google Drive.
+    Працює для розшарених папок (доступ: Усі, хто мають посилання).
+    """
+    print(f"🔗 Формуємо пряме посилання для Google Drive ID: {file_id}")
+    # Стандартний веб-ендпоінт для прямого скачування файлів з Google Drive
+    return f"https://docs.google.com/uc?export=download&id={file_id}"
 
 def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="", local_file_path=None):
     print("📤 Відправка контенту в Instagram...")
@@ -390,8 +361,9 @@ def main():
         if os.path.exists(os.path.join('temp_media', 'video_frame.jpg')): os.remove(os.path.join('temp_media', 'video_frame.jpg'))
 
     try:
-        public_url = upload_to_temporary_host(final_upload_path)
-        print(f"🔗 Успішно згенеровано пряме посилання: {public_url}")
+        # Беремо пряме посилання безпосередньо з розшарованого Google Диску
+        public_url = get_google_drive_direct_url(file_id)
+        print(f"🔗 Згенеровано стабільне посилання: {public_url}")
         
         # Передаємо локальний файл останнім параметром для FB Stories
         publish_to_meta_platforms(
