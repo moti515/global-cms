@@ -82,13 +82,13 @@ def get_active_rules_ordered():
     return active_rules
 
 def generate_multimodal_caption(image_path, category):
-    """ШІ аналізує зображення за допомогою точного синтаксису Google AI Studio (camelCase)"""
+    """ШІ аналізує зображення за допомогою актуального REST API Gemini v1beta та моделей серії 3.x"""
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if not gemini_key:
         return "Усміхніться! 😉 #гумор #меблі"
         
-    # Використовуємо найактуальніші моделі для стабільної версії v1
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]
+    # Використовуємо найактуальніші моделі серії Gemini 3.x згідно з документацією
+    models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
     
     try:
         with open(image_path, "rb") as f:
@@ -97,7 +97,7 @@ def generate_multimodal_caption(image_path, category):
         
         prompt = (
             f"Ти топ-маркетолог розважальної сторінки з гострим гумором. Подивись на цю картинку/мем. "
-            f"Напиши до неї короткий, влучний і дуже смішний коментар (або життєву фразу) ТРЬОМА мовами окремими абзацами: "
+            f"Напиши до неї короткий, влучний і дуже смішний коментар (або життєву фразу) ТРЬОМА мовами окремими абзацах: "
             f"спочатку українською, потім англійською, і німецькою. "
             f"КРИТИЧНО: Це не має бути дослівний нудний переклад! Жарт має бути адаптований (живий сленг, "
             f"зрозумілий контекст для носіїв кожної з мов). "
@@ -108,7 +108,7 @@ def generate_multimodal_caption(image_path, category):
             f"🇩🇪 [Жарт німецькою]"
         )
         
-        # КРИТИЧНО ПРАВИЛЬНО: inlineData та mimeType замість snake_case
+        # Точний camelCase синтаксис структури payload
         payload = {
             "contents": [{
                 "parts": [
@@ -124,13 +124,15 @@ def generate_multimodal_caption(image_path, category):
         }
         
         for model in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={gemini_key}"
+            # Оновлено URL: v1beta замість v1 для повної підтримки моделей 3.5 / 3.1
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
             try:
                 res = requests.post(url, json=payload, timeout=20).json()
                 if 'candidates' in res and res['candidates']:
                     return res['candidates'][0]['content']['parts'][0]['text']
-            except Exception:
-                continue # Якщо модель недоступна або застаріла, пробуємо наступну зі списку
+            except Exception as e:
+                print(f"⚠️ Модель {model} тимчасово недоступна або виникла помилка: {e}. Пробуємо наступну...")
+                continue
                 
         print("⚠️ Жодна з моделей Gemini не відповіла успішно, активовано дефолт.")
         return "Трохи гумору вам у стрічку! Як вам? 👇😂"
