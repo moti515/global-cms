@@ -168,20 +168,27 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         lower_name = filename.lower()
         mime_type = "video/mp4" if lower_name.endswith('.mp4') else "image/jpeg"
         
-        # 1️⃣ Спроба через Catbox.moe (Супер-стабільний, без лімітів)
+        # Заголовки для маскування під реальний браузер від блокувань Catbox
+        browser_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        }
+        
+        # 1️⃣ Спроба через Catbox.moe (Чітка відповідність доку: reqtype + fileToUpload)
         print(f"☁️ Завантажуємо файл {filename} на Catbox.moe...")
         try:
             with open(local_file_path, 'rb') as f:
-                file_bytes = f.read() # Зчитуємо чисті байти
+                file_bytes = f.read()
                 
             if file_bytes:
-                payload_files = {
-                    'fileToUpload': (filename, file_bytes, mime_type)
-                }
+                # Розділяємо на звичайні поля (data) та файли (files) для імітації curl -F
+                data_payload = {'reqtype': 'fileupload'}
+                files_payload = {'fileToUpload': (filename, file_bytes, mime_type)}
+                
                 res = requests.post(
                     'https://catbox.moe/user/api.php',
-                    data={'reqtype': 'fileupload'},
-                    files=payload_files,
+                    data=data_payload,
+                    files=files_payload,
+                    headers=browser_headers,
                     timeout=30
                 )
                 
@@ -191,12 +198,10 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                     return direct_url
                 else:
                     print(f"⚠️ Catbox відмовив (Код {res.status_code}): {res.text}. Пробуємо резерв...")
-            else:
-                print("⚠️ Файл порожній. Пропускаємо Catbox...")
         except Exception as e:
             print(f"⚠️ Помилка завантаження на Catbox: {e}. Пробуємо резерв...")
 
-        # 2️⃣ Спроба через ImgBB API (Якщо прокинуто ключ IMGBB_API_KEY)
+        # 2️⃣ Спроба через ImgBB API (🔥 ВИПРАВЛЕНО: точний URL /1/ та структура полів)
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and mime_type == "image/jpeg":
             print(f"☁️ Завантажуємо файл {filename} на ImgBB API...")
@@ -205,19 +210,20 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                     img_bytes = f.read()
                     
                 if img_bytes:
-                    # Згідно з документацією: метод POST, multipart/form-data.
-                    # Додаємо expiration=86400 (1 доба в секундах) для автовидалення
-                    params = {
+                    # key, image та expiration передаються в тілі POST (multipart/form-data)
+                    data_payload = {
                         'key': imgbb_key,
-                        'expiration': 86400  
+                        'expiration': 86400  # Видалення через 24 години
                     }
-                    payload_files = {
+                    files_payload = {
                         'image': (filename, img_bytes, mime_type)
                     }
+                    
+                    # 🔥 Точний ендпоінт відповідно до документації: /1/upload
                     res = requests.post(
-                        'https://api.imgbb.com/v1/upload',
-                        params=params,
-                        files=payload_files,
+                        'https://api.imgbb.com/1/upload',
+                        data=data_payload,
+                        files=files_payload,
                         timeout=30
                     ).json()
                     
@@ -254,7 +260,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         except Exception as e:
             print(f"⚠️ Не вдалося завантажити і на file.io: {e}")
 
-    # 4️⃣ Аварійний дефолтний варіант (якщо мережа повністю лежить)
+    # 4️⃣ Аварійний дефолтний варіант
     print(f"🚨 Аварійний режим: повертаємось до Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}"
     
