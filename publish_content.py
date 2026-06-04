@@ -158,39 +158,47 @@ def generate_multimodal_caption(image_path, category, tab_name):
 def get_google_drive_direct_url(file_id, local_file_path=None):
     """
     Генерує залізобетонне пряме посилання для Meta API.
-    Якщо передано локальний файл, завантажує його на тимчасовий хостинг,
-    щоб уникнути блокувань та HTML-сторінок попереджень від Google Drive.
+    Завантажує локальний оброблений файл на найнадійніші розробницькі хостинги (Catbox / ImgBB),
+    щоб уникнути блокувань та HTML-сторінок від Google Drive.
     """
-    # 1. Спроба використати надійний шлях через тимчасовий хостинг
     if local_file_path and os.path.exists(local_file_path):
-        print(f"☁️ Завантажуємо локальний файл {os.path.basename(local_file_path)} на тимчасовий хостинг для Meta...")
+        filename = os.path.basename(local_file_path)
+        
+        # 1. Спроба через Catbox.moe (Супер-стабільний хостинг для розробників, без лімітів)
+        print(f"☁️ Завантажуємо файл {filename} на Catbox.moe...")
         try:
             with open(local_file_path, 'rb') as f:
-                res = requests.post('https://file.io', files={'file': f}).json()
-            
-            if res.get('success'):
-                direct_url = res.get('link')
-                print(f"🔗 Отримано стабільне тимчасове посилання: {direct_url}")
+                res = requests.post(
+                    'https://catbox.moe/user/api.php',
+                    data={'reqtype': 'fileupload'},
+                    files={'fileToUpload': f},
+                    timeout=30
+                )
+            if res.status_code == 200 and res.text.startswith('http'):
+                direct_url = res.text.strip()
+                print(f"🔗 Отримано залізобетонне посилання від Catbox: {direct_url}")
                 return direct_url
             else:
-                print(f"⚠️ Сервер file.io відмовив: {res}. Пробуємо резервний хостинг...")
+                print(f"⚠️ Catbox повернув дивну відповідь: {res.text}. Пробуємо резерв...")
         except Exception as e:
-            print(f"⚠️ Помилка основного хостингу: {e}. Пробуємо резервний...")
-            
-        # Резервний хостинг на випадок збою (transfer.sh)
-        try:
-            filename = os.path.basename(local_file_path)
-            with open(local_file_path, 'rb') as f:
-                res = requests.put(f'https://transfer.sh/{filename}', data=f)
-            if res.status_code == 200:
-                direct_url = res.text.strip()
-                print(f"🔗 Отримано резервне тимчасове посилання: {direct_url}")
-                return direct_url
-        except Exception as err:
-            print(f"❌ Не вдалося завантажити файл на жоден тимчасовий хостинг: {err}")
+            print(f"⚠️ Помилка завантаження на Catbox: {e}. Пробуємо резерв...")
 
-    # 2. Аварійний дефолтний варіант (якщо локального файлу чомусь немає)
-    print(f"⚠️ Аварійний режим: формуємо стандартне посилання Google Drive ID: {file_id}")
+        # 2. Резервний варіант: file.io (з обробкою текстових помилок)
+        print(f"☁️ Спроба через резервний file.io...")
+        try:
+            with open(local_file_path, 'rb') as f:
+                res = requests.post('https://file.io', files={'file': f}, timeout=20)
+            if res.status_code == 200:
+                res_json = res.json()
+                if res_json.get('success'):
+                    direct_url = res_json.get('link')
+                    print(f"🔗 Отримано резервне посилання file.io: {direct_url}")
+                    return direct_url
+        except Exception as e:
+            print(f"⚠️ Не вдалося завантажити і на file.io: {e}")
+
+    # 3. Аварійний дефолтний варіант (якщо мережа повністю лежить)
+    print(f"🚨 Аварійний режим: повертаємось до Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}"
 
 def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="", local_file_path=None):
