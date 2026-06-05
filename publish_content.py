@@ -279,6 +279,41 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
 
     print(f"🚨 Всі хостинги відмовили! Аварійний режим для Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}", None
+
+def wait_for_instagram_media(container_id, access_token, max_retries=15, delay=10):
+    """
+    Циклічно перевіряє статус готовності медіаконтейнера в Instagram.
+    """
+    # URL для перевірки статусу контейнера
+    url = f"https://graph.facebook.com/v19.0/{container_id}"
+    params = {
+        "fields": "status_code",
+        "access_token": access_token
+    }
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(url, params=params).json()
+            status = response.get("status_code")
+            
+            if status == "FINISHED":
+                print("✅ Відео успішно оброблено Instagram і готове до публікації!")
+                return True
+            elif status == "ERROR":
+                print(f"❌ Помилка обробки відео на стороні Instagram: {response}")
+                return False
+            elif status in ["IN_PROGRESS", "CREATING"]:
+                print(f"⏳ Instagram все ще обробляє відео (Статус: {status}). Чекаємо {delay} сек... (Спроба {attempt}/{max_retries})")
+                time.sleep(delay)
+            else:
+                print(f"❓ Отримано невідомий статус: {status}. Очікування...")
+                time.sleep(delay)
+        except Exception as e:
+            print(f"⚠️ Помилка під час запиту статусу: {e}")
+            time.sleep(delay)
+            
+    print("❌ Вийшов таймаут очікування обробки відео в Instagram.")
+    return False
     
 def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="", local_file_path=None):
 
@@ -306,20 +341,24 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="",
     
     ig_creation_id = ig_res["id"]
     
-    if media_type == "video":
-        print("⏳ Очікуємо обробки відео серверами Instagram (30 сек)...")
-        time.sleep(30)
-    else:
-        print("⏳ Очікуємо завантаження photo серверами Instagram (12 сек)...")
-        time.sleep(12)
+    # 🔁 ІНТЕГРОВАНО: Розумне динамічне очікування обробки контейнера Meta
+    # Для відео даємо до ~3 хвилин (18 спроб по 10 сек), для фото менше (5 спроб по 3 сек)
+    max_retries = 18 if media_type == "video" else 5
+    check_delay = 10 if media_type == "video" else 3
+    
+    print(f"⏳ Запущено моніторинг готовності медіа-контейнера ID: {ig_creation_id}...")
+    is_ready = wait_for_instagram_media(ig_creation_id, META_ACCESS_TOKEN, max_retries=max_retries, delay=check_delay)
+    
+    if not is_ready:
+        raise ValueError("❌ Медіафайл не готовий до публікації в Instagram за лімітом часу (Таймаут).")
         
+    # Фінальна публікація виконується тільки після успішного FINISHED статусу
     ig_pub_res = requests.post(
         f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", 
         data={"creation_id": ig_creation_id, "access_token": META_ACCESS_TOKEN}
     ).json()
     
     if "id" not in ig_pub_res:
-        # Викидаємо помилку, якщо фінальна публікація з тріском провалилася
         raise ValueError(f"❌ Помилка фінальної публікації в Instagram: {ig_pub_res}")
         
     print(f"✅ [Instagram] Успішно в ефірі! ID: {ig_pub_res['id']}")
