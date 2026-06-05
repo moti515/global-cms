@@ -289,7 +289,7 @@ def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="",
     ig_url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
     ig_payload = {
         "access_token": META_ACCESS_TOKEN,
-        "media_type": "STORIES" if is_story else ("VIDEO" if media_type == "video" else "IMAGE")
+        "media_type": "STORIES" if is_story else ("REELS" if media_type == "video" else "IMAGE")
     }
     if media_type == "video": 
         ig_payload["video_url"] = media_url
