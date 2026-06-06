@@ -115,7 +115,7 @@ def optimize_video_story(local_path, f_name, text):
     # Фільтр для вписування відео у 1080x1920 з темно-сірим бекграундом
     vf_filters = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black"
     
-    # Якщо є згенерований текст, накладаємо його за допомогою drawtext (типовий шрифт в Ubuntu Runner)
+    # Якщо є згенерований text, накладаємо його за допомогою drawtext (типовий шрифт в Ubuntu Runner)
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     if os.path.exists(font_path) and text:
         clean_text = text.replace("'", "").replace(":", "\\:")
@@ -263,11 +263,10 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         2: "Schreibe den Text ausschließlich auf DEUTSCH. Nutze Emojis."
     }
     
-    # Спеціалізований промпт під реалії розробки, креслень, замірів та браку
     prompt = (
         f"Ти професійний копірайтер та меблевий конструктор. Подивись на це зображення (або кадр з відео).\n"
         f"Напиши ОДНУ коротку, мотиваційну або інформативну фразу (максимум 1-2 речення) для Instagram Stories.\n"
-        f"Врахуй контекст: на фото може бути як готовий меблевий шедевр, так і брудний процес виробництва, технічна документація, "
+        f"Врахуй контекст: на foto може бути як готовий меблевий шедевр, так і брудний процес виробництва, технічна документація, "
         f"заміри приміщення, скріншоти програм, робочі моменти команди або навіть виправлення браку/дефектів.\n"
         f"Зроби опис живим, експертним, без банальних закликів. Текст буде нанесено прямо на медіафайл.\n"
         f"Бренд/Концепт: '{real_manufacturer}'. Рік: {year}. Локація: {target_loc if target_loc else 'Робочий процес'}.\n"
@@ -305,9 +304,9 @@ def wait_for_meta_container(container_id, access_token):
             status = r.get("status_code", "").upper()
             if status == "FINISHED": return True
             elif status == "ERROR": return False
-            print(f"⏳ Очікування обробки відео для сторіс... Статус: {status}")
+            print(f"⏳ Очікування обробки медіафайлу в Meta... Статус: {status}")
         except: pass
-        time.sleep(10)
+        time.sleep(5)  # Оптимальний інтервал перевірки
     return False
 
 def main():
@@ -332,7 +331,6 @@ def main():
         print("ℹ️ Реєстр порожній.")
         return
 
-    # Динамічні лічильники для Сторіз (Колонка E, Індекс 4)
     col_idx = 4
     col_letter = "E"
     target_lang_cell = "'⚙️ Налаштування Папок'!H2"
@@ -351,7 +349,6 @@ def main():
         print("ℹ️ Немає доступних рядків.")
         return
 
-    # Шукаємо файли з мінімальним лічильником використання
     min_counter = min(item["counter"] for item in valid_rows)
     min_pool = [item for item in valid_rows if item["counter"] == min_counter]
 
@@ -362,12 +359,10 @@ def main():
         groups.setdefault(group_key, []).append(item)
 
     first_key = list(groups.keys())[0]
-    # Беремо до 4 файлів з медіа-групи для публікації серії сторіз
     selected_group_items = groups[first_key][:4]
     category_name, target_date, target_loc = first_key
     print(f"📂 Обрано групу: {category_name}. Елементів для публікації один за одним: {len(selected_group_items)}")
 
-    # 🌐 Управління мовною каруселлю з комірки H2
     lang_value = "UK"
     try:
         lang_res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=target_lang_cell).execute()
@@ -393,7 +388,6 @@ def main():
     local_files_to_clean = []
     success_published_any = False
 
-    # 📥 ПОКРОКОВА ОБРОБКА ТА ПУБЛІКАЦІЯ СТОРІЗ ОДИН ЗА ОДНИМ
     for idx_item, item in enumerate(selected_group_items):
         f_id, f_name = item["data"][0], item["data"][1]
         lower_name = f_name.lower()
@@ -431,7 +425,6 @@ def main():
 
         local_files_to_clean.append(local_path)
 
-        # 🎞️ Генерація прев'ю-кадру для аналізу ШІ (якщо це відео)
         ai_media_snapshot = final_path
         if is_video:
             frame_path = os.path.join('temp_mebli', f"frame_{f_id}.jpg")
@@ -440,31 +433,24 @@ def main():
                 ai_media_snapshot = frame_path
                 local_files_to_clean.append(frame_path)
 
-        # 🧠 ШІ створює унікальну мотиваційну фразу під цей конкретний кадр
         story_caption_text = generate_story_caption([ai_media_snapshot], category_name, target_date, lang_idx, target_loc)
         print(f"💬 Текст для Сторіс: \"{story_caption_text}\"")
 
-        # 📐 Оптимізація під формат Сторіс (1080x1920) + Вбудовування тексту
         if is_video:
-            # Оптимізуємо відео та накладаємо текст засобами FFmpeg drawtext
             optimized_path = optimize_video_story(final_path, f_name, story_caption_text)
         else:
-            # Оптимізуємо зображення (вписуємо в полотно)
             optimized_path = optimize_image_story(final_path, f_name)
-            # Накладаємо підготовлений текст зверху засобами Pillow
             overlay_text_on_image(optimized_path, story_caption_text)
 
         if optimized_path != final_path and optimized_path != local_path:
             local_files_to_clean.append(optimized_path)
 
-        # ☁️ Завантаження готового медіафайлу на хмару
         pub_url, ik_id = get_google_drive_direct_url(f_id, local_file_path=optimized_path)
         
         if not pub_url:
             print(f"⚠️ Не вдалося отримати публічне посилання для {f_name}.")
             continue
 
-        # 🚀 Відправка у контейнер Meta Graph API (media_type=STORIES)
         print(f"📡 Надсилання сторіз в Meta API...")
         param_type = "video_url" if is_video else "image_url"
         payload = {
@@ -477,38 +463,39 @@ def main():
         
         if res and "id" in res:
             creation_id = res["id"]
-            if is_video:
-                wait_for_meta_container(creation_id, META_ACCESS_TOKEN)
-                
-            # Фінальний запуск публікації в Instagram Stories
-            publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
-                "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
-            }).json()
             
-            if "id" in publish_res:
-                print(f"✅ Сторіз [{f_name}] успішно опубліковано! ID: {publish_res['id']}")
-                success_published_any = True
+            # 🔥 КРИТИЧНЕ ВИПРАВЛЕННЯ: Тепер чекаємо на статус FINISHED і для відео, і для зображень!
+            is_ready = wait_for_meta_container(creation_id, META_ACCESS_TOKEN)
+            
+            if is_ready:
+                # Фінальний запуск публікації в Instagram Stories
+                publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
+                    "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
+                }).json()
                 
-                # Оновлюємо лічильник використання саме для цього файлу в таблиці
-                new_val = item["counter"] + 1
-                range_to_update = f"'{current_tab}'!{col_letter}{item['row_idx']}"
-                try:
-                    sheets.spreadsheets().values().update(
-                        spreadsheetId=SPREADSHEET_ID, range=range_to_update,
-                        valueInputOption='RAW', body={'values': [[new_val]]}
-                    ).execute()
-                    print(f"✍️ Лічильник у {col_letter}{item['row_idx']} оновлено на {new_val}.")
-                except Exception as e:
-                    print(f"⚠️ Не вдалося зберегти лічильник: {e}")
+                if "id" in publish_res:
+                    print(f"✅ Сторіз [{f_name}] успішно опубліковано! ID: {publish_res['id']}")
+                    success_published_any = True
+                    
+                    new_val = item["counter"] + 1
+                    range_to_update = f"'{current_tab}'!{col_letter}{item['row_idx']}"
+                    try:
+                        sheets.spreadsheets().values().update(
+                            spreadsheetId=SPREADSHEET_ID, range=range_to_update,
+                            valueInputOption='RAW', body={'values': [[new_val]]}
+                        ).execute()
+                        print(f"✍️ Лічильник у {col_letter}{item['row_idx']} оновлено на {new_val}.")
+                    except Exception as e:
+                        print(f"⚠️ Не вдалося зберегти лічильник: {e}")
+                else:
+                    print(f"❌ Помилка публікації сторіз в Meta API: {publish_res}")
             else:
-                print(f"❌ Помилка публікації сторіз в Meta API: {publish_res}")
+                print(f"❌ Контейнер медіафайлу не перейшов у стан готовності (або повернув помилку).")
         else:
             print(f"❌ Помилка створення контейнера сторіз: {res}")
 
-        # Очищення хмари хостингу ImageKit (якщо був задіяний)
         if ik_id: delete_from_imagekit(ik_id)
 
-    # 🔄 Якщо відбулася хоча б одна публікація — перемикаємо мову на наступну в черзі (в комірці H2)
     if success_published_any:
         try:
             sheets.spreadsheets().values().update(
@@ -519,7 +506,6 @@ def main():
         except Exception as e:
             print(f"⚠️ Не вдалося оновити мову в комірці H2: {e}")
 
-    # 🧹 Тотальне очищення тимчасових файлів
     for f in local_files_to_clean:
         if os.path.exists(f):
             try: os.remove(f)
