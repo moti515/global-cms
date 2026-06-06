@@ -68,7 +68,7 @@ def optimize_media_geometry(local_path, filename, mime_type, mode="post"):
                 
                 if ratio < 0.8 or ratio > 1.91:
                     print(f"📐 Оптимізація Поста: Пропорції картинки ({ratio:.2f}) неприпустимі. Коригуємо...")
-                    padded_post_path = os.path.join('temp_fb', 'post_padded_' + filename.rsplit('.', 1)[0] + '.jpg')
+                    padded_post_path = os.path.join('temp_mebli', 'post_padded_' + filename.rsplit('.', 1)[0] + '.jpg')
                     
                     if ratio < 0.8:
                         new_w = int(h * 0.8)
@@ -89,7 +89,7 @@ def optimize_media_geometry(local_path, filename, mime_type, mode="post"):
 
     elif mode == 'story' and mime_type == "image/jpeg":
         print("📐 Режим Сторіс: вписуємо зображення у формат 1080x1920...")
-        story_path = os.path.join('temp_fb', 'story_padded_' + filename.rsplit('.', 1)[0] + '.jpg')
+        story_path = os.path.join('temp_mebli', 'story_padded_' + filename.rsplit('.', 1)[0] + '.jpg')
         try:
             with Image.open(local_path) as img:
                 img = img.convert('RGB')
@@ -113,7 +113,7 @@ def optimize_media_geometry(local_path, filename, mime_type, mode="post"):
 
     elif mode == 'story' and mime_type == "video/mp4":
         print("📐 Режим Сторіс для ВІДЕО: вписуємо у формат 1080x1920 через ffmpeg...")
-        story_video_path = os.path.join('temp_fb', 'story_padded_' + filename.rsplit('.', 1)[0] + '.mp4')
+        story_video_path = os.path.join('temp_mebli', 'story_padded_' + filename.rsplit('.', 1)[0] + '.mp4')
         
         ffmpeg_cmd = [
             'ffmpeg', '-y', '-i', local_path,
@@ -256,7 +256,7 @@ def generate_multimodal_caption(image_paths, category, date_str):
         f"Ти професійний копірайтер та меблевий експерт. Подивись на ці зображення. "
         f"Напиши один короткий, натхненний пост для соцмереж. "
         f"Категорія об'єкта: '{category}'. {lang_instructions[lang_idx]} "
-        f"КРИТИЧНО: Не пиши жодних передмов. Тільки текст поста."
+        f"КРИТИЧНО: Не пиши жодних передмов. Тільки text поста."
     )
 
     parts = [{"text": prompt}]
@@ -278,15 +278,40 @@ def generate_multimodal_caption(image_paths, category, date_str):
         except: continue
     return "Чудова робота нашої команди! Як вам результат? 👇😊"
 
+def wait_for_meta_container(container_id, access_token):
+    """Очікує завершення асинхронної обробки відео/медіа контейнера в Meta API."""
+    check_url = f"https://graph.facebook.com/v19.0/{container_id}"
+    params = {"fields": "status_code,status", "access_token": access_token}
+    for _ in range(30):
+        try:
+            r = requests.get(check_url, params=params).json()
+            status = r.get("status_code", "").upper()
+            if status == "FINISHED":
+                print("✅ Контейнер успішно скомпіровано Meta.")
+                return True
+            elif status == "ERROR":
+                print(f"❌ Помилка обробки контейнера Meta: {r.get('status')}")
+                return False
+            print(f"⏳ Очікування готовності контейнера... Статус: {status}")
+        except Exception as e:
+            print(f"⚠️ Помилка перевірки статусу: {e}")
+        time.sleep(10)
+    return False
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1].lower() != "fb_post":
-        print("💡 Автономний режим Facebook. Запуск: python script.py fb_post")
+    if len(sys.argv) < 3:
+        print("💡 Необхідно передати параметри. Запуск: python script.py <mode> <tab_name>")
         return
 
-    print("📊 [FB Mode] Зчитування реєстру 'Меблі'...")
+    mode = sys.argv[1].lower()  # fb_post, ig_post, ig_story
+    forced_tab = sys.argv[2]
+    
+    current_tab = forced_tab if forced_tab else TAB_NAME
+    print(f"📊 [Режим: {mode.upper()}] Зчитування реєстру '{current_tab}'...")
+    
     drive, sheets = get_services()
     
-    res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{TAB_NAME}'!A2:H").execute()
+    res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{current_tab}'!A2:H").execute()
     rows = res.get('values', [])
     if not rows:
         print("ℹ️ Реєстр порожній.")
@@ -297,16 +322,16 @@ def main():
         if len(r) >= 6:
             if r[2].lower() == "temporary": continue
             try:
-                fb_counter = int(r[5]) if r[5] else 0
-                valid_rows.append({"row_idx": i + 2, "data": r, "fb_counter": fb_counter})
+                counter = int(r[5]) if r[5] else 0
+                valid_rows.append({"row_idx": i + 2, "data": r, "counter": counter})
             except ValueError: continue
 
     if not valid_rows:
-        print("ℹ️ Немає валідних рядків для Facebook.")
+        print("ℹ️ Немає валідних рядків для обробки.")
         return
 
-    min_fb = min(item["fb_counter"] for item in valid_rows)
-    min_pool = [item for item in valid_rows if item["fb_counter"] == min_fb]
+    min_counter = min(item["counter"] for item in valid_rows)
+    min_pool = [item for item in valid_rows if item["counter"] == min_counter]
 
     groups = {}
     for item in min_pool:
@@ -319,19 +344,22 @@ def main():
     category_name, target_date, target_loc = first_key
     print(f"📂 Обрано групу: {category_name} (Файлів у пулі: {len(selected_group_items)})")
 
-    os.makedirs('temp_fb', exist_ok=True)
+    os.makedirs('temp_mebli', exist_ok=True)
     local_files = []
     cloud_urls = []
     ik_ids = []
     has_video = False
     ai_analysis_images = []
 
-    # 📥 Фільтрація, завантаження та оптимізація медіафайлв
+    # Визначаємо тип обробки геометрії
+    geom_mode = "story" if mode == "ig_story" else "post"
+
+    # 📥 Фільтрація, завантаження та оптимізація медіафайлів
     for item in selected_group_items:
         f_id, f_name = item["data"][0], item["data"][1]
         lower_name = f_name.lower()
         
-        # 🛑 ОБРОБКА НЕПІДТРИМУВАНИХ ФОРМАТІВ (Валідація перед завантаженням)
+        # 🛑 ОБРОБКА НЕПІДТРИМУВАНИХ ФОРМАТІВ
         if not lower_name.endswith(VALID_MEDIA_EXTENSIONS):
             reason = "непідтримуваний формат"
             if lower_name.endswith(DOCUMENT_EXTENSIONS):
@@ -339,9 +367,9 @@ def main():
             
             print(f"⚠️ Файл '{f_name}' має непідтримуваний формат. Реєструємо помилку...")
             log_unsupported_to_service(sheets, category_name, f_name, reason=reason)
-            continue  # Пропускаємо цей файл та йдемо далі
+            continue
 
-        local_path = os.path.join('temp_fb', f_name)
+        local_path = os.path.join('temp_mebli', f_name)
         print(f"📥 Завантаження з Drive: {f_name}...")
         
         try:
@@ -361,20 +389,20 @@ def main():
             has_video = True
             mime_type = "video/mp4"
         elif lower_name.endswith(('.heic', '.heif')):
-            jpg_path = os.path.join('temp_fb', f_name.rsplit('.', 1)[0] + '.jpg')
+            jpg_path = os.path.join('temp_mebli', f_name.rsplit('.', 1)[0] + '.jpg')
             with Image.open(local_path) as img:
                 img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
             final_path = jpg_path
             local_files.append(jpg_path)
 
-        # 📐 Оптимізація геометрії медіа
-        optimized_path = optimize_media_geometry(final_path, f_name, mime_type, mode="post")
+        # 📐 Оптимізація геометрії медіа відповідно до режиму
+        optimized_path = optimize_media_geometry(final_path, f_name, mime_type, mode=geom_mode)
         if optimized_path != final_path and optimized_path != local_path:
             local_files.append(optimized_path)
 
-        # Створення прев'ю кадру для ШІ (якщо відео)
+        # Створення прев'ю кадру для ШІ
         if mime_type == "video/mp4":
-            frame_path = os.path.join('temp_fb', f"frame_{f_id}.jpg")
+            frame_path = os.path.join('temp_mebli', f"frame_{f_id}.jpg")
             subprocess.run(['ffmpeg', '-y', '-i', optimized_path, '-ss', '00:00:01', '-vframes', '1', frame_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             ai_analysis_images.append(frame_path)
         else:
@@ -388,7 +416,7 @@ def main():
         if ik_id: ik_ids.append(ik_id)
 
     if not cloud_urls:
-        print("ℹ️ Немає доступних медіафайлів для публікації (всі файли відфільтровано або не завантажено).")
+        print("ℹ️ Немає доступних медіафайлів для публікації.")
         return
 
     # ✍️ Збір контенту для публікації
@@ -397,12 +425,19 @@ def main():
     loc_footer = f"\n\n📍 Локація: {target_loc}" if target_loc and "Невідоме місце" not in target_loc else ""
     full_caption = f"{header_text}{ai_text}{loc_footer}"
 
-    if not FB_PAGE_ID or not META_ACCESS_TOKEN:
-        print("❌ Відсутні ключі авторизації Facebook! Перевірте config.yml або змінні оточення.")
+    if not FB_PAGE_ID and mode == "fb_post":
+        print("❌ Відсутній FB_PAGE_ID для публікації у Facebook!")
+        return
+    if not IG_USER_ID and mode in ["ig_post", "ig_story"]:
+        print("❌ Відсутній IG_USER_ID для публікації в Instagram!")
         return
 
-    # 📤 Деплой у Facebook Graph API
-    try:
+    res = None
+
+    # ==========================================
+    # 🌍 ВАРІАНТ 1: FACEBOOK ПОСТ (`fb_post`)
+    # ==========================================
+    if mode == "fb_post":
         if has_video:
             print("🎬 Публікація відео-поста у Facebook...")
             fb_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
@@ -426,9 +461,116 @@ def main():
             }
             res = requests.post(fb_url, data=payload).json()
 
-        if "id" in res or "post_id" in res:
-            print(f"✅ Успішно опубліковано! ID: {res.get('id', res.get('post_id'))}")
-            for item in selected_group_items:
-                # Оновлюємо лічильник тільки для успішно оброблених файлів цієї групи
-                if item["data"][1].lower().endswith(VALID_MEDIA_EXTENSIONS):
-                    sheets
+    # ==========================================
+    # 📸 ВАРІАНТ 2: INSTAGRAM ПОСТ (`ig_post`)
+    # ==========================================
+    elif mode == "ig_post":
+        # Карусель (кілька зображень/відео)
+        if len(cloud_urls) > 1:
+            print(f"🗂️ Створення каруселі Instagram з {len(cloud_urls)} елементів...")
+            container_ids = []
+            for url in cloud_urls:
+                is_vid = url.lower().split('?')[0].endswith(('.mp4', '.mov', '.avi')) or "video" in url
+                param_type = "video_url" if is_vid else "image_url"
+                
+                payload = {
+                    param_type: url,
+                    "is_carousel_item": "true",
+                    "access_token": META_ACCESS_TOKEN
+                }
+                if is_vid: payload["media_type"] = "VIDEO"
+                
+                item_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=payload).json()
+                if "id" in item_res:
+                    container_ids.append(item_res["id"])
+            
+            carousel_payload = {
+                "media_type": "CAROUSEL",
+                "children": json.dumps(container_ids),
+                "caption": full_caption,
+                "access_token": META_ACCESS_TOKEN
+            }
+            res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=carousel_payload).json()
+            
+        # Один медіафайл (фото або відео)
+        else:
+            print("🖼️ Створення одиничного контейнера в Instagram...")
+            is_vid = cloud_urls[0].lower().split('?')[0].endswith(('.mp4', '.mov', '.avi')) or "video" in cloud_urls[0]
+            param_type = "video_url" if is_vid else "image_url"
+            
+            payload = {
+                param_type: cloud_urls[0],
+                "caption": full_caption,
+                "access_token": META_ACCESS_TOKEN
+            }
+            if is_vid: payload["media_type"] = "VIDEO"
+            
+            res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=payload).json()
+
+        if res and "id" in res:
+            creation_id = res["id"]
+            if has_video:
+                wait_for_meta_container(creation_id, META_ACCESS_TOKEN)
+                
+            print("🚀 Фінальна публікація контейнера в Instagram стрічку...")
+            publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
+                "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
+            }).json()
+            res = publish_res
+
+    # ==========================================
+    # ⚡ ВАРІАНТ 3: INSTAGRAM СТОРІЗ (`ig_story`)
+    # ==========================================
+    elif mode == "ig_story":
+        print("⚡ Публікація елемента в Instagram Stories...")
+        is_vid = cloud_urls[0].lower().split('?')[0].endswith(('.mp4', '.mov', '.avi')) or "video" in cloud_urls[0]
+        param_type = "video_url" if is_vid else "image_url"
+        
+        story_payload = {
+            param_type: cloud_urls[0],
+            "media_type": "STORIES",
+            "access_token": META_ACCESS_TOKEN
+        }
+        
+        res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=story_payload).json()
+        if res and "id" in res:
+            creation_id = res["id"]
+            if is_vid or has_video:
+                wait_for_meta_container(creation_id, META_ACCESS_TOKEN)
+                
+            print("🚀 Фінальний деплой сторіз...")
+            publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
+                "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
+            }).json()
+            res = publish_res
+
+    # ==========================================
+    # 💾 ПЕРЕВІРКА РЕЗУЛЬТАТУ ТА ОНОВЛЕННЯ БАЗИ
+    # ==========================================
+    if res and ("id" in res or "post_id" in res):
+        print(f"✅ Успішно опубліковано! ID контенту: {res.get('id', res.get('post_id'))}")
+        
+        for item in selected_group_items:
+            if item["data"][1].lower().endswith(VALID_MEDIA_EXTENSIONS):
+                new_val = item["counter"] + 1
+                range_to_update = f"'{current_tab}'!F{item['row_idx']}"
+                try:
+                    sheets.spreadsheets().values().update(
+                        spreadsheetId=SPREADSHEET_ID, range=range_to_update,
+                        valueInputOption='RAW', body={'values': [[new_val]]}
+                    ).execute()
+                    print(f"✍️ Лічильник рядка {item['row_idx']} збільшено до {new_val}.")
+                except Exception as e:
+                    print(f"⚠️ Помилка збереження лічильника в Таблицю: {e}")
+    else:
+        print(f"❌ Помилка дистриб'юції контенту Meta API: {res}")
+
+    # 🧹 Очищення тимчасових локальних медіафайлів
+    for f in local_files:
+        if os.path.exists(f):
+            try: os.remove(f)
+            except: pass
+    print("🧹 Тимчасова папка очищена.")
+
+if __name__ == "__main__":
+    main()
