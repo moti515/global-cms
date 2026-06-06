@@ -333,31 +333,6 @@ def main():
     
     drive, sheets = get_services()
 
-    # =====================================================================
-    # 🌐 НОВИЙ БЛОК: Визначення комірки з мовою залежно від режиму (mode)
-    # =====================================================================
-    lang_cell = "F2" if mode == "fb_post" else ("G2" if mode == "ig_post" else "H2")
-    try:
-        lang_res = sheets.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID, range=f"'{current_tab}'!{lang_cell}"
-        ).execute()
-        # Беремо значення, приводимо до верхнього регістру та прибираємо пробіли
-        lang_value = lang_res.get('values', [['']])[0][0].strip().upper()
-    except Exception as e:
-        print(f"⚠️ Не вдалося прочитати комірку мови {lang_cell}: {e}. Ставимо UK за замовчуванням.")
-        lang_value = "UK"
-
-    # Мапінг значення з таблиці в цифровий індекс (0=UK, 1=EN, 2=DE)
-    if any(x in lang_value for x in ["EN", "ENG", "АНГЛ", "ENGLISH"]):
-        lang_idx = 1
-    elif any(x in lang_value for x in ["DE", "GER", "НІМ", "DEUTSCH"]):
-        lang_idx = 2
-    else:
-        lang_idx = 0  # Українська за замовчуванням (якщо там UK, UA, УКР або порожньо)
-        
-    print(f"🌐 Зчитано мову з комірки {lang_cell}: {lang_value} (Індекс: {lang_idx})")
-    # =====================================================================
-    
     res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{current_tab}'!A2:H").execute()
     rows = res.get('values', [])
     if not rows:
@@ -390,6 +365,39 @@ def main():
     selected_group_items = groups[first_key][:4]
     category_name, target_date, target_loc = first_key
     print(f"📂 Обрано групу: {category_name} (Файлів у пулі: {len(selected_group_items)})")
+
+    # =====================================================================
+    # 🌐 ОНОВЛЕНЙ ДИНАМІЧНИЙ БЛОК: Управління мовами через службовий аркуш
+    # =====================================================================
+    lang_value = "UK"  # Значення за замовчуванням
+    try:
+        # Зчитуємо конфігурацію папок (стовпці A-H, де F=FB, G=IG Post, H=IG Story)
+        service_res = sheets.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:H"
+        ).execute()
+        service_rows = service_res.get('values', [])
+        
+        # Шукаємо рядок, який відповідає обраній категорії (назва папки в стовпці B [індекс 1])
+        for s_row in service_rows:
+            if len(s_row) > 1 and s_row[1] == category_name:
+                # Визначаємо індекс стовпця мови: F (5) для fb_post, G (6) для ig_post, H (7) для ig_story
+                col_idx = 5 if mode == "fb_post" else (6 if mode == "ig_post" else 7)
+                if len(s_row) > col_idx and s_row[col_idx]:
+                    lang_value = s_row[col_idx].strip().upper()
+                break
+    except Exception as e:
+        print(f"⚠️ Не вдалося прочитати мову зі службового аркуша для папки [{category_name}]: {e}")
+
+    # Мапінг значення з таблиці в цифровий індекс (0=UK, 1=EN, 2=DE)
+    if any(x in lang_value for x in ["EN", "ENG", "АНГЛ", "ENGLISH"]):
+        lang_idx = 1
+    elif any(x in lang_value for x in ["DE", "GER", "НІМ", "DEUTSCH"]):
+        lang_idx = 2
+    else:
+        lang_idx = 0  # Українська за замовчуванням
+        
+    print(f"🌐 Динамічно зчитано мову зі службового аркуша: {lang_value} (Індекс: {lang_idx})")
+    # =====================================================================
 
     os.makedirs('temp_mebli', exist_ok=True)
     local_files = []
