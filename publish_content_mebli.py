@@ -29,6 +29,31 @@ SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/a
 VALID_MEDIA_EXTENSIONS = ('.gif', '.heic', '.heif', '.jpeg', '.jpg', '.mp4', '.png', '.webp', '.mov', '.avi')
 DOCUMENT_EXTENSIONS = ('.pdf', '.doc', '.docx', '.djvu', '.txt', '.rtf', '.fb2', '.epub')
 
+# 🏢 ГЛОБАЛЬНА БАЗА ДАНИХ КОМПАНІЙ ТА КАТЕГОРІЙ
+COMPANIES_DB = {
+    "goncharenko": {
+        "names": {0: "Олександр Гончаренко", 1: "Oleksandr Goncharenko", 2: "Oleksandr Goncharenko"},
+        "links": ["📸 Instagram: instagr.am/goncharenko8721"]
+    },
+    "gurov": {
+        "names": {0: "Андрій Гуров", 1: "Andrii Gurov", 2: "Andrii Gurov"},
+        "links": ["🌐 Facebook: fb.com/andrej.gurov.755581"]
+    },
+    "solovey": {
+        "names": {0: "Студія меблів «Соловей»", 1: "Solovey Furniture Studio", 2: "Möbelstudio Solovey"},
+        "links": ["📸 Instagram: instagr.am/mebelsolovei"]
+    },
+    "furniture park": {
+        "names": {0: "Меблевий парк", 1: "Furniture Park", 2: "Furniture Park"},
+        "links": [
+            "📸 Instagram: instagr.am/meblevyi_park",
+            "📸 Instagram: instagr.am/meblovo_ukraine",
+            "📢 Telegram: t.me/Meblevyi_park",
+            "📸 Instagram: instagr.am/renovaelite"
+        ]
+    }
+}
+
 def get_services():
     key_dict = json.loads(os.environ['GDRIVE_SERVICE_ACCOUNT_KEY'])
     creds = service_account.Credentials.from_service_account_info(key_dict, scopes=SCOPES)
@@ -174,18 +199,13 @@ def delete_from_imagekit(file_id: str):
     except: pass
 
 def get_manufacturer_header(category, date_str, lang_idx):
-    """
-    Генерує естетичний заголовок відповідно до категорії, 
-    мапінгу реальних імен компаній та обраної мови (0=UK, 1=EN, 2=DE).
-    """
+    """Генерує естетичний заголовок відповідно до категорії та обраної мови."""
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
     cat_lower = category.lower()
     
-    # =====================================================================
-    # 1. СПЕЦІАЛЬНІ КАТЕГОРІЇ (Концепти, Інструкції, Загальний монтаж)
-    # =====================================================================
+    # 1. СПЕЦІАЛЬНІ КАТЕГОРІЇ
     if "montage various" in cat_lower:
-        if lang_idx == 0: return f"📅 Рік: {year}\n🛠️ Монтаж: Меблі, у монтажі яких ми брали участь (професійне збирання)\n\n"
+        if lang_idx == 0: return f"📅 Рік: {year}\n🛠️ Монтаж: Меблі, у монтажі яких мы брали участь (професійне збирання)\n\n"
         elif lang_idx == 1: return f"📅 Year: {year}\n🛠️ Assembly: Furniture we helped assemble (professional installation)\n\n"
         else: return f"📅 Jahr: {year}\n🛠️ Montage: Möbel, bei deren Montage wir mitgewirkt haben (professioneller Aufbau)\n\n"
         
@@ -199,34 +219,7 @@ def get_manufacturer_header(category, date_str, lang_idx):
         elif lang_idx == 1: return "📐 Ergonomics and Design: Useful standards and dimensions to follow when designing furniture.\n\n"
         else: return "📐 Ergonomie und Konstruktion: Nützliche Standards und Maße, die bei der Möbelkonstruktion beachtet werden sollten.\n\n"
 
-    # =====================================================================
-    # 2. БАЗА ДАНИХ КОМПАНІЙ ТА МАЙСТРІВ (Мапінг імен та естетичних посилань)
-    # =====================================================================
-    companies = {
-        "goncharenko": {
-            "names": {0: "Олександр Гончаренко", 1: "Oleksandr Goncharenko", 2: "Oleksandr Goncharenko"},
-            "links": ["📸 Instagram: instagr.am/goncharenko8721"]
-        },
-        "gurov": {
-            "names": {0: "Андрій Гуров", 1: "Andrii Gurov", 2: "Andrii Gurov"},
-            "links": ["🌐 Facebook: fb.com/andrej.gurov.755581"]
-        },
-        "solovey": {
-            "names": {0: "Студія меблів «Соловей»", 1: "Solovey Furniture Studio", 2: "Möbelstudio Solovey"},
-            "links": ["📸 Instagram: instagr.am/mebelsolovei"]
-        },
-        "furniture park": {
-            "names": {0: "Меблевий парк", 1: "Furniture Park", 2: "Furniture Park"},
-            "links": [
-                "📸 Instagram: instagr.am/meblevyi_park",
-                "📸 Instagram: instagr.am/meblovo_ukraine",
-                "📢 Telegram: t.me/Meblevyi_park",
-                "📸 Instagram: instagr.am/renovaelite"
-            ]
-        }
-    }
-
-    # Локалізація системних назв полів
+    # 2. ПОШУК У ГЛОБАЛЬНІЙ БАЗІ
     prefixes = {
         0: {"year": "Рік", "brand": "Виробник"},
         1: {"year": "Year", "brand": "Manufacturer"},
@@ -234,33 +227,45 @@ def get_manufacturer_header(category, date_str, lang_idx):
     }
     pref = prefixes.get(lang_idx, prefixes[0])
 
-    # Пошук збігу в назві папки
-    for key, info in companies.items():
+    for key, info in COMPANIES_DB.items():
         if key in cat_lower:
             correct_name = info["names"].get(lang_idx, info["names"][0])
-            
-            # Базові рядки: Рік та ім'я майстра
             header_lines = [
                 f"📅 {pref['year']}: {year}",
                 f"🛠️ {pref['brand']}: {correct_name}"
             ]
-            # Додаємо красиві короткі лінки, якщо вони прописані в базі
             if info["links"]:
                 header_lines.extend(info["links"])
                 
             return "\n".join(header_lines) + "\n\n"
             
-    return ""  # Порожньо для невідомих категорій
-
+    return ""
 
 def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
-    """ШІ аналізує зображення та генерує натхненний опис обраною мовою."""
+    """ШІ аналізує зображення та генерує натхненний опис, знаючи реальне ім'я бренду."""
     gemini_key = os.environ.get("GEMINI_API_KEY")
     
     if not gemini_key:
         if lang_idx == 0: return "Якісні меблі для вашого затишку! 👇✨ #меблі #інтерєр"
         elif lang_idx == 1: return "Quality furniture for your comfort! 👇✨ #furniture #interiordesign"
         else: return "Qualitätsmöbel für Ihr gemütliches Zuhause! 👇✨ #moebel #interieur"
+
+    # 🔍 ВИЗНАЧЕННЯ РЕАЛЬНОГО ІМЕНІ ДЛЯ ШІ
+    cat_lower = category.lower()
+    real_manufacturer = category # фолбек, якщо не знайдено збігів
+    
+    if "montage various" in cat_lower:
+        real_manufacturer = "Професійний монтаж та збирання меблів" if lang_idx == 0 else "Professional furniture installation"
+    elif "various" in cat_lower:
+        real_manufacturer = "Сучасні меблеві тренди та концепти" if lang_idx == 0 else "Modern furniture trends and concepts"
+    elif "instruktion" in cat_lower:
+        real_manufacturer = "Конструкторські стандарти та ергономіка меблів" if lang_idx == 0 else "Furniture design standards and ergonomics"
+    else:
+        # Шукаємо реальний бренд у базі
+        for key, info in COMPANIES_DB.items():
+            if key in cat_lower:
+                real_manufacturer = info["names"].get(lang_idx, info["names"][0])
+                break
 
     models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
     
@@ -270,10 +275,11 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
         2: "Schreibe den Text ausschließlich auf DEUTSCH. Nutze Emojis."
     }
     
+    # Промпт тепер містить точну назву виробника/категорії
     prompt = (
         f"Ти професійний копірайтер та меблевий експерт. Подивись на ці зображення. "
         f"Напиши один короткий, натхненний пост для соцмереж. "
-        f"Категорія об'єкта: '{category}'. {lang_instructions.get(lang_idx, lang_instructions[0])} "
+        f"Виробник/Напрямок меблів: '{real_manufacturer}'. {lang_instructions.get(lang_idx, lang_instructions[0])} "
         f"КРИТИЧНО: Не пиши жодних передмов чи післямов. Тільки текст поста."
     )
 
