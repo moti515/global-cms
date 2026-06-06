@@ -56,12 +56,21 @@ jobs:
         import os
         import subprocess
 
-        # Тепер змінна гарантовано підтягнеться з env секції вище
+        # Отримуємо режим та назву вкладки
         mode = os.environ.get('FORCED_MODE', 'fb_post')
         target_tab = "Меблі"
         
         print(f"🚀 [Система] Зовнішній запуск API успішний!")
         print(f"📋 [Система] Режим: [{mode.upper()}], Аркуш: [{target_tab}]")
         
-        subprocess.run(['python', 'publish_content_mebli.py', mode, target_tab], check=True)
+        # Динамічний вибір скрипта залежно від режиму
+        if mode == 'ig_story':
+            script_name = 'publish_content_mebli_srorys.py'
+        else:
+            script_name = 'publish_content_mebli.py'
+            
+        print(f"🏃‍♂️ [Система] Запуск скрипта: {script_name}...")
+        
+        # Передаємо параметри у вибраний скрипт
+        subprocess.run(['python', script_name, mode, target_tab], check=True)
         EOF
