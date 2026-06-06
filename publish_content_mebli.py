@@ -262,12 +262,21 @@ def get_manufacturer_header(category, date_str, lang_idx):
     return ""  # Порожньо для всіх інших невизначених папок (Замість "Серія: ...")
 
 def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
+    """
+    Оновлена версія: ШІ аналізує кілька зображень та генерує натхненний пост 
+    обраною мовою, використовуючи сучасні моделі та каскадний захист від помилок.
+    """
     gemini_key = os.environ.get("GEMINI_API_KEY")
+    
+    # 1. Заглушки, якщо відсутній API-ключ
     if not gemini_key:
         if lang_idx == 0: return "Якісні меблі для вашого затишку! 👇✨ #меблі #інтерєр"
         elif lang_idx == 1: return "Quality furniture for your comfort! 👇✨ #furniture #interiordesign"
         else: return "Qualitätsmöbel für Ihr gemütliches Zuhause! 👇✨ #moebel #interieur"
 
+    # Актуальний пулінг моделей (від найновіших до перевірених)
+    models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+    
     lang_instructions = {
         0: "Напиши text виключно УКРАЇНСЬКОЮ мовою. Використовуй емодзі.",
         1: "Write the text exclusively in ENGLISH. Use emojis.",
@@ -277,28 +286,50 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
     prompt = (
         f"Ти професійний копірайтер та меблевий експерт. Подивись на ці зображення. "
         f"Напиши один короткий, натхненний пост для соцмереж. "
-        f"Категорія об'єкта: '{category}'. {lang_instructions[lang_idx]} "
-        f"КРИТИЧНО: Не пиши жодних передмов. Тільки text поста."
+        f"Категорія об'єкта: '{category}'. {lang_instructions.get(lang_idx, lang_instructions[0])} "
+        f"КРИТИЧНО: Не пиши жодних передмов чи післямов. Тільки text поста."
     )
 
-    parts = [{"text": prompt}]
-    for img_path in image_paths:
-        if os.path.exists(img_path):
+    try:
+        parts = [{"text": prompt}]
+        
+        # 2. Безпечне читання та додавання всіх наявних зображень
+        for img_path in image_paths:
+            if os.path.exists(img_path):
+                try:
+                    with open(img_path, "rb") as f:
+                        image_bytes = f.read()
+                    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+                    parts.append({
+                        "inlineData": {
+                            "mimeType": "image/jpeg",
+                            "data": base64_image
+                        }
+                    })
+                except Exception as e:
+                    print(f"⚠️ Не вдалося обробити файл {img_path}: {e}")
+        
+        payload = {"contents": [{"parts": parts}]}
+        
+        # 3. Каскадний запуск моделей із контролем таймауту
+        for model in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
             try:
-                with open(img_path, "rb") as f:
-                    base64_image = base64.b64encode(f.read()).decode('utf-8')
-                parts.append({"inlineData": {"mimeType": "image/jpeg", "data": base64_image}})
-            except: pass
-
-    payload = {"contents": [{"parts": parts}]}
-    for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
-        try:
-            res = requests.post(url, json=payload, timeout=25).json()
-            if 'candidates' in res and res['candidates']:
-                return res['candidates'][0]['content']['parts'][0]['text'].strip()
-        except: continue
-    return "Чудова робота нашої команди! Як вам результат? 👇😊"
+                res = requests.post(url, json=payload, timeout=20).json()
+                if 'candidates' in res and res['candidates']:
+                    return res['candidates'][0]['content']['parts'][0]['text'].strip()
+            except Exception as e:
+                print(f"⚠️ Модель {model} тимчасово недоступна: {e}. Пробуємо наступну...")
+                continue
+                
+        # 4. Дефолт, якщо API відхилив запити або ліміти вичерпано
+        print("⚠️ Жодна з моделей Gemini не відповіла успішно, активовано дефолт.")
+        return "Чудова робота нашої команди! Як вам результат? 👇😊"
+        
+    except Exception as e:
+        # 5. Критичний дефолт на випадок внутрішніх помилок коду
+        print(f"⚠️ Критична помилка виконання функції ШІ: {e}")
+        return "Чудова робота нашої команди! Як вам результат? 👇😊"
 
 def wait_for_meta_container(container_id, access_token):
     """Очікує завершення асинхронної обробки відео/медіа контейнера в Meta API."""
