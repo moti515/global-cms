@@ -81,24 +81,40 @@ def delete_from_imagekit(file_id: str):
     except: pass
 
 def get_manufacturer_header(category, date_str):
-    """Формує кастомний заголовок на основі категорії фабрики та дати"""
+    """Формує кастомний заголовок з клікабельними посиланнями для Facebook"""
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else "2026"
     cat_lower = category.lower()
     
     if "goncharenko" in cat_lower:
-        return f"📅 Рік: {year}\n🛠️ Виробник: @goncharenko8721\n\n"
+        return f"📅 Рік: {year}\n🛠️ Виробник: https://instagram.com/goncharenko8721\n\n"
+        
     elif "gurov" in cat_lower:
         return f"📅 Рік: {year}\n🛠️ Виробник: https://www.facebook.com/andrej.gurov.755581\n\n"
+        
     elif "solovey" in cat_lower:
-        return f"📅 Рік: {year}\n🛠️ Виробник: @mebelsolovei\n\n"
+        return f"📅 Рік: {year}\n🛠️ Виробник: https://instagram.com/mebelsolovei\n\n"
+        
     elif "furniture park" in cat_lower:
-        return f"📅 Рік: {year}\n🛠️ Виробник: Instagram @meblevyi_park + @meblovo_ukraine + @renovaelite | Telegram @Meblevyi_park\n\n"
+        return (
+            f"📅 Рік: {year}\n"
+            f"🛠️ Виробник: Furniture Park\n"
+            f"📸 Instagram:\n"
+            f"• https://instagram.com/meblevyi_park\n"
+            f"• https://instagram.com/meblovo_ukraine\n"
+            f"• https://instagram.com/renovaelite\n"
+            f"📢 Telegram:\n"
+            f"• https://t.me/Meblevyi_park\n\n"
+        )
+        
     elif "montage various" in cat_lower:
-        return f"📅 Рік: {year}\n🛠️ Монтаж: Меблі, у монтажі яких ми брали участь\n\n"
+        return f"📅 Рік: {year}\n🛠️ Монтаж: Меблі, у монтажі яких ми брали участь (професійне збирання)\n\n"
+        
     elif "various" in cat_lower:
-        return f"📅 Рік: {year}\n💡 Концепт: Цікаві меблеві рішення та ідеї\n\n"
+        return f"📅 Рік: {year}\n💡 Концепт: Цікаві меблеві рішення, тренди та ідеї з усього світу\n\n"
+        
     elif "instruktion" in cat_lower:
-        return "📐 Ергономіка та проектування: Корисні розміри, яких варто дотримуватися при дизайні меблів.\n\n"
+        return "📐 Ергономіка та проектування: Корисні стандарти та розміри, яких варто дотримуватися при проектуванні меблів.\n\n"
+        
     else:
         return f"📅 Рік: {year}\n📦 Серія: {category}\n\n"
 
