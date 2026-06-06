@@ -47,7 +47,7 @@ jobs:
         IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
         # Секрети Власні Меблі:
         IG_USER_ID: ${{ secrets.MEBLI_IG_USER_ID }}
-        FB_PAGE_ID: ${{ secrets.MEBLI_H_FB_PAGE_ID }}
+        FB_PAGE_ID: ${{ secrets.MEBLI_FB_PAGE_ID }}
         META_ACCESS_TOKEN: ${{ secrets.MEBLI_META_ACCESS_TOKEN }}
         # Прокидаємо input з GitHub Actions у системну змінну для Python
         FORCED_MODE: ${{ github.event.inputs.forced_mode }}
