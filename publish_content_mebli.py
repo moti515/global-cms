@@ -217,7 +217,7 @@ def delete_from_imagekit(file_id: str):
 
 def get_manufacturer_header(category, date_str, lang_idx):
     """Генерує заголовок відповідно до категорії та обраної мови (0=UK, 1=EN, 2=DE)."""
-    year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else "2026"
+    year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
     cat_lower = category.lower()
     
     if "goncharenko" in cat_lower:
@@ -332,6 +332,31 @@ def main():
     print(f"📊 [Режим: {mode.upper()}] Зчитування реєстру '{current_tab}'...")
     
     drive, sheets = get_services()
+
+    # =====================================================================
+    # 🌐 НОВИЙ БЛОК: Визначення комірки з мовою залежно від режиму (mode)
+    # =====================================================================
+    lang_cell = "F2" if mode == "fb_post" else ("G2" if mode == "ig_post" else "H2")
+    try:
+        lang_res = sheets.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID, range=f"'{current_tab}'!{lang_cell}"
+        ).execute()
+        # Беремо значення, приводимо до верхнього регістру та прибираємо пробіли
+        lang_value = lang_res.get('values', [['']])[0][0].strip().upper()
+    except Exception as e:
+        print(f"⚠️ Не вдалося прочитати комірку мови {lang_cell}: {e}. Ставимо UK за замовчуванням.")
+        lang_value = "UK"
+
+    # Мапінг значення з таблиці в цифровий індекс (0=UK, 1=EN, 2=DE)
+    if any(x in lang_value for x in ["EN", "ENG", "АНГЛ", "ENGLISH"]):
+        lang_idx = 1
+    elif any(x in lang_value for x in ["DE", "GER", "НІМ", "DEUTSCH"]):
+        lang_idx = 2
+    else:
+        lang_idx = 0  # Українська за замовчуванням (якщо там UK, UA, УКР або порожньо)
+        
+    print(f"🌐 Зчитано мову з комірки {lang_cell}: {lang_value} (Індекс: {lang_idx})")
+    # =====================================================================
     
     res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{current_tab}'!A2:H").execute()
     rows = res.get('values', [])
@@ -442,8 +467,8 @@ def main():
         return
 
     # ✍️ Збір контенту для публікації
-    header_text = get_manufacturer_header(category_name, target_date)
-    ai_text = generate_multimodal_caption(ai_analysis_images, category_name, target_date)
+    header_text = get_manufacturer_header(category_name, target_date, lang_idx)
+    ai_text = generate_multimodal_caption(ai_analysis_images, category_name, target_date, lang_idx)
     loc_footer = f"\n\n📍 Локація: {target_loc}" if target_loc and "Невідоме місце" not in target_loc else ""
     full_caption = f"{header_text}{ai_text}{loc_footer}"
 
