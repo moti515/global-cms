@@ -482,8 +482,8 @@ def main():
             final_path = jpg_path
             local_files.append(jpg_path)
 
-        # 📐 Оптимізація геометрії медіа відповідно до режиму
-        optimized_path = optimize_media_geometry(final_path, f_name, mime_type, mode=geom_mode)
+        # Оптимізація геометрії медіа для стрічки
+        optimized_path = optimize_media_geometry(final_path, f_name, mime_type)
         if optimized_path != final_path and optimized_path != local_path:
             local_files.append(optimized_path)
 
@@ -600,32 +600,6 @@ def main():
                 wait_for_meta_container(creation_id, META_ACCESS_TOKEN)
                 
             print("🚀 Фінальна публікація контейнера в Instagram стрічку...")
-            publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
-                "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
-            }).json()
-            res = publish_res
-
-    # ==========================================
-    # ⚡ ВАРІАНТ 3: INSTAGRAM СТОРІЗ (`ig_story`)
-    # ==========================================
-    elif mode == "ig_story":
-        print("⚡ Публікація елемента в Instagram Stories...")
-        is_vid = cloud_urls[0].lower().split('?')[0].endswith(('.mp4', '.mov', '.avi')) or "video" in cloud_urls[0]
-        param_type = "video_url" if is_vid else "image_url"
-        
-        story_payload = {
-            param_type: cloud_urls[0],
-            "media_type": "STORIES",
-            "access_token": META_ACCESS_TOKEN
-        }
-        
-        res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=story_payload).json()
-        if res and "id" in res:
-            creation_id = res["id"]
-            if is_vid or has_video:
-                wait_for_meta_container(creation_id, META_ACCESS_TOKEN)
-                
-            print("🚀 Фінальний деплой сторіз...")
             publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
                 "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
             }).json()
