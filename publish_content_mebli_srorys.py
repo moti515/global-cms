@@ -141,6 +141,7 @@ def optimize_video_story(local_path, f_name, text):
 # ✍️ ГАРМОНІЙНЕ НАКЛАДАННЯ ТЕКСТУ НА ЗОБРАЖЕННЯ (PILLOW)
 def overlay_text_on_image(image_path, text):
     try:
+        text = "".join(c for c in text if ord(c) < 128 or (0x0400 <= ord(c) <= 0x04FF) or c in "—–«»’'\".,!?-() ")
         with Image.open(image_path) as img:
             img = img.convert('RGBA')
             draw = ImageDraw.Draw(img)
@@ -258,9 +259,9 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
 
     models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
     lang_instructions = {
-        0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Використовуй емодзі.",
-        1: "Write the text exclusively in ENGLISH. Use emojis.",
-        2: "Schreibe den Text ausschließlich auf DEUTSCH. Nutze Emojis."
+        0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. КРИТИЧНО: НЕ використовуй жодних емодзі, смайлів чи спеціальних символів.",
+        1: "Write the text exclusively in ENGLISH. CRITICAL: Do NOT use any emojis or special symbols.",
+        2: "Schreibe den Text ausschließlich auf DEUTSCH. KRITISCH: Nutze absolute KEINE Emojis oder Sonderzeichen."
     }
     
     prompt = (
