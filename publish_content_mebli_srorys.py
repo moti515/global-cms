@@ -432,10 +432,15 @@ def main():
     print(f"🔍 Перевірка наявності файлів у гарячій папці [{HOT_FOLDER_ID}]...")
     try:
         hot_query = f"'{HOT_FOLDER_ID}' in parents and trashed = false"
-        hot_res = drive.files().list(q=hot_query, fields="files(id, name, mimeType, createdTime, modifiedTime)").execute()
+        hot_res = drive.files().list(
+            q=hot_query,
+            fields="nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size)",
+            orderBy="createdTime",
+            pageSize=50
+        ).execute()
         hot_files = hot_res.get('files', [])
     except Exception as e:
-        print(f"⚠️ Не вдалося перевірити гарячу папку: {e}")
+        print(f"❌ ПОМИЛКА під час отримання списку файлів з Google Диску: {e}")
         hot_files = []
 
     if hot_files:
