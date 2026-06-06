@@ -389,12 +389,31 @@ def main():
         print("ℹ️ Реєстр порожній.")
         return
 
+    # =====================================================================
+    # 🎯 ДИНАМІЧНЕ ВИЗНАЧЕННЯ КОЛОНКИ ЛІЧИЛЬНИКА ВІДПОВІДНО ДО РЕЖИМУ
+    # =====================================================================
+    if mode == "ig_post":
+        col_idx = 3
+        col_letter = "D"
+    elif mode == "ig_story":
+        col_idx = 4
+        col_letter = "E"
+    elif mode == "fb_post":
+        col_idx = 5
+        col_letter = "F"
+    else:
+        print(f"❌ Невідомий режим публікації: {mode}")
+        return
+
     valid_rows = []
     for i, r in enumerate(rows):
-        if len(r) >= 6:
+        # Перевіряємо, щоб довжини рядка вистачало для зчитування нашої колонки
+        if len(r) >= 3:  
             if r[2].lower() == "temporary": continue
             try:
-                counter = int(r[5]) if r[5] else 0
+                # Безпечно беремо значення лічильника з потрібного індексу
+                val = r[col_idx] if len(r) > col_idx and r[col_idx] else "0"
+                counter = int(val)
                 valid_rows.append({"row_idx": i + 2, "data": r, "counter": counter})
             except ValueError: continue
 
@@ -417,7 +436,7 @@ def main():
     print(f"📂 Обрано групу: {category_name} (Файлів у пулі: {len(selected_group_items)})")
 
     # =====================================================================
-    # 🌐 НОВА ЛОГІКА: Управління мовами через фіксовані комірки F2, G2, H2
+    # 🌐 Управління мовами через фіксовані комірки F2, G2, H2
     # =====================================================================
     lang_value = "UK"  # Значення за замовчуванням
     
@@ -660,17 +679,18 @@ def main():
     if res and ("id" in res or "post_id" in res):
         print(f"✅ Успішно опубліковано! ID контенту: {res.get('id', res.get('post_id'))}")
         
-        # 1. Оновлюємо лічильники використання медіафайлів
+        # 1. Оновлюємо лічильники використання медіафайлів (динамічна колонка)
         for item in selected_group_items:
             if item["data"][1].lower().endswith(VALID_MEDIA_EXTENSIONS):
                 new_val = item["counter"] + 1
-                range_to_update = f"'{current_tab}'!F{item['row_idx']}"
+                # Автоматично підставляється потрібна буква: D, E або F
+                range_to_update = f"'{current_tab}'!{col_letter}{item['row_idx']}"
                 try:
                     sheets.spreadsheets().values().update(
                         spreadsheetId=SPREADSHEET_ID, range=range_to_update,
                         valueInputOption='RAW', body={'values': [[new_val]]}
                     ).execute()
-                    print(f"✍️ Лічильник рядка {item['row_idx']} збільшено до {new_val}.")
+                    print(f"✍️ Лічильник рядка {item['row_idx']} у колонці {col_letter} збільшено до {new_val}.")
                 except Exception as e:
                     print(f"⚠️ Помилка збереження лічильника в Таблицю: {e}")
                     
