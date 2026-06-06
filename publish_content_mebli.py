@@ -54,12 +54,12 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
     except Exception as e:
         print(f"❌ Не вдалося записати помилку на службовий аркуш: {e}")
 
-def optimize_media_geometry(local_path, filename, mime_type, mode="post"):
-    """Оптимізує пропорції зображень та відео під вимоги Meta (стрічка/stories)."""
+def optimize_media_geometry(local_path, filename, mime_type):
+    """Оптимізує пропорції зображень під вимоги Meta для звичайних постів у стрічку."""
     if not os.path.exists(local_path):
         return local_path
 
-    if mode == 'post' and mime_type == "image/jpeg":
+    if mime_type == "image/jpeg":
         try:
             with Image.open(local_path) as img:
                 img = img.convert('RGB')
@@ -86,48 +86,6 @@ def optimize_media_geometry(local_path, filename, mime_type, mode="post"):
                     return padded_post_path
         except Exception as e:
             print(f"⚠️ Помилка калібрування геометрії поста: {e}")
-
-    elif mode == 'story' and mime_type == "image/jpeg":
-        print("📐 Режим Сторіс: вписуємо зображення у формат 1080x1920...")
-        story_path = os.path.join('temp_mebli', 'story_padded_' + filename.rsplit('.', 1)[0] + '.jpg')
-        try:
-            with Image.open(local_path) as img:
-                img = img.convert('RGB')
-                orig_w, orig_h = img.size
-                
-                target_w, target_h = 1080, 1920
-                canvas = Image.new('RGB', (target_w, target_h), (20, 20, 20))
-                
-                scale = min(target_w / orig_w, target_h / orig_h)
-                new_w = int(orig_w * scale)
-                new_h = int(orig_h * scale)
-                
-                resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                paste_x = (target_w - new_w) // 2
-                paste_y = (target_h - new_h) // 2
-                canvas.paste(resized_img, (paste_x, paste_y))
-                canvas.save(story_path, 'JPEG', quality=95)
-                return story_path
-        except Exception as e:
-            print(f"⚠️ Не вдалося відформатувати Сторіс: {e}")
-
-    elif mode == 'story' and mime_type == "video/mp4":
-        print("📐 Режим Сторіс для ВІДЕО: вписуємо у формат 1080x1920 через ffmpeg...")
-        story_video_path = os.path.join('temp_mebli', 'story_padded_' + filename.rsplit('.', 1)[0] + '.mp4')
-        
-        ffmpeg_cmd = [
-            'ffmpeg', '-y', '-i', local_path,
-            '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black',
-            '-movflags', 'faststart', '-pix_fmt', 'yuv420p',
-            story_video_path
-        ]
-        
-        result = subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if result.returncode == 0:
-            print("✅ Відео успішно конвертовано у вертикальний формат з полями!")
-            return story_video_path
-        else:
-            print("⚠️ Не вдалося обробити відео через ffmpeg, повертаємо оригінал.")
 
     return local_path
 
