@@ -174,23 +174,32 @@ def extract_intellectual_date(f, meta_date):
     return final_dt.strftime('%d.%m.%Y')
 
 def scan_folders_structure(drive_service, folder_id, top_category, drive_files_dict):
-    """Рекурсивно знаходить файли, додаючи createdTime та modifiedTime для дельти"""
+    """Рекурсивно знаходить файли, зберігаючи назву підпапки 1-го рівня як категорію"""
     if folder_id == TEMPORARY_FOLDER_ID: return
     page_token = None
     while True:
         q = f"'{folder_id}' in parents and trashed = false"
-        # 🔥 Додано modifiedTime в список fields
-        res = drive_service.files().list(q=q, fields="nextPageToken, files(id, name, mimeType, createdTime, modifiedTime)", pageSize=1000, pageToken=page_token).execute()
+        res = drive_service.files().list(
+            q=q, 
+            fields="nextPageToken, files(id, name, mimeType, createdTime, modifiedTime)", 
+            pageSize=1000, 
+            pageToken=page_token
+        ).execute()
+        
         for f in res.get('files', []):
             if f['mimeType'] == 'application/vnd.google-apps.folder':
-                scan_folders_structure(drive_service, f['id'], top_category, drive_files_dict)
+                # 🔥 КЛЮЧОВА ЗМІНА: Якщо поточна папка — це корінь, 
+                # то для її дочірньої папки категорією стає її власна назва.
+                # Якщо ми вже глибше — категорія (top_category) просто передається далі.
+                next_category = f['name'] if folder_id == FURNITURE_ROOT_ID else top_category
+                scan_folders_structure(drive_service, f['id'], next_category, drive_files_dict)
             else:
                 lower_name = f['name'].lower()
                 if f['mimeType'].startswith(('image/', 'video/')) or lower_name.endswith(VALID_EXTENSIONS):
                     drive_files_dict[f['id']] = {
                         "name": f['name'], 
                         "mime": f['mimeType'], 
-                        "category": top_category, 
+                        "category": top_category,  # Тут тепер завжди буде правильний топ-рівень
                         "createdTime": f.get('createdTime'),
                         "modifiedTime": f.get('modifiedTime')
                     }
@@ -270,10 +279,8 @@ def main():
             service_map[sub_id] = [sub_id, sub_name, TAB_NAME, "НІ", "✨ Нова папка меблів!"]
         else: service_map[sub_id][1] = sub_name
 
-    # Збір всіх файлів на Диску
+    # Збір всіх файлів на Диску (запуск в один прохід від кореня)
     drive_files = {}
-    for sub_id, sub_name in current_drive_subfolders.items():
-        scan_folders_structure(drive, sub_id, sub_name, drive_files)
     scan_folders_structure(drive, FURNITURE_ROOT_ID, "Різне", drive_files)
 
     # Зчитування поточної таблиці "Меблі"
