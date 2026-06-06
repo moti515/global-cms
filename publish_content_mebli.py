@@ -367,38 +367,43 @@ def main():
     print(f"📂 Обрано групу: {category_name} (Файлів у пулі: {len(selected_group_items)})")
 
     # =====================================================================
-    # 🌐 ОНОВЛЕНЙ ДИНАМІЧНИЙ БЛОК: Управління мовами через службовий аркуш
+    # 🌐 НОВА ЛОГІКА: Управління мовами через фіксовані комірки F2, G2, H2
     # =====================================================================
     lang_value = "UK"  # Значення за замовчуванням
-    try:
-        # Зчитуємо конфігурацію папок (стовпці A-H, де F=FB, G=IG Post, H=IG Story)
-        service_res = sheets.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:H"
-        ).execute()
-        service_rows = service_res.get('values', [])
-        
-        # Шукаємо рядок, який відповідає обраній категорії (назва папки в стовпці B [індекс 1])
-        for s_row in service_rows:
-            if len(s_row) > 1 and s_row[1] == category_name:
-                # Визначаємо індекс стовпця мови: F (5) для fb_post, G (6) для ig_post, H (7) для ig_story
-                col_idx = 5 if mode == "fb_post" else (6 if mode == "ig_post" else 7)
-                if len(s_row) > col_idx and s_row[col_idx]:
-                    lang_value = s_row[col_idx].strip().upper()
-                break
-    except Exception as e:
-        print(f"⚠️ Не вдалося прочитати мову зі службового аркуша для папки [{category_name}]: {e}")
+    
+    # Визначаємо цільову комірку залежно від режиму публікації
+    if mode == "fb_post":
+        target_lang_cell = "'⚙️ Налаштування Папок'!F2"
+    elif mode == "ig_post":
+        target_lang_cell = "'⚙️ Налаштування Папок'!G2"
+    else:  # ig_story
+        target_lang_cell = "'⚙️ Налаштування Папок'!H2"
 
-    # Мапінг значення з таблиці в цифровий індекс (0=UK, 1=EN, 2=DE)
+    try:
+        # Зчитуємо конкретне значення поточної мови з потрібної комірки
+        lang_res = sheets.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID, range=target_lang_cell
+        ).execute()
+        lang_values = lang_res.get('values', [])
+        if lang_values and lang_values[0]:
+            lang_value = lang_values[0][0].strip().upper()
+    except Exception as e:
+        print(f"⚠️ Не вдалося прочитати мову з комірки {target_lang_cell}: {e}")
+
+    # Мапінг значення з таблиці в цифровий індекс (0=UK, 1=EN, 2=DE) та визначення наступної мови
     if any(x in lang_value for x in ["EN", "ENG", "АНГЛ", "ENGLISH"]):
         lang_idx = 1
+        next_lang_value = "DE"
     elif any(x in lang_value for x in ["DE", "GER", "НІМ", "DEUTSCH"]):
         lang_idx = 2
+        next_lang_value = "UK"
     else:
         lang_idx = 0  # Українська за замовчуванням
+        next_lang_value = "EN"
         
-    print(f"🌐 Динамічно зчитано мову зі службового аркуша: {lang_value} (Індекс: {lang_idx})")
+    print(f"🌐 Зчитано поточну мову з {target_lang_cell}: {lang_value} (Індекс: {lang_idx}). Наступна мова буде: {next_lang_value}")
     # =====================================================================
-
+    
     os.makedirs('temp_mebli', exist_ok=True)
     local_files = []
     cloud_urls = []
@@ -605,6 +610,7 @@ def main():
     if res and ("id" in res or "post_id" in res):
         print(f"✅ Успішно опубліковано! ID контенту: {res.get('id', res.get('post_id'))}")
         
+        # 1. Оновлюємо лічильники використання медіафайлів
         for item in selected_group_items:
             if item["data"][1].lower().endswith(VALID_MEDIA_EXTENSIONS):
                 new_val = item["counter"] + 1
@@ -617,6 +623,17 @@ def main():
                     print(f"✍️ Лічильник рядка {item['row_idx']} збільшено до {new_val}.")
                 except Exception as e:
                     print(f"⚠️ Помилка збереження лічильника в Таблицю: {e}")
+                    
+        # 2. ОНОВЛЕННЯ МОВИ ДЛЯ НАСТУПНОГО ЗАПУСКУ (F2, G2 або H2)
+        try:
+            sheets.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID, range=target_lang_cell,
+                valueInputOption='RAW', body={'values': [[next_lang_value]]}
+            ).execute()
+            print(f"🔄 Мову на наступний раз для комірки {target_lang_cell} успішно змінено на: {next_lang_value}")
+        except Exception as e:
+            print(f"⚠️ Не вдалося оновити мову в комірці {target_lang_cell}: {e}")
+            
     else:
         print(f"❌ Помилка дистриб'юції контенту Meta API: {res}")
 
