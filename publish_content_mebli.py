@@ -216,65 +216,94 @@ def delete_from_imagekit(file_id: str):
     except: pass
 
 def get_manufacturer_header(category, date_str, lang_idx):
-    """Генерує заголовок відповідно до категорії та обраної мови (0=UK, 1=EN, 2=DE)."""
+    """
+    Генерує естетичний заголовок відповідно до категорії, 
+    мапінгу реальних імен компаній та обраної мови (0=UK, 1=EN, 2=DE).
+    """
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
     cat_lower = category.lower()
     
-    if "goncharenko" in cat_lower:
-        if lang_idx == 0: return f"📅 Рік: {year}\n🛠️ Виробник: https://instagram.com/goncharenko8721\n\n"
-        elif lang_idx == 1: return f"📅 Year: {year}\n🛠️ Manufacturer: https://instagram.com/goncharenko8721\n\n"
-        else: return f"📅 Jahr: {year}\n🛠️ Hersteller: https://instagram.com/goncharenko8721\n\n"
-        
-    elif "gurov" in cat_lower:
-        if lang_idx == 0: return f"📅 Рік: {year}\n🛠️ Виробник: https://www.facebook.com/andrej.gurov.755581\n\n"
-        elif lang_idx == 1: return f"📅 Year: {year}\n🛠️ Manufacturer: https://www.facebook.com/andrej.gurov.755581\n\n"
-        else: return f"📅 Jahr: {year}\n🛠️ Hersteller: https://www.facebook.com/andrej.gurov.755581\n\n"
-        
-    elif "solovey" in cat_lower:
-        if lang_idx == 0: return f"📅 Рік: {year}\n🛠️ Виробник: https://instagram.com/mebelsolovei\n\n"
-        elif lang_idx == 1: return f"📅 Year: {year}\n🛠️ Manufacturer: https://instagram.com/mebelsolovei\n\n"
-        else: return f"📅 Jahr: {year}\n🛠️ Hersteller: https://instagram.com/mebelsolovei\n\n"
-        
-    elif "furniture park" in cat_lower:
-        if lang_idx == 0:
-            return f"📅 Рік: {year}\n🛠️ Виробник: Furniture Park\n📸 Instagram:\n• https://instagram.com/meblevyi_park\n• https://instagram.com/meblovo_ukraine\n• https://instagram.com/renovaelite\n📢 Telegram:\n• https://t.me/Meblevyi_park\n\n"
-        elif lang_idx == 1:
-            return f"📅 Year: {year}\n🛠️ Manufacturer: Furniture Park\n📸 Instagram:\n• https://instagram.com/meblevyi_park\n• https://instagram.com/meblovo_ukraine\n• https://instagram.com/renovaelite\n📢 Telegram:\n• https://t.me/Meblevyi_park\n\n"
-        else:
-            return f"📅 Jahr: {year}\n🛠️ Hersteller: Furniture Park\n📸 Instagram:\n• https://instagram.com/meblevyi_park\n• https://instagram.com/meblovo_ukraine\n• https://instagram.com/renovaelite\n📢 Telegram:\n• https://t.me/Meblevyi_park\n\n"
-            
-    elif "montage various" in cat_lower:
-        if lang_idx == 0: return f"📅 Рік: {year}\n🛠️ Монтаж: Меблі, у монтажі яких мы брали участь (професійне збирання)\n\n"
+    # =====================================================================
+    # 1. СПЕЦІАЛЬНІ КАТЕГОРІЇ (Концепти, Інструкції, Загальний монтаж)
+    # =====================================================================
+    if "montage various" in cat_lower:
+        if lang_idx == 0: return f"📅 Рік: {year}\n🛠️ Монтаж: Меблі, у монтажі яких ми брали участь (професійне збирання)\n\n"
         elif lang_idx == 1: return f"📅 Year: {year}\n🛠️ Assembly: Furniture we helped assemble (professional installation)\n\n"
         else: return f"📅 Jahr: {year}\n🛠️ Montage: Möbel, bei deren Montage wir mitgewirkt haben (professioneller Aufbau)\n\n"
         
-    elif "various" in cat_lower:
+    if "various" in cat_lower:
         if lang_idx == 0: return f"📅 Рік: {year}\n💡 Концепт: Цікаві меблеві рішення, тренди та ідеї з усього світу\n\n"
         elif lang_idx == 1: return f"📅 Year: {year}\n💡 Concept: Interesting furniture solutions, trends, and ideas from around the world\n\n"
         else: return f"📅 Jahr: {year}\n💡 Konzept: Interessante Möbellösungen, Trends und Ideen aus aller Welt\n\n"
         
-    elif "instruktion" in cat_lower:
-        # Для папки інструкцій рік повністю прибрано за запитом
+    if "instruktion" in cat_lower:
         if lang_idx == 0: return "📐 Ергономіка та проектування: Корисні стандарти та розміри, яких варто дотримуватися при проектуванні меблів.\n\n"
         elif lang_idx == 1: return "📐 Ergonomics and Design: Useful standards and dimensions to follow when designing furniture.\n\n"
         else: return "📐 Ergonomie und Konstruktion: Nützliche Standards und Maße, die bei der Möbelkonstruktion beachtet werden sollten.\n\n"
-        
-    return ""  # Порожньо для всіх інших невизначених папок (Замість "Серія: ...")
+
+    # =====================================================================
+    # 2. БАЗА ДАНИХ КОМПАНІЙ ТА МАЙСТРІВ (Мапінг імен та естетичних посилань)
+    # =====================================================================
+    companies = {
+        "goncharenko": {
+            "names": {0: "Олександр Гончаренко", 1: "Oleksandr Goncharenko", 2: "Oleksandr Goncharenko"},
+            "links": ["📸 Instagram: instagr.am/goncharenko8721"]
+        },
+        "gurov": {
+            "names": {0: "Андрій Гуров", 1: "Andrii Gurov", 2: "Andrii Gurov"},
+            "links": ["🌐 Facebook: fb.com/andrej.gurov.755581"]
+        },
+        "solovey": {
+            "names": {0: "Студія меблів «Соловей»", 1: "Solovey Furniture Studio", 2: "Möbelstudio Solovey"},
+            "links": ["📸 Instagram: instagr.am/mebelsolovei"]
+        },
+        "furniture park": {
+            "names": {0: "Меблевий парк", 1: "Furniture Park", 2: "Furniture Park"},
+            "links": [
+                "📸 Instagram: instagr.am/meblevyi_park",
+                "📸 Instagram: instagr.am/meblovo_ukraine",
+                "📢 Telegram: t.me/Meblevyi_park",
+                "📸 Instagram: instagr.am/renovaelite"
+            ]
+        }
+    }
+
+    # Локалізація системних назв полів
+    prefixes = {
+        0: {"year": "Рік", "brand": "Виробник"},
+        1: {"year": "Year", "brand": "Manufacturer"},
+        2: {"year": "Jahr", "brand": "Hersteller"}
+    }
+    pref = prefixes.get(lang_idx, prefixes[0])
+
+    # Пошук збігу в назві папки
+    for key, info in companies.items():
+        if key in cat_lower:
+            correct_name = info["names"].get(lang_idx, info["names"][0])
+            
+            # Базові рядки: Рік та ім'я майстра
+            header_lines = [
+                f"📅 {pref['year']}: {year}",
+                f"🛠️ {pref['brand']}: {correct_name}"
+            ]
+            # Додаємо красиві короткі лінки, якщо вони прописані в базі
+            if info["links"]:
+                header_lines.extend(info["links"])
+                
+            return "\n".join(header_lines) + "\n\n"
+            
+    return ""  # Порожньо для невідомих категорій
+
 
 def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
-    """
-    Оновлена версія: ШІ аналізує кілька зображень та генерує натхненний пост 
-    обраною мовою, використовуючи сучасні моделі та каскадний захист від помилок.
-    """
+    """ШІ аналізує зображення та генерує натхненний опис обраною мовою."""
     gemini_key = os.environ.get("GEMINI_API_KEY")
     
-    # 1. Заглушки, якщо відсутній API-ключ
     if not gemini_key:
         if lang_idx == 0: return "Якісні меблі для вашого затишку! 👇✨ #меблі #інтерєр"
         elif lang_idx == 1: return "Quality furniture for your comfort! 👇✨ #furniture #interiordesign"
         else: return "Qualitätsmöbel für Ihr gemütliches Zuhause! 👇✨ #moebel #interieur"
 
-    # Актуальний пулінг моделей (від найновіших до перевірених)
     models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
     
     lang_instructions = {
@@ -287,31 +316,23 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
         f"Ти професійний копірайтер та меблевий експерт. Подивись на ці зображення. "
         f"Напиши один короткий, натхненний пост для соцмереж. "
         f"Категорія об'єкта: '{category}'. {lang_instructions.get(lang_idx, lang_instructions[0])} "
-        f"КРИТИЧНО: Не пиши жодних передмов чи післямов. Тільки text поста."
+        f"КРИТИЧНО: Не пиши жодних передмов чи післямов. Тільки текст поста."
     )
 
     try:
         parts = [{"text": prompt}]
-        
-        # 2. Безпечне читання та додавання всіх наявних зображень
         for img_path in image_paths:
             if os.path.exists(img_path):
                 try:
                     with open(img_path, "rb") as f:
                         image_bytes = f.read()
                     base64_image = base64.b64encode(image_bytes).decode('utf-8')
-                    parts.append({
-                        "inlineData": {
-                            "mimeType": "image/jpeg",
-                            "data": base64_image
-                        }
-                    })
+                    parts.append({"inlineData": {"mimeType": "image/jpeg", "data": base64_image}})
                 except Exception as e:
                     print(f"⚠️ Не вдалося обробити файл {img_path}: {e}")
         
         payload = {"contents": [{"parts": parts}]}
         
-        # 3. Каскадний запуск моделей із контролем таймауту
         for model in models_to_try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
             try:
@@ -322,12 +343,10 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
                 print(f"⚠️ Модель {model} тимчасово недоступна: {e}. Пробуємо наступну...")
                 continue
                 
-        # 4. Дефолт, якщо API відхилив запити або ліміти вичерпано
         print("⚠️ Жодна з моделей Gemini не відповіла успішно, активовано дефолт.")
         return "Чудова робота нашої команди! Як вам результат? 👇😊"
         
     except Exception as e:
-        # 5. Критичний дефолт на випадок внутрішніх помилок коду
         print(f"⚠️ Критична помилка виконання функції ШІ: {e}")
         return "Чудова робота нашої команди! Як вам результат? 👇😊"
 
