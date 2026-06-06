@@ -215,37 +215,59 @@ def delete_from_imagekit(file_id: str):
         requests.delete(f"https://api.imagekit.io/v1/files/{file_id}", auth=(imagekit_key, ''), timeout=15)
     except: pass
 
-def get_manufacturer_header(category, date_str):
+def get_manufacturer_header(category, date_str, lang_idx):
+    """Генерує заголовок відповідно до категорії та обраної мови (0=UK, 1=EN, 2=DE)."""
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else "2026"
     cat_lower = category.lower()
     
     if "goncharenko" in cat_lower:
-        return f"📅 Рік: {year}\n🛠️ Виробник: https://instagram.com/goncharenko8721\n\n"
+        if lang_idx == 0: return f"📅 Рік: {year}\n🛠️ Виробник: https://instagram.com/goncharenko8721\n\n"
+        elif lang_idx == 1: return f"📅 Year: {year}\n🛠️ Manufacturer: https://instagram.com/goncharenko8721\n\n"
+        else: return f"📅 Jahr: {year}\n🛠️ Hersteller: https://instagram.com/goncharenko8721\n\n"
+        
     elif "gurov" in cat_lower:
-        return f"📅 Рік: {year}\n🛠️ Виробник: https://www.facebook.com/andrej.gurov.755581\n\n"
+        if lang_idx == 0: return f"📅 Рік: {year}\n🛠️ Виробник: https://www.facebook.com/andrej.gurov.755581\n\n"
+        elif lang_idx == 1: return f"📅 Year: {year}\n🛠️ Manufacturer: https://www.facebook.com/andrej.gurov.755581\n\n"
+        else: return f"📅 Jahr: {year}\n🛠️ Hersteller: https://www.facebook.com/andrej.gurov.755581\n\n"
+        
     elif "solovey" in cat_lower:
-        return f"📅 Рік: {year}\n🛠️ Виробник: https://instagram.com/mebelsolovei\n\n"
+        if lang_idx == 0: return f"📅 Рік: {year}\n🛠️ Виробник: https://instagram.com/mebelsolovei\n\n"
+        elif lang_idx == 1: return f"📅 Year: {year}\n🛠️ Manufacturer: https://instagram.com/mebelsolovei\n\n"
+        else: return f"📅 Jahr: {year}\n🛠️ Hersteller: https://instagram.com/mebelsolovei\n\n"
+        
     elif "furniture park" in cat_lower:
-        return (
-            f"📅 Рік: {year}\n🛠️ Виробник: Furniture Park\n📸 Instagram:\n"
-            f"• https://instagram.com/meblevyi_park\n• https://instagram.com/meblovo_ukraine\n• https://instagram.com/renovaelite\n"
-            f"📢 Telegram:\n• https://t.me/Meblevyi_park\n\n"
-        )
+        if lang_idx == 0:
+            return f"📅 Рік: {year}\n🛠️ Виробник: Furniture Park\n📸 Instagram:\n• https://instagram.com/meblevyi_park\n• https://instagram.com/meblovo_ukraine\n• https://instagram.com/renovaelite\n📢 Telegram:\n• https://t.me/Meblevyi_park\n\n"
+        elif lang_idx == 1:
+            return f"📅 Year: {year}\n🛠️ Manufacturer: Furniture Park\n📸 Instagram:\n• https://instagram.com/meblevyi_park\n• https://instagram.com/meblovo_ukraine\n• https://instagram.com/renovaelite\n📢 Telegram:\n• https://t.me/Meblevyi_park\n\n"
+        else:
+            return f"📅 Jahr: {year}\n🛠️ Hersteller: Furniture Park\n📸 Instagram:\n• https://instagram.com/meblevyi_park\n• https://instagram.com/meblovo_ukraine\n• https://instagram.com/renovaelite\n📢 Telegram:\n• https://t.me/Meblevyi_park\n\n"
+            
     elif "montage various" in cat_lower:
-        return f"📅 Рік: {year}\n🛠️ Монтаж: Меблі, у монтажі яких ми брали участь (професійне збирання)\n\n"
+        if lang_idx == 0: return f"📅 Рік: {year}\n🛠️ Монтаж: Меблі, у монтажі яких мы брали участь (професійне збирання)\n\n"
+        elif lang_idx == 1: return f"📅 Year: {year}\n🛠️ Assembly: Furniture we helped assemble (professional installation)\n\n"
+        else: return f"📅 Jahr: {year}\n🛠️ Montage: Möbel, bei deren Montage wir mitgewirkt haben (professioneller Aufbau)\n\n"
+        
     elif "various" in cat_lower:
-        return f"📅 Рік: {year}\n💡 Концепт: Цікаві меблеві рішення, тренди та ідеї з усього світу\n\n"
+        if lang_idx == 0: return f"📅 Рік: {year}\n💡 Концепт: Цікаві меблеві рішення, тренди та ідеї з усього світу\n\n"
+        elif lang_idx == 1: return f"📅 Year: {year}\n💡 Concept: Interesting furniture solutions, trends, and ideas from around the world\n\n"
+        else: return f"📅 Jahr: {year}\n💡 Konzept: Interessante Möbellösungen, Trends und Ideen aus aller Welt\n\n"
+        
     elif "instruktion" in cat_lower:
-        return "📐 Ергономіка та проектування: Корисні стандарти та розміри, яких варто дотримуватися при проектуведении меблів.\n\n"
-    else:
-        return f"📅 Рік: {year}\n📦 Серія: {category}\n\n"
+        # Для папки інструкцій рік повністю прибрано за запитом
+        if lang_idx == 0: return "📐 Ергономіка та проектування: Корисні стандарти та розміри, яких варто дотримуватися при проектуванні меблів.\n\n"
+        elif lang_idx == 1: return "📐 Ergonomics and Design: Useful standards and dimensions to follow when designing furniture.\n\n"
+        else: return "📐 Ergonomie und Konstruktion: Nützliche Standards und Maße, die bei der Möbelkonstruktion beachtet werden sollten.\n\n"
+        
+    return ""  # Порожньо для всіх інших невизначених папок (Замість "Серія: ...")
 
-def generate_multimodal_caption(image_paths, category, date_str):
+def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if not gemini_key:
-        return "Якісні меблі для вашого затишку! 👇✨ #меблі #інтерєр"
+        if lang_idx == 0: return "Якісні меблі для вашого затишку! 👇✨ #меблі #інтерєр"
+        elif lang_idx == 1: return "Quality furniture for your comfort! 👇✨ #furniture #interiordesign"
+        else: return "Qualitätsmöbel für Ihr gemütliches Zuhause! 👇✨ #moebel #interieur"
 
-    lang_idx = int(time.time() // (8.5 * 3600)) % 3
     lang_instructions = {
         0: "Напиши text виключно УКРАЇНСЬКОЮ мовою. Використовуй емодзі.",
         1: "Write the text exclusively in ENGLISH. Use emojis.",
