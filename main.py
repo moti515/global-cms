@@ -216,6 +216,7 @@ def main():
         results = service.files().list(
             q=f"'{FOLDER_ID}' in parents and trashed = false",
             fields="nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size)",
+            orderBy="createdTime",
             pageSize=50
         ).execute()
     except Exception as e:
