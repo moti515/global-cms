@@ -5,7 +5,6 @@ import time
 import base64
 import requests
 import subprocess
-import yaml
 from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -16,31 +15,19 @@ from pillow_heif import register_heif_opener
 # Реєстрація підтримки HEIF/HEIC
 register_heif_opener()
 
-# ⚙️ ЗАВАНТАЖЕННЯ ДИНАМІЧНИХ НАЛАШТУВАНЬ (YAML -> Environment Variables -> Defaults)
-config = {}
-if os.path.exists("config.yml"):
-    try:
-        with open("config.yml", "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f) or {}
-        print("📦 Налаштування успішно завантажено з config.yml")
-    except Exception as e:
-        print(f"⚠️ Помилка зчитування config.yml: {e}. Використовуємо системні змінні.")
+# ⚙️ НАЛАШТУВАННЯ (Беруться напряму з системних змінних GitHub Actions)
+IG_USER_ID = os.environ.get("IG_USER_ID")
+FB_PAGE_ID = os.environ.get("FB_PAGE_ID")
+META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN")
 
-FB_PAGE_ID = config.get("FB_PAGE_ID") or os.environ.get("MEBLI_FB_PAGE_ID") or os.environ.get("FB_PAGE_ID")
-META_ACCESS_TOKEN = config.get("META_ACCESS_TOKEN") or os.environ.get("MEBLI_ACCESS_TOKEN") or os.environ.get("META_ACCESS_TOKEN")
-IG_USER_ID = config.get("IG_USER_ID") or os.environ.get("IG_USER_ID")
-SPREADSHEET_ID = config.get("SPREADSHEET_ID", '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0')
-TAB_NAME = config.get("TAB_NAME", "Меблі")
+SPREADSHEET_ID = '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0'
+TAB_NAME = "Меблі"
 
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
-# Конвертуємо списки з YAML у кортежі для endswith()
-VALID_MEDIA_EXTENSIONS = tuple(config.get("VALID_MEDIA_EXTENSIONS", [
-    '.gif', '.heic', '.heif', '.jpeg', '.jpg', '.mp4', '.png', '.webp', '.mov', '.avi'
-]))
-DOCUMENT_EXTENSIONS = tuple(config.get("DOCUMENT_EXTENSIONS", [
-    '.pdf', '.doc', '.docx', '.djvu', '.txt', '.rtf', '.fb2', '.epub'
-]))
+# Списки форматів (додано .mov та .avi для відео)
+VALID_MEDIA_EXTENSIONS = ('.gif', '.heic', '.heif', '.jpeg', '.jpg', '.mp4', '.png', '.webp', '.mov', '.avi')
+DOCUMENT_EXTENSIONS = ('.pdf', '.doc', '.docx', '.djvu', '.txt', '.rtf', '.fb2', '.epub')
 
 def get_services():
     key_dict = json.loads(os.environ['GDRIVE_SERVICE_ACCOUNT_KEY'])
