@@ -5,6 +5,7 @@ import time
 import base64
 import requests
 import subprocess
+import yaml
 from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -15,29 +16,62 @@ from pillow_heif import register_heif_opener
 # Реєстрація підтримки HEIF/HEIC
 register_heif_opener()
 
-# ⚙️ НАЛАШТУВАННЯ ТА СЕКРЕТИ
-FB_PAGE_ID = os.environ.get("MEBLI_FB_PAGE_ID")
-META_ACCESS_TOKEN = os.environ.get("MEBLI_ACCESS_TOKEN")
-SPREADSHEET_ID = '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0'
-TAB_NAME = "Меблі"
+# ⚙️ ЗАВАНТАЖЕННЯ ДИНАМІЧНИХ НАЛАШТУВАНЬ (YAML -> Environment Variables -> Defaults)
+config = {}
+if os.path.exists("config.yml"):
+    try:
+        with open("config.yml", "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+        print("📦 Налаштування успішно завантажено з config.yml")
+    except Exception as e:
+        print(f"⚠️ Помилка зчитування config.yml: {e}. Використовуємо системні змінні.")
+
+FB_PAGE_ID = config.get("FB_PAGE_ID") or os.environ.get("MEBLI_FB_PAGE_ID") or os.environ.get("FB_PAGE_ID")
+META_ACCESS_TOKEN = config.get("META_ACCESS_TOKEN") or os.environ.get("MEBLI_ACCESS_TOKEN") or os.environ.get("META_ACCESS_TOKEN")
+IG_USER_ID = config.get("IG_USER_ID") or os.environ.get("IG_USER_ID")
+SPREADSHEET_ID = config.get("SPREADSHEET_ID", '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0')
+TAB_NAME = config.get("TAB_NAME", "Меблі")
 
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
-VALID_MEDIA_EXTENSIONS = ('.gif', '.heic', '.heif', '.jpeg', '.jpg', '.mp4', '.png', '.webp', '.mov', '.avi')
+
+# Конвертуємо списки з YAML у кортежі для endswith()
+VALID_MEDIA_EXTENSIONS = tuple(config.get("VALID_MEDIA_EXTENSIONS", [
+    '.gif', '.heic', '.heif', '.jpeg', '.jpg', '.mp4', '.png', '.webp', '.mov', '.avi'
+]))
+DOCUMENT_EXTENSIONS = tuple(config.get("DOCUMENT_EXTENSIONS", [
+    '.pdf', '.doc', '.docx', '.djvu', '.txt', '.rtf', '.fb2', '.epub'
+]))
 
 def get_services():
     key_dict = json.loads(os.environ['GDRIVE_SERVICE_ACCOUNT_KEY'])
     creds = service_account.Credentials.from_service_account_info(key_dict, scopes=SCOPES)
     return build('drive', 'v3', credentials=creds), build('sheets', 'v4', credentials=creds)
 
+def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="непідтримуваний формат"):
+    """Записує попередження про непідтримуваний формат на службовий аркуш налаштувань."""
+    try:
+        res = sheets_service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:E"
+        ).execute()
+        rows = res.get('values', [])
+        
+        for idx, row in enumerate(rows):
+            if len(row) > 1 and row[1] == folder_name:
+                range_to_update = f"'⚙️ Налаштування Папок'!E{idx + 2}"
+                sheets_service.spreadsheets().values().update(
+                    spreadsheetId=SPREADSHEET_ID, range=range_to_update,
+                    valueInputOption='RAW', body={'values': [[f"⚠️ {reason}: {file_name}"]]}
+                ).execute()
+                print(f"📝 Зафіксовано системне попередження для [{folder_name}] на службовому аркуші.")
+                break
+    except Exception as e:
+        print(f"❌ Не вдалося записати помилку на службовий аркуш: {e}")
+
 def optimize_media_geometry(local_path, filename, mime_type, mode="post"):
-    """
-    Оптимізує пропорції зображень та відео під вимоги Meta (стрічка/stories),
-    щоб запобігти помилкам кропу чи помилці API 36003.
-    """
+    """Оптимізує пропорції зображень та відео під вимоги Meta (стрічка/stories)."""
     if not os.path.exists(local_path):
         return local_path
 
-    # 1️⃣ ОПТИМІЗАЦІЯ ПРОПОРЦІЙ ДЛЯ ЗВИЧАЙНИХ ПОСТІВ (Межі Meta: 0.8 - 1.91)
     if mode == 'post' and mime_type == "image/jpeg":
         try:
             with Image.open(local_path) as img:
@@ -56,7 +90,7 @@ def optimize_media_geometry(local_path, filename, mime_type, mode="post"):
                         new_w = w
                         new_h = int(w / 1.91)
                         
-                    canvas = Image.new('RGB', (new_w, new_h), (255, 255, 255)) # Елегантне біле тло
+                    canvas = Image.new('RGB', (new_w, new_h), (255, 255, 255))
                     paste_x = (new_w - w) // 2
                     paste_y = (new_h - h) // 2
                     
@@ -66,7 +100,6 @@ def optimize_media_geometry(local_path, filename, mime_type, mode="post"):
         except Exception as e:
             print(f"⚠️ Помилка калібрування геометрії поста: {e}")
 
-    # 2️⃣ ОПТИМІЗАЦІЯ ФОТО ПІД СТОРІС (1080x1920)
     elif mode == 'story' and mime_type == "image/jpeg":
         print("📐 Режим Сторіс: вписуємо зображення у формат 1080x1920...")
         story_path = os.path.join('temp_fb', 'story_padded_' + filename.rsplit('.', 1)[0] + '.jpg')
@@ -76,7 +109,7 @@ def optimize_media_geometry(local_path, filename, mime_type, mode="post"):
                 orig_w, orig_h = img.size
                 
                 target_w, target_h = 1080, 1920
-                canvas = Image.new('RGB', (target_w, target_h), (20, 20, 20)) # Нейтральне темне тло
+                canvas = Image.new('RGB', (target_w, target_h), (20, 20, 20))
                 
                 scale = min(target_w / orig_w, target_h / orig_h)
                 new_w = int(orig_w * scale)
@@ -91,7 +124,6 @@ def optimize_media_geometry(local_path, filename, mime_type, mode="post"):
         except Exception as e:
             print(f"⚠️ Не вдалося відформатувати Сторіс: {e}")
 
-    # 3️⃣ ОПТИМІЗАЦІЯ ВІДЕО ПІД СТОРІС (1080x1920 через FFmpeg)
     elif mode == 'story' and mime_type == "video/mp4":
         print("📐 Режим Сторіс для ВІДЕО: вписуємо у формат 1080x1920 через ffmpeg...")
         story_video_path = os.path.join('temp_fb', 'story_padded_' + filename.rsplit('.', 1)[0] + '.mp4')
@@ -113,10 +145,7 @@ def optimize_media_geometry(local_path, filename, mime_type, mode="post"):
     return local_path
 
 def get_google_drive_direct_url(file_id, local_file_path=None):
-    """
-    Каскадний завантажувач медіафайлів на зовнішні хостинги з API.
-    Порядок: Catbox.moe -> ImageKit.io (Універсальний) -> ImgBB (Тільки фото) -> Google Drive API
-    """
+    """Каскадний завантажувач медіафайлів на зовнішні хостинги з API."""
     if local_file_path and os.path.exists(local_file_path):
         filename = os.path.basename(local_file_path)
         lower_name = filename.lower()
@@ -126,7 +155,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
         }
         
-        # 1️⃣ Спроба через Catbox.moe (Фото + Відео)
+        # 1️⃣ Catbox.moe
         print(f"☁️ Завантажуємо файл {filename} на Catbox.moe...")
         try:
             with open(local_file_path, 'rb') as f:
@@ -145,7 +174,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         except Exception as e:
             print(f"⚠️ Помилка з'єднання з Catbox: {e}. Пробуємо наступний хостинг...")
 
-        # 2️⃣ Спроба через ImageKit.io
+        # 2️⃣ ImageKit.io
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
         if imagekit_key:
             print(f"☁️ Завантажуємо файл {filename} на ImageKit.io...")
@@ -167,7 +196,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             except Exception as e:
                 print(f"⚠️ Помилка завантаження на ImageKit: {e}")
 
-        # 3️⃣ Спроба через ImgBB API (Тільки для Фото)
+        # 3️⃣ ImgBB API
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and mime_type == "image/jpeg":
             print(f"☁️ Завантажуємо фото {filename} на ImgBB API...")
@@ -199,29 +228,6 @@ def delete_from_imagekit(file_id: str):
         requests.delete(f"https://api.imagekit.io/v1/files/{file_id}", auth=(imagekit_key, ''), timeout=15)
     except: pass
 
-def wait_for_instagram_media(container_id, access_token, max_retries=15, delay=10):
-    """Циклічно перевіряє статус готовності медіаконтейнера в Instagram."""
-    url = f"https://graph.facebook.com/v19.0/{container_id}"
-    params = {"fields": "status_code", "access_token": access_token}
-    
-    for attempt in range(1, max_retries + 1):
-        try:
-            response = requests.get(url, params=params).json()
-            status = response.get("status_code")
-            if status == "FINISHED":
-                print("✅ Відео успішно оброблено й готове до публікації!")
-                return True
-            elif status == "ERROR":
-                print(f"❌ Помилка обробки відео на стороні Meta: {response}")
-                return False
-            elif status in ["IN_PROGRESS", "CREATING"]:
-                print(f"⏳ Обробка відео (Статус: {status}). Чекаємо {delay} сек... ({attempt}/{max_retries})")
-                time.sleep(delay)
-        except Exception as e:
-            print(f"⚠️ Помилка запиту статусу: {e}")
-            time.sleep(delay)
-    return False
-
 def get_manufacturer_header(category, date_str):
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else "2026"
     cat_lower = category.lower()
@@ -243,7 +249,7 @@ def get_manufacturer_header(category, date_str):
     elif "various" in cat_lower:
         return f"📅 Рік: {year}\n💡 Концепт: Цікаві меблеві рішення, тренди та ідеї з усього світу\n\n"
     elif "instruktion" in cat_lower:
-        return "📐 Ергономіка та проектування: Корисні стандарти та розміри, яких варто дотримуватися при проектуванні меблів.\n\n"
+        return "📐 Ергономіка та проектування: Корисні стандарти та розміри, яких варто дотримуватися при проектуведении меблів.\n\n"
     else:
         return f"📅 Рік: {year}\n📦 Серія: {category}\n\n"
 
@@ -254,16 +260,16 @@ def generate_multimodal_caption(image_paths, category, date_str):
 
     lang_idx = int(time.time() // (8.5 * 3600)) % 3
     lang_instructions = {
-        0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Використовуй емодзі.",
+        0: "Напиши text виключно УКРАЇНСЬКОЮ мовою. Використовуй емодзі.",
         1: "Write the text exclusively in ENGLISH. Use emojis.",
         2: "Schreibe den Text ausschließlich auf DEUTSCH. Nutze Emojis."
     }
     
     prompt = (
-        f"Ти професійний копірайтер та меблевий експерт. Подивись на ці зображення (це один об'єкт або серія корисних схем). "
-        f"Напиши один короткий, натхненний, мотиваційний або експертний пост для соцмереж. "
-        f"Врахуй, що категорія об'єкта: '{category}'. {lang_instructions[lang_idx]} "
-        f"КРИТИЧНО: Не пиши жодних передмов чи системних повідомлень. Тільки готовий текст поста."
+        f"Ти професійний копірайтер та меблевий експерт. Подивись на ці зображення. "
+        f"Напиши один короткий, натхненний пост для соцмереж. "
+        f"Категорія об'єкта: '{category}'. {lang_instructions[lang_idx]} "
+        f"КРИТИЧНО: Не пиши жодних передмов. Тільки текст поста."
     )
 
     parts = [{"text": prompt}]
@@ -324,7 +330,7 @@ def main():
     first_key = list(groups.keys())[0]
     selected_group_items = groups[first_key][:4]
     category_name, target_date, target_loc = first_key
-    print(f"📂 Обрано групу: {category_name} (Файлів: {len(selected_group_items)})")
+    print(f"📂 Обрано групу: {category_name} (Файлів у пулі: {len(selected_group_items)})")
 
     os.makedirs('temp_fb', exist_ok=True)
     local_files = []
@@ -333,21 +339,34 @@ def main():
     has_video = False
     ai_analysis_images = []
 
-    # 📥 Завантаження, оптимізація геометрії та деплой на хостинги
+    # 📥 Фільтрація, завантаження та оптимізація медіафайлв
     for item in selected_group_items:
         f_id, f_name = item["data"][0], item["data"][1]
         lower_name = f_name.lower()
         
+        # 🛑 ОБРОБКА НЕПІДТРИМУВАНИХ ФОРМАТІВ (Валідація перед завантаженням)
+        if not lower_name.endswith(VALID_MEDIA_EXTENSIONS):
+            reason = "непідтримуваний формат"
+            if lower_name.endswith(DOCUMENT_EXTENSIONS):
+                reason = "непідтримуваний формат (документ)"
+            
+            print(f"⚠️ Файл '{f_name}' має непідтримуваний формат. Реєструємо помилку...")
+            log_unsupported_to_service(sheets, category_name, f_name, reason=reason)
+            continue  # Пропускаємо цей файл та йдемо далі
+
         local_path = os.path.join('temp_fb', f_name)
         print(f"📥 Завантаження з Drive: {f_name}...")
         
-        request = drive.files().get_media(fileId=f_id)
-        with open(local_path, 'wb') as fh:
-            downloader = MediaIoBaseDownload(fh, request)
-            done = False
-            while not done: _, done = downloader.next_chunk()
+        try:
+            request = drive.files().get_media(fileId=f_id)
+            with open(local_path, 'wb') as fh:
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while not done: _, done = downloader.next_chunk()
+        except Exception as e:
+            print(f"❌ Помилка завантаження файлу {f_name}: {e}")
+            continue
 
-        # Первинна фільтрація розширень
         final_path = local_path
         mime_type = "image/jpeg"
         
@@ -361,12 +380,12 @@ def main():
             final_path = jpg_path
             local_files.append(jpg_path)
 
-        # 📐 Запуск блоку інваріантної оптимізації пропорцій (за замовчуванням 'post')
+        # 📐 Оптимізація геометрії медіа
         optimized_path = optimize_media_geometry(final_path, f_name, mime_type, mode="post")
         if optimized_path != final_path and optimized_path != local_path:
             local_files.append(optimized_path)
 
-        # Генерація кадрів для ШІ аналізу відео
+        # Створення прев'ю кадру для ШІ (якщо відео)
         if mime_type == "video/mp4":
             frame_path = os.path.join('temp_fb', f"frame_{f_id}.jpg")
             subprocess.run(['ffmpeg', '-y', '-i', optimized_path, '-ss', '00:00:01', '-vframes', '1', frame_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -376,22 +395,26 @@ def main():
 
         local_files.append(local_path)
 
-        # ☁️ Відправка готового оптимізованого медіа на хостинг
+        # ☁️ Завантаження на хмарний хостинг
         pub_url, ik_id = get_google_drive_direct_url(f_id, local_file_path=optimized_path)
         cloud_urls.append(pub_url)
         if ik_id: ik_ids.append(ik_id)
 
-    # ✍️ Формування контенту поста
+    if not cloud_urls:
+        print("ℹ️ Немає доступних медіафайлів для публікації (всі файли відфільтровано або не завантажено).")
+        return
+
+    # ✍️ Збір контенту для публікації
     header_text = get_manufacturer_header(category_name, target_date)
     ai_text = generate_multimodal_caption(ai_analysis_images, category_name, target_date)
     loc_footer = f"\n\n📍 Локація: {target_loc}" if target_loc and "Невідоме місце" not in target_loc else ""
     full_caption = f"{header_text}{ai_text}{loc_footer}"
 
     if not FB_PAGE_ID or not META_ACCESS_TOKEN:
-        print("❌ Відсутні ключі авторизації Facebook!")
+        print("❌ Відсутні ключі авторизації Facebook! Перевірте config.yml або змінні оточення.")
         return
 
-    # 📤 Публікація в Meta API
+    # 📤 Деплой у Facebook Graph API
     try:
         if has_video:
             print("🎬 Публікація відео-поста у Facebook...")
@@ -419,22 +442,6 @@ def main():
         if "id" in res or "post_id" in res:
             print(f"✅ Успішно опубліковано! ID: {res.get('id', res.get('post_id'))}")
             for item in selected_group_items:
-                sheets.spreadsheets().values().update(
-                    spreadsheetId=SPREADSHEET_ID, range=f"'{TAB_NAME}'!F{item['row_idx']}",
-                    valueInputOption='RAW', body={'values': [[item["fb_counter"] + 1]]}
-                ).execute()
-            print(f"📊 Лічильники в Sheets оновлено.")
-        else:
-            print(f"⚠️ Помилка відповіді Meta API: {res}")
-
-    except Exception as e:
-        print(f"❌ Критична помилка під час публікації: {e}")
-    finally:
-        # 🧹 Повне очищення середовища
-        for ik_id in ik_ids: delete_from_imagekit(ik_id)
-        for f in set(local_files + ai_analysis_images):
-            if os.path.exists(f): os.remove(f)
-        print("🧹 Тимчасові медіафайли успішно видалено.")
-
-if __name__ == '__main__':
-    main()
+                # Оновлюємо лічильник тільки для успішно оброблених файлів цієї групи
+                if item["data"][1].lower().endswith(VALID_MEDIA_EXTENSIONS):
+                    sheets
