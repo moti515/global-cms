@@ -57,7 +57,7 @@ def get_sheet_id(sheets_service, title):
         if s['properties']['title'] == title: return s['properties']['sheetId']
     return 0
 
-# --- БЛОК АНАЛІЗУ МЕТАДАНИХ (ВЗЯТО З ВАШОГО СКРИПТА) ---
+# --- БЛОК АНАЛІЗУ МЕТАДАНИХ ---
 def get_exif_data(image_path):
     date_str, lat, lon = None, None, None
     try:
@@ -117,13 +117,70 @@ def get_location_name(lat, lon):
         return f"{city}, {country}" if city and country else country
     except: return None
 
+# --- ІНТЕЛЕКТУАЛЬНИЙ БЛОК ВАЛІДАЦІЇ ДАТИ ---
+def extract_intellectual_date(f, meta_date):
+    """
+    Інтелектуально визначає дату створення об'єкта:
+    1. Перевіряє метадані (EXIF/відео) з валідацією.
+    2. Якщо ні — бере найдавнішу дату з Google Drive (створення/зміна).
+    3. Якщо все зламано — бере поточний час.
+    """
+    final_dt = None
+    now = datetime.now()
+
+    # Крок 1: Спроба розпарсити дату з метаданих файлу (EXIF / ffprobe)
+    if meta_date:
+        for date_format in ('%Y:%m:%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S'):
+            try:
+                clean_meta = str(meta_date).strip()[:19].replace('T', ' ')
+                clean_fmt = date_format.replace('T', ' ')
+                dt_parsed = datetime.strptime(clean_meta, clean_fmt)
+                
+                if dt_parsed.year >= 2010 and dt_parsed <= now:
+                    final_dt = dt_parsed
+                    break
+            except:
+                continue
+        
+        if not final_dt:
+            print(f"⚠️ Метадані файлу {f.get('name')} містять нелогічну дату: {meta_date}. Шукаємо заміну на Диску.")
+
+    # Крок 2: Резервний аналіз дат створення/зміни на самому Google Диску
+    if not final_dt:
+        try:
+            created_raw = f.get('createdTime')
+            modified_raw = f.get('modifiedTime')
+            
+            dt_created = datetime.strptime(created_raw[:19], '%Y-%m-%dT%H:%M:%S') if created_raw else None
+            dt_modified = datetime.strptime(modified_raw[:19], '%Y-%m-%dT%H:%M:%S') if modified_raw else None
+            
+            valid_gdrive_dates = [
+                d for d in [dt_created, dt_modified] 
+                if d and d.year >= 2010 and d <= now
+            ]
+            
+            if valid_gdrive_dates:
+                final_dt = min(valid_gdrive_dates)
+            else:
+                print(f"⚠️ Дати на Диску для {f.get('name')} за межами логіки (2010-сьогодні).")
+        except Exception as e:
+            print(f"⚠️ Помилка зчитування дат з Диску для {f.get('name')}: {e}")
+
+    # Крок 3: Якщо абсолютно всі дати пошкоджені або нелогічні — ставимо сьогоднішню
+    if not final_dt:
+        print(f"🛑 Не вдалося знайти адекватну дату для {f.get('name')}. Присвоєно поточну дату.")
+        final_dt = now
+        
+    return final_dt.strftime('%d.%m.%Y')
+
 def scan_folders_structure(drive_service, folder_id, top_category, drive_files_dict):
-    """Рекурсивно знаходить файли, групуючи за категорією 1-го рівня"""
+    """Рекурсивно знаходить файли, додаючи createdTime та modifiedTime для дельти"""
     if folder_id == TEMPORARY_FOLDER_ID: return
     page_token = None
     while True:
         q = f"'{folder_id}' in parents and trashed = false"
-        res = drive_service.files().list(q=q, fields="nextPageToken, files(id, name, mimeType, createdTime)", pageSize=1000, pageToken=page_token).execute()
+        # 🔥 Додано modifiedTime в список fields
+        res = drive_service.files().list(q=q, fields="nextPageToken, files(id, name, mimeType, createdTime, modifiedTime)", pageSize=1000, pageToken=page_token).execute()
         for f in res.get('files', []):
             if f['mimeType'] == 'application/vnd.google-apps.folder':
                 scan_folders_structure(drive_service, f['id'], top_category, drive_files_dict)
@@ -131,13 +188,20 @@ def scan_folders_structure(drive_service, folder_id, top_category, drive_files_d
                 lower_name = f['name'].lower()
                 if f['mimeType'].startswith(('image/', 'video/')) or lower_name.endswith(VALID_EXTENSIONS):
                     drive_files_dict[f['id']] = {
-                        "name": f['name'], "mime": f['mimeType'], "category": top_category, "createdTime": f['createdTime']
+                        "name": f['name'], 
+                        "mime": f['mimeType'], 
+                        "category": top_category, 
+                        "createdTime": f.get('createdTime'),
+                        "modifiedTime": f.get('modifiedTime')
                     }
         page_token = res.get('nextPageToken')
         if not page_token: break
 
-def download_and_extract_meta(drive_service, file_id, file_name, mime_type, created_time):
-    """Тимчасово завантажує ТІЛЬКИ НОВИЙ файл для витягування EXIF/GPS"""
+def download_and_extract_meta(drive_service, file_id, f_info):
+    """Тимчасово завантажує ТІЛЬКИ НОВИЙ файл для витягування EXIF/GPS та інтелектуальної дати"""
+    file_name = f_info['name']
+    mime_type = f_info['mime']
+    
     os.makedirs('temp_meta', exist_ok=True)
     local_path = os.path.join('temp_meta', file_name)
     
@@ -151,7 +215,8 @@ def download_and_extract_meta(drive_service, file_id, file_name, mime_type, crea
         fh.close()
     except Exception as e:
         print(f"⚠️ Помилка завантаження для метаданих {file_name}: {e}")
-        return datetime.now().strftime('%d.%m.%Y'), "Невідоме місце"
+        # Якщо файл не завантажився, все одно рахуємо дату через резервний крок Диску
+        return extract_intellectual_date(f_info, None), "Невідоме місце"
 
     # Аналіз метаданих
     meta_date, lat, lon = None, None, None
@@ -162,20 +227,8 @@ def download_and_extract_meta(drive_service, file_id, file_name, mime_type, crea
     elif mime_type.startswith('video/') or lower_name.endswith(('.mp4', '.mov', '.avi', '.mkv')):
         meta_date, lat, lon = get_video_metadata(local_path)
 
-    # Валідація дати
-    final_dt = None
-    if meta_date:
-        try:
-            dt_parsed = datetime.strptime(meta_date[:19], '%Y:%m:%d %H:%M:%S')
-            if dt_parsed.year >= 2010 and dt_parsed <= datetime.now(): final_dt = dt_parsed
-        except: pass
-    if not final_dt:
-        try:
-            final_dt = datetime.strptime(created_time[:19], '%Y-%m-%dT%H:%M:%S')
-        except:
-            final_dt = datetime.now()
-
-    file_date = final_dt.strftime('%d.%m.%Y')
+    # 🔥 Виклик нового інтелектуального блоку валідації дати
+    file_date = extract_intellectual_date(f_info, meta_date)
     
     # Геокодування
     location = "Невідоме місце"
@@ -234,9 +287,9 @@ def main():
     # Обробка дельти
     for f_id, f_info in drive_files.items():
         if f_id not in sheet_map:
-            print(f"🆕 Знайдено новий файл: {f_info['name']}. Аналізуємо EXIF/GPS...")
-            # 🔥 Завантажуємо і аналізуємо ТІЛЬКИ ЦЕЙ НОВИЙ ФАЙЛ
-            f_date, f_loc = download_and_extract_meta(drive, f_id, f_info['name'], f_info['mime'], f_info['createdTime'])
+            print(f"🆕 Знайдено новий файл: {f_info['name']}. Аналізуємо EXIF/GPS та дату...")
+            # 🔥 Передаємо словник f_info повністю в оновлену функцію
+            f_date, f_loc = download_and_extract_meta(drive, f_id, f_info)
             
             rows_to_append.append([
                 f_id, f_info['name'], f_info['category'], 
@@ -244,7 +297,6 @@ def main():
                 f_date, f_loc
             ])
         else:
-            # Якщо файл уже є, просто перевіряємо чи не перейменували його або не перемістили в іншу папку
             existing = sheet_map[f_id]
             if existing["data"][1] != f_info['name'] or existing["data"][2] != f_info['category']:
                 sheets.spreadsheets().values().update(
