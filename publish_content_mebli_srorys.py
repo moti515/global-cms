@@ -109,33 +109,93 @@ def optimize_image_story(final_upload_path, orig_name):
         print(f"⚠️ Не вдалося відформатувати фото під сторіз: {e}")
         return final_upload_path
 
+def get_video_duration(video_path):
+    """Повертає тривалість відео в секундах."""
+    cmd = ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nocues=1', video_path]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode == 0 and res.stdout:
+            return float(res.stdout.strip())
+    except Exception as e:
+        print(f"⚠️ Не вдалося визначити тривалість відео: {e}")
+    return 0.0
+
 # 📐 ОПТИМІЗАЦІЯ ВІДЕО ПІД СТОРІЗ (1080x1920) + НАКЛАДАННЯ ТЕКСТУ ЧЕРЕЗ FFMPEG
 def optimize_video_story(local_path, f_name, text):
-    print("🎬 Оптимізація Відео: підганяємо під формат 1080x1920 за допомогою FFmpeg...")
-    story_video_path = os.path.join('temp_mebli', 'story_padded_' + f_name.rsplit('.', 1)[0] + '.mp4')
+    print("🎬 Оптимізація Відео: підганяємо під ліміти Instagram (1080x1920, стиснення, спліт)...")
+    processed_files = []
     
+    duration = get_video_duration(local_path)
+    if duration == 0:
+        print("⚠️ Тривалість 0 або помилка аналізу. Спробуємо обробити як один файл.")
+        duration = 59.0 # Фолбек
+        
+    base_name = f_name.rsplit('.', 1)[0]
+    
+    # Фільтр масштабування та падінгу
     vf_filters = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black"
     
+    # Додавання тексту, якщо є
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     if os.path.exists(font_path) and text:
         clean_text = text.replace("'", "").replace(":", "\\:")
         vf_filters += f",drawtext=fontfile={font_path}:text='{clean_text}':x=(w-text_w)/2:y=1550:fontsize=34:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=20"
+
+    # Шаблон для вихідних файлів (на випадок нарізання)
+    output_template = os.path.join('temp_mebli', f'story_padded_{base_name}_part_%03d.mp4')
     
+    # Базові аргументи FFmpeg для стиснення та затискання бітрейту (щоб файл не важив багато)
     cmd = [
         'ffmpeg', '-y', '-i', local_path,
         '-vf', vf_filters,
-        '-c:v', 'libx264', '-profile:v', 'main', '-level:v', '4.0', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '128k',
-        story_video_path
+        '-c:v', 'libx264', 
+        '-profile:v', 'main', 
+        '-level:v', '4.0', 
+        '-pix_fmt', 'yuv420p',
+        '-b:v', '3000k',         # Цільовий бітрейт відео (3 Mbps — ідеальна якість для IG)
+        '-maxrate', '4500k',     # Максимальний піковий бітрейт
+        '-bufsize', '9000k',     # Буфер для стабілізації бітрейту
+        '-c:a', 'aac', 
+        '-b:a', '128k'           # Оптимальний звук
     ]
     
+    # Якщо відео довше за 60 секунд, вмикаємо сегментацію
+    if duration > 60.0:
+        print(f"✂️ Відео триває {duration:.1f} сек. Нарізаємо на частини по 60 секунд...")
+        cmd += [
+            '-f', 'segment',
+            '-segment_time', '60',
+            '-reset_timestamps', '1',
+            output_template
+        ]
+    else:
+        # Для коротких відео просто зберігаємо один файл
+        single_output = os.path.join('temp_mebli', f'story_padded_{base_name}.mp4')
+        cmd.append(single_output)
+
     try:
         res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if res.returncode == 0 and os.path.exists(story_video_path):
-            return story_video_path
+        if res.returncode == 0:
+            # Збираємо список створених файлів
+            if duration > 60.0:
+                # Шукаємо відкомпільовані сегменти в папці
+                dir_content = os.listdir('temp_mebli')
+                # Фільтруємо файли, що відповідають шаблону поточної сторіз
+                part_files = sorted([
+                    os.path.join('temp_mebli', f) for f in dir_content 
+                    if f.startswith(f'story_padded_{base_name}_part_') and f.endswith('.mp4')
+                ])
+                processed_files.extend(part_files)
+            else:
+                single_output = os.path.join('temp_mebli', f'story_padded_{base_name}.mp4')
+                if os.path.exists(single_output):
+                    processed_files.append(single_output)
+                    
+            return processed_files
     except Exception as e:
-        print(f"⚠️ FFmpeg завершився з помилкою: {e}")
-    return local_path
+        print(f"⚠️ Помилка під час рендерингу/нарізання відео через FFmpeg: {e}")
+        
+    return [local_path] # Якщо все зламалося, повертаємо оригінал
 
 # ✍️ ГАРМОНІЙНЕ НАКЛАДАННЯ ТЕКСТУ НА ЗОБРАЖЕННЯ (PILLOW)
 def overlay_text_on_image(image_path, text):
@@ -634,13 +694,9 @@ def main():
             print(f"\n🎬 [{idx_item + 1}/{len(selected_queue)}] Обробка вже завантаженого файлу з гарячої папки: {f_name}...")
 
         final_path = local_path
-        mime_type = "image/jpeg"
-        is_video = False
+        is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
         
-        if lower_name.endswith(('.mp4', '.mov', '.avi')):
-            is_video = True
-            mime_type = "video/mp4"
-        elif lower_name.endswith(('.heic', '.heif')):
+        if lower_name.endswith(('.heic', '.heif')):
             jpg_path = os.path.join('temp_mebli', f_name.rsplit('.', 1)[0] + '.jpg')
             with Image.open(local_path) as img:
                 img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
@@ -649,6 +705,7 @@ def main():
 
         local_files_to_clean.append(local_path)
 
+        # Створення прев'ю для AI, якщо це відео
         ai_media_snapshot = final_path
         if is_video:
             frame_path = os.path.join('temp_mebli', f"frame_{f_id}.jpg")
@@ -660,68 +717,95 @@ def main():
         story_caption_text = generate_story_caption([ai_media_snapshot], item["category"], item["date"], lang_idx, item["location"])
         print(f"💬 Текст для Сторіс: \"{story_caption_text}\"")
 
+        # Підготовка масиву медіафайлів для публікації
+        media_parts_to_upload = []
         if is_video:
-            optimized_path = optimize_video_story(final_path, f_name, story_caption_text)
+            # Отримуємо список нарізаних/стиснутих фрагментів відео
+            media_parts_to_upload = optimize_video_story(final_path, f_name, story_caption_text)
         else:
+            # Обробка фото
             optimized_path = optimize_image_story(final_path, f_name)
             overlay_text_on_image(optimized_path, story_caption_text)
+            media_parts_to_upload = [optimized_path]
 
-        if optimized_path != final_path and optimized_path != local_path:
-            local_files_to_clean.append(optimized_path)
+        item_published_successfully = False
 
-        pub_url, ik_id = get_google_drive_direct_url(f_id, local_file_path=optimized_path)
-        
-        if not pub_url:
-            print(f"⚠️ Не вдалося отримати публічне посилання для {f_name}.")
-            continue
-
-        print(f"📡 Надсилання сторіз в Meta API...")
-        param_type = "video_url" if is_video else "image_url"
-        payload = {
-            "media_type": "STORIES",
-            param_type: pub_url,
-            "access_token": META_ACCESS_TOKEN
-        }
-        
-        res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=payload).json()
-        
-        if res and "id" in res:
-            creation_id = res["id"]
-            is_ready = wait_for_meta_container(creation_id, META_ACCESS_TOKEN)
-            
-            if is_ready:
-                publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
-                    "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
-                }).json()
+        # Послідовна публікація кожного фрагмента
+        for sub_idx, active_path in enumerate(media_parts_to_upload):
+            if len(media_parts_to_upload) > 1:
+                print(f"📦 Обробка фрагмента [{sub_idx + 1}/{len(media_parts_to_upload)}] для файлу {f_name}...")
                 
-                if "id" in publish_res:
-                    print(f"✅ Сторіс [{f_name}] успішно опубліковано! ID: {publish_res['id']}")
-                    success_published_any = True
+            if active_path != final_path and active_path != local_path:
+                local_files_to_clean.append(active_path)
+
+            # Отримуємо лінк для Meta через ImageKit або пряме посилання
+            pub_url, ik_id = get_google_drive_direct_url(f_id, local_file_path=active_path)
+            
+            if not pub_url:
+                print(f"⚠️ Не вдалося отримати публічне посилання для фрагмента {active_path}.")
+                continue
+
+            print(f"📡 Надсилання сторіз в Meta API...")
+            param_type = "video_url" if is_video else "image_url"
+            payload = {
+                "media_type": "STORIES",
+                param_type: pub_url,
+                "access_token": META_ACCESS_TOKEN
+            }
+            
+            # 1. Створення контейнера
+            res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=payload).json()
+            
+            if res and "id" in res:
+                creation_id = res["id"]
+                # 2. Очікування готовності контейнера в Meta
+                is_ready = wait_for_meta_container(creation_id, META_ACCESS_TOKEN)
+                
+                if is_ready:
+                    # 3. Фінальна публікація
+                    publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
+                        "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
+                    }).json()
                     
-                    if item["mode"] == "sheet":
-                        new_val = item["counter_val"] + 1
-                        try:
-                            sheets.spreadsheets().values().update(
-                                spreadsheetId=SPREADSHEET_ID, range=item["counter_cell"],
-                                valueInputOption='RAW', body={'values': [[new_val]]}
-                            ).execute()
-                            print(f"✍️ Лічильник у {item['counter_cell']} оновлено на {new_val}.")
-                        except Exception as e:
-                            print(f"⚠️ Не вдалося зберегти лічильник: {e}")
-                    elif item["mode"] == "hot_folder":
-                        # Переміщення опублікованого файлу до папки кошика на Диску
-                        try:
-                            file_meta = drive.files().get(fileId=f_id, fields='parents').execute()
-                            previous_parents = ",".join(file_meta.get('parents', []))
-                            drive.files().update(
-                                fileId=f_id,
-                                addParents=TRASH_FOLDER_ID,
-                                removeParents=previous_parents,
-                                fields='id, parents'
-                            ).execute()
-                            print(f"🗑️ Файл [{f_name}] успішно переміщено до кошика на Google Диску.")
-                        except Exception as e:
-                            print(f"⚠️ Не вдалося перемістити файл {f_name} до кошика: {e}")
+                    if "id" in publish_res:
+                        print(f"✅ Фрагмент [{sub_idx + 1}/{len(media_parts_to_upload)}] успішно опубліковано! ID: {publish_res['id']}")
+                        item_published_successfully = True
+                        success_published_any = True
+                    else:
+                        print(f"❌ Помилка публікації сторіз в Meta API: {publish_res}")
+                else:
+                    print(f"❌ Контейнер медіафайлу не перейшов у стан готовності.")
+            else:
+                print(f"❌ Помилка створення контейнера сторіз: {res}")
+
+            if ik_id: 
+                delete_from_imagekit(ik_id)
+
+        # Оновлюємо статус/лічильники лише якщо бодай один фрагмент файлу успішно опубліковано
+        if item_published_successfully:
+            if item["mode"] == "sheet":
+                new_val = item["counter_val"] + 1
+                try:
+                    sheets.spreadsheets().values().update(
+                        spreadsheetId=SPREADSHEET_ID, range=item["counter_cell"],
+                        valueInputOption='RAW', body={'values': [[new_val]]}
+                    ).execute()
+                    print(f"✍️ Лічильник у {item['counter_cell']} оновлено на {new_val}.")
+                except Exception as e:
+                    print(f"⚠️ Не вдалося зберегти лічильник: {e}")
+            elif item["mode"] == "hot_folder":
+                try:
+                    file_meta = drive.files().get(fileId=f_id, fields='parents').execute()
+                    previous_parents = ",".join(file_meta.get('parents', []))
+                    drive.files().update(
+                        fileId=f_id,
+                        addParents=TRASH_FOLDER_ID,
+                        removeParents=previous_parents,
+                        fields='id, parents'
+                    ).execute()
+                    print(f"🗑️ Файл [{f_name}] успішно переміщено до кошика на Google Диску.")
+                except Exception as e:
+                    print(f"⚠️ Не вдалося перемістити файл {f_name} до кошика: {e}")
                 else:
                     print(f"❌ Помилка публікації сторіз в Meta API: {publish_res}")
             else:
