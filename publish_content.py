@@ -578,16 +578,23 @@ def main():
         print("📐 Режим Сторіс для ВІДЕО: інтелектуально вписуємо у формат 1080x1920 через ffmpeg...")
         story_video_path = os.path.join('temp_media', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.mp4')
         
-        # Контролюємо кодек та якість (CRF), щоб файл не важив як аватар Аватара
+        # Ультимативні налаштування під жорсткі вимоги Instagram API
         ffmpeg_cmd = [
             'ffmpeg', '-y', '-i', final_upload_path,
             '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black',
             '-c:v', 'libx264', 
-            '-crf', '26', 
+            '-profile:v', 'high',         # Чітко задаємо сумісний профіль
+            '-level', '4.2',
+            '-crf', '23',                 # Трохи покращуємо чіткість (актуально для тексту на мемах)
             '-preset', 'fast',
+            '-g', '60',                   # КРИТИЧНО: Ключовий кадр кожні 2 секунди (при 30 fps)
+            '-keyint_min', '60',
+            '-sc_threshold', '0',         # Вимикаємо динамічний розрахунок кадрів по зміні сцен
+            '-r', '30',                   # Жорсткі 30 FPS (прибирає плаваючу частоту кадрів VFR)
             '-c:a', 'aac', 
             '-b:a', '128k',
-            '-movflags', 'faststart',
+            '-ar', '44100',               # Стандартна частота звуку
+            '-movflags', 'faststart',     # Дозволяє програвати відео до повного завантаження
             '-pix_fmt', 'yuv420p',
             story_video_path
         ]
