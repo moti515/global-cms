@@ -280,7 +280,7 @@ def main():
             try:
                 dt_parsed = datetime.strptime(meta_date, '%Y:%m:%d %H:%M:%S')
                 # Валідація: дата має бути від 2010 року і не з майбутнього
-                if dt_parsed.year >= 2010 and dt_parsed <= now:
+                if dt_parsed.year >= 2000 and dt_parsed <= now:
                     final_dt = dt_parsed
                 else:
                     print(f"⚠️ Метадані файлу {f['name']} містять нелогічну дату: {meta_date}. Шукаємо заміну на Диску.")
