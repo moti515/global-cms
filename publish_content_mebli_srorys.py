@@ -663,7 +663,7 @@ def main():
         lang_idx = 0
         next_lang_value = "EN"
         
-    print(f"🌐 Поточна мова Сторіз: {lang_value} (Індекс: {lang_idx}). Наступна буде: {next_lang_value}")
+    print(f"🌐 Поточна мова Сторіс: {lang_value} (Індекс: {lang_idx}). Наступна буде: {next_lang_value}")
     
     local_files_to_clean = []
     success_published_any = False
@@ -720,10 +720,8 @@ def main():
         # Підготовка масиву медіафайлів для публікації
         media_parts_to_upload = []
         if is_video:
-            # Отримуємо список нарізаних/стиснутих фрагментів відео
             media_parts_to_upload = optimize_video_story(final_path, f_name, story_caption_text)
         else:
-            # Обробка фото
             optimized_path = optimize_image_story(final_path, f_name)
             overlay_text_on_image(optimized_path, story_caption_text)
             media_parts_to_upload = [optimized_path]
@@ -738,7 +736,6 @@ def main():
             if active_path != final_path and active_path != local_path:
                 local_files_to_clean.append(active_path)
 
-            # Отримуємо лінк для Meta через ImageKit або пряме посилання
             pub_url, ik_id = get_google_drive_direct_url(f_id, local_file_path=active_path)
             
             if not pub_url:
@@ -806,14 +803,6 @@ def main():
                     print(f"🗑️ Файл [{f_name}] успішно переміщено до кошика на Google Диску.")
                 except Exception as e:
                     print(f"⚠️ Не вдалося перемістити файл {f_name} до кошика: {e}")
-                else:
-                    print(f"❌ Помилка публікації сторіз в Meta API: {publish_res}")
-            else:
-                print(f"❌ Контейнер медіафайлу не перейшов у стан готовності.")
-        else:
-            print(f"❌ Помилка створення контейнера сторіз: {res}")
-
-        if ik_id: delete_from_imagekit(ik_id)
 
     if success_published_any:
         try:
