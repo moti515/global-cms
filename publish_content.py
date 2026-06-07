@@ -179,8 +179,7 @@ def delete_from_imagekit(file_id: str):
 def get_google_drive_direct_url(file_id, local_file_path=None):
     """
     Каскадний завантажувач медіафайлів на зовнішні хостинги з API.
-    Порядок: Catbox.moe -> ImageKit.io (Універсальний) -> ImgBB (Тільки фото) -> Google Drive API
-    Повертає кортеж: (direct_url, imagekit_file_id)
+    Оптимізовано за пам'яттю (стримінг файлів замість f.read()).
     """
     if local_file_path and os.path.exists(local_file_path):
         filename = os.path.basename(local_file_path)
@@ -191,93 +190,81 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
         }
         
-        # 1️⃣ Спроба через Catbox.moe (Фото + Відео)
-        print(f"☁️ Завантажуємо файл {filename} на Catbox.moe...")
+        # 1️⃣ Спроба через Catbox.moe (Фото + Відео) — СТРИМІНГ БЕЗ f.read()
+        print(f"☁️ Завантажуємо файл {filename} на Catbox.moe...", flush=True)
         try:
+            data_payload = {'reqtype': 'fileupload'}
+            # Відкриваємо файл і передаємо як об'єкт — requests сам зчитає його потоком
             with open(local_file_path, 'rb') as f:
-                file_bytes = f.read()
-                
-            if file_bytes:
-                data_payload = {'reqtype': 'fileupload'}
-                files_payload = {'fileToUpload': (filename, file_bytes, mime_type)}
-                
+                files_payload = {'fileToUpload': (filename, f, mime_type)}
                 res = requests.post(
                     'https://catbox.moe/user/api.php',
                     data=data_payload,
                     files=files_payload,
                     headers=browser_headers,
-                    timeout=(7, 25)
+                    timeout=(10, 60)  # Збільшений таймаут на вивантаження
                 )
                 
-                if res.status_code == 200 and res.text.startswith('http'):
-                    direct_url = res.text.strip()
-                    print(f"🔗 Отримано стабільне посилання від Catbox: {direct_url}")
-                    return direct_url, None  # ImageKit не використовувався, ID = None
-                else:
-                    print(f"⚠️ Catbox недоступний (Код {res.status_code}). Пробуємо ImageKit...")
+            if res.status_code == 200 and res.text.startswith('http'):
+                direct_url = res.text.strip()
+                print(f"🔗 Отримано стабільне посилання від Catbox: {direct_url}", flush=True)
+                return direct_url, None
+            else:
+                print(f"⚠️ Catbox відмовив (Код {res.status_code}). Пробуємо ImageKit...", flush=True)
         except Exception as e:
-            print(f"⚠️ Помилка з'єднання з Catbox: {e}. Пробуємо наступний хостинг...")
+            print(f"⚠️ Помилка з'єднання з Catbox: {e}. Пробуємо наступний хостинг...", flush=True)
 
-        # 2️⃣ Спроба через ImageKit.io (Оптимізовано під фото та великі відео)
+        # 2️⃣ Спроба через ImageKit.io
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
         if imagekit_key:
-            print(f"☁️ Завантажуємо файл {filename} на ImageKit.io...")
+            print(f"☁️ Завантажуємо файл {filename} на ImageKit.io...", flush=True)
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
                         'https://upload.imagekit.io/api/v1/files/upload',
                         auth=(imagekit_key, ''),
-                        files={
-                            'file': (filename, f, mime_type)
-                        },
+                        files={'file': (filename, f, mime_type)},
                         data={
                             'fileName': filename,
                             'useUniqueFileName': 'true'
                         },
-                        timeout=60
+                        timeout=90
                     )
                     
-                    if res.status_code in [200, 201]:
-                        res_data = res.json()
-                        direct_url = res_data.get('url')
-                        ik_id = res_data.get('fileId')  # Перехоплюємо ID для майбутнього видалення
-                        print(f"🔗 Отримано залізобетонне посилання від ImageKit: {direct_url}")
-                        return direct_url, ik_id
-                    else:
-                        print(f"⚠️ ImageKit відхилив запит (Код {res.status_code}): {res.text}")
+                if res.status_code in [200, 201]:
+                    res_data = res.json()
+                    direct_url = res_data.get('url')
+                    ik_id = res_data.get('fileId')
+                    print(f"🔗 Отримано залізобетонне посилання від ImageKit: {direct_url}", flush=True)
+                    return direct_url, ik_id
+                else:
+                    print(f"⚠️ ImageKit відхилив запит (Код {res.status_code}): {res.text}", flush=True)
             except Exception as e:
-                print(f"⚠️ Помилка завантаження на ImageKit: {e}")
-        else:
-            print("ℹ️ Змінна IMAGEKIT_PRIVATE_KEY відсутня. Пропускаємо ImageKit.")
+                print(f"⚠️ Помилка завантаження на ImageKit: {e}", flush=True)
 
         # 3️⃣ Спроба через ImgBB API (Тільки для Фото)
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and mime_type == "image/jpeg":
-            print(f"☁️ Завантажуємо photo {filename} на ImgBB API...")
+            print(f"☁️ Завантажуємо photo {filename} на ImgBB API...", flush=True)
             try:
                 with open(local_file_path, 'rb') as f:
-                    img_bytes = f.read()
-                    
-                if img_bytes:
                     res = requests.post(
                         'https://api.imgbb.com/1/upload',
                         data={'key': imgbb_key, 'expiration': 86400},
-                        files={'image': (filename, img_bytes, mime_type)},
+                        files={'image': (filename, f, mime_type)},
                         timeout=30
                     ).json()
                     
-                    if res.get('success'):
-                        direct_url = res['data']['url']
-                        print(f"🔗 Отримано залізобетонне посилання від ImgBB: {direct_url}")
-                        return direct_url, None
-                    else:
-                        print(f"⚠️ ImgBB повернув помилку: {res.get('error', {}).get('message')}")
+                if res.get('success'):
+                    direct_url = res['data']['url']
+                    print(f"🔗 Отримано залізобетонне посилання від ImgBB: {direct_url}", flush=True)
+                    return direct_url, None
+                else:
+                    print(f"⚠️ ImgBB повернув помилку: {res.get('error', {}).get('message')}", flush=True)
             except Exception as e:
-                print(f"⚠️ Помилка завантаження на ImgBB: {e}")
-        elif mime_type == "video/mp4":
-            print("ℹ️ ImgBB підтримує тільки зображення. Пропускаємо для відео.")
+                print(f"⚠️ Помилка завантаження на ImgBB: {e}", flush=True)
 
-    print(f"🚨 Всі хостинги відмовили! Аварійний режим для Google Drive ID: {file_id}")
+    print(f"🚨 Всі хостинги відмовили! Аварійний режим для Google Drive ID: {file_id}", flush=True)
     return f"https://docs.google.com/uc?export=download&id={file_id}", None
 
 def wait_for_instagram_media(container_id, access_token, max_retries=15, delay=10):
@@ -591,10 +578,15 @@ def main():
         print("📐 Режим Сторіс для ВІДЕО: інтелектуально вписуємо у формат 1080x1920 через ffmpeg...")
         story_video_path = os.path.join('temp_media', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.mp4')
         
-        # Фільтр ffmpeg стискає відео пропорційно під 1080x1920 і додає чорні поля (padding)
+        # Контролюємо кодек та якість (CRF), щоб файл не важив як аватар Аватара
         ffmpeg_cmd = [
             'ffmpeg', '-y', '-i', final_upload_path,
             '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black',
+            '-c:v', 'libx264', 
+            '-crf', '26', 
+            '-preset', 'fast',
+            '-c:a', 'aac', 
+            '-b:a', '128k',
             '-movflags', 'faststart',
             '-pix_fmt', 'yuv420p',
             story_video_path
