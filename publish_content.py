@@ -578,23 +578,24 @@ def main():
         print("📐 Режим Сторіс для ВІДЕО: інтелектуально вписуємо у формат 1080x1920 через ffmpeg...")
         story_video_path = os.path.join('temp_media', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.mp4')
         
-        # Ультимативні налаштування під жорсткі вимоги Instagram API
+        # Ультимативні налаштування під вимоги Instagram API + обрізання до 59 секунд
         ffmpeg_cmd = [
             'ffmpeg', '-y', '-i', final_upload_path,
             '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black',
             '-c:v', 'libx264', 
-            '-profile:v', 'high',         # Чітко задаємо сумісний профіль
+            '-profile:v', 'high',         
             '-level', '4.2',
-            '-crf', '23',                 # Трохи покращуємо чіткість (актуально для тексту на мемах)
+            '-crf', '23',                 
             '-preset', 'fast',
-            '-g', '60',                   # КРИТИЧНО: Ключовий кадр кожні 2 секунди (при 30 fps)
+            '-g', '60',                   # Ключовий кадр кожні 2 секунди (при 30 fps)
             '-keyint_min', '60',
-            '-sc_threshold', '0',         # Вимикаємо динамічний розрахунок кадрів по зміні сцен
-            '-r', '30',                   # Жорсткі 30 FPS (прибирає плаваючу частоту кадрів VFR)
+            '-sc_threshold', '0',         
+            '-r', '30',                   # Фіксовані 30 FPS
             '-c:a', 'aac', 
             '-b:a', '128k',
-            '-ar', '44100',               # Стандартна частота звуку
-            '-movflags', 'faststart',     # Дозволяє програвати відео до повного завантаження
+            '-ar', '44100',               
+            '-t', '59',                   # 🔥 КРИТИЧНО: обрізаємо відео до 59 сек, щоб Instagram API не видавав помилку
+            '-movflags', 'faststart',     
             '-pix_fmt', 'yuv420p',
             story_video_path
         ]
@@ -604,9 +605,9 @@ def main():
             if final_upload_path != local_path and os.path.exists(final_upload_path): 
                 os.remove(final_upload_path)
             final_upload_path = story_video_path
-            print("✅ Відео успішно конвертовано у вертикальний формат з полями!")
+            print("✅ Відео успішно конвертовано у вертикальний формат та обмежено до 59 секунд!")
         else:
-            print("⚠️ Не вдалося обробити відео через ffmpeg, буде надіслано оригінал (можливе обрізання).")
+            print("⚠️ Не вдалося обробити відео через ffmpeg, буде надіслано оригінал (можлива відмова Instagram).")
 
     caption_text = ""
     if mode == 'post':
