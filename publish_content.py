@@ -395,7 +395,6 @@ def main():
         try:
             _, sheets = get_services()
             spreadsheet = sheets.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
-            # Збираємо назви всіх аркушів, крім службового з налаштуваннями
             available_sheets = [
                 f'"{sheet["properties"]["title"]}"' 
                 for sheet in spreadsheet.get('sheets', [])
@@ -406,11 +405,9 @@ def main():
                 print(f"  {', '.join(available_sheets)}")
                 print(f"\nПриклад запуску: python publish_content.py post {available_sheets[0]}")
         except Exception:
-            # На випадок, якщо немає інтернету або токенів, показуємо загальний універсальний приклад
             print("\nПриклад запуску: python publish_content.py post \"Назва_Аркуша\"")
         return
         
-    # Перепризначення аргументів, якщо перевірку пройдено
     mode = sys.argv[1].lower()
     tab_name = sys.argv[2]
     counter_col_idx = 3 if mode == 'post' else 4
@@ -442,13 +439,10 @@ def main():
     
     selected_item = None
 
-    # 🔀 РОЗДІЛЕННЯ ЛОГІКИ ВИБОРУ КОНТЕНТУ ЗАЛЕЖНО ВІД АРКУША
     if "мебл" in tab_name.lower():
-        # Для меблевого гумору правила дат не потрібні — просто беремо перший файл із мінімальним лічильником
         selected_item = min_pool[0]
         print(f"🪑 Режим Меблів: календарні правила пропущено. Обрано файл з пулу мінімальних публікацій.")
     else:
-        # Для "П'ятниці" (та інших загальних аркушів) залишаємо роботу за календарними правилами
         active_categories = get_active_rules_ordered()
         for category in active_categories:
             match_files = [item for item in min_pool if item["data"][2] == category]
@@ -457,7 +451,6 @@ def main():
                 print(f"📅 Режим Календаря: знайдено збіг за категорією '{category}'")
                 break
         
-        # Якщо календарне правило не знайшло точного збігу, беремо просто перший з мінімальних
         if not selected_item: 
             selected_item = min_pool[0]
             
@@ -501,7 +494,10 @@ def main():
         final_upload_path = jpg_path
         mime_type = "image/jpeg"
 
-    # ОПТИМІЗАЦІЯ ПРОПОРЦІЙ ДЛЯ ЗВИЧАЙНИХ ПОСТІВ (Запобігання помилці 36003)
+    # 🔥 Пул файлів для публікації (за замовчуванням один файл)
+    files_to_publish = [final_upload_path]
+
+    # ОПТИМІЗАЦІЯ ПРОПОРЦІЙ ДЛЯ ЗВИЧАЙНИХ ПОСТІВ
     if mode == 'post' and mime_type == "image/jpeg":
         try:
             with Image.open(final_upload_path) as img:
@@ -509,23 +505,18 @@ def main():
                 w, h = img.size
                 ratio = w / h
                 
-                # Перевіряємо, чи пропорції виходять за жорсткі рамки Meta (0.8 - 1.91)
                 if ratio < 0.8 or ratio > 1.91:
                     print(f"📐 Оптимізація Поста: Пропорції картинки ({ratio:.2f}) неприпустимі для стрічки. Коригуємо...")
                     padded_post_path = os.path.join('temp_media', 'post_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
                     
                     if ratio < 0.8:
-                        # Картинка занадто вузька та висока -> розширюємо бічними полями до 4:5 (0.8)
                         new_w = int(h * 0.8)
                         new_h = h
                     else:
-                        # Картинка занадто широка -> додаємо поля зверху/знизу до 1.91:1
                         new_w = w
                         new_h = int(w / 1.91)
                         
-                    canvas = Image.new('RGB', (new_w, new_h), (255, 255, 255)) # Елегантне біле тло для стрічки
-                    
-                    # ПРАВИЛЬНЕ ЦЕНТРУВАННЯ БЕЗ ОБРІЗАННЯ:
+                    canvas = Image.new('RGB', (new_w, new_h), (255, 255, 255))
                     paste_x = (new_w - w) // 2
                     paste_y = (new_h - h) // 2
                     
@@ -535,131 +526,158 @@ def main():
                     if final_upload_path != local_path and os.path.exists(final_upload_path):
                         os.remove(final_upload_path)
                     final_upload_path = padded_post_path
-                    print(f"✅ Стрічка: картинку вписано в безпечні рамки {new_w}x{new_h} за допомогою рівномірних полів.")
+                    files_to_publish = [padded_post_path]
+                    print(f"✅ Стрічка: картинку вписано в безпечні рамки {new_w}x{new_h}.")
         except Exception as e:
             print(f"⚠️ Помилка калібрування геометрії поста: {e}")
 
     # ОПТИМІЗАЦІЯ ФОТО ПІД СТОРІС (1080x1920)
     if mode == 'story' and mime_type == "image/jpeg":
-        print("📐 Режим Сторіс: вписуємо зображення у формат 1080x1920, щоб уникнути кропу...")
+        print("📐 Режим Сторіс: вписуємо зображення у формат 1080x1920...")
         story_path = os.path.join('temp_media', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
         try:
             with Image.open(final_upload_path) as img:
                 img = img.convert('RGB')
                 orig_w, orig_h = img.size
-                
                 target_w, target_h = 1080, 1920
-                # Створюємо нейтральне темне полотно-контейнер (колір 20, 20, 20)
                 canvas = Image.new('RGB', (target_w, target_h), (20, 20, 20))
                 
-                # Обчислюємо коефіцієнт стиснення/розширення (Fit)
                 scale = min(target_w / orig_w, target_h / orig_h)
                 new_w = int(orig_w * scale)
                 new_h = int(orig_h * scale)
                 
                 resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                
-                # Центруємо картинку на полотні сторіс
                 paste_x = (target_w - new_w) // 2
                 paste_y = (target_h - new_h) // 2
                 canvas.paste(resized_img, (paste_x, paste_y))
                 canvas.save(story_path, 'JPEG', quality=95)
                 
-            # Видаляємо проміжний тимчасовий jpg (якщо він створювався раніше)
             if final_upload_path != local_path and os.path.exists(final_upload_path):
                 os.remove(final_upload_path)
                 
             final_upload_path = story_path
+            files_to_publish = [story_path]
         except Exception as e:
             print(f"⚠️ Не вдалося відформатувати Сторіс: {e}. Буде надіслано оригінал.")
 
-    # ОПТИМІЗАЦІЯ ВІДЕО ПІД СТОРІС (1080x1920)
+    # 🔥 РОЗУМНА НАРІЗКА ВІДЕО НА ЧАСТИНИ ПО 50 СЕКУНД ДЛЯ СТОРІС
     elif mode == 'story' and mime_type == "video/mp4":
-        print("📐 Режим Сторіс для ВІДЕО: інтелектуально вписуємо у формат 1080x1920 через ffmpeg...")
-        story_video_path = os.path.join('temp_media', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.mp4')
+        print("📐 Режим Сторіс для ВІДЕО: інтелектуально нарізаємо на частини по 50 секунд під 1080x1920...")
+        segment_pattern = os.path.join('temp_media', 'story_part_' + orig_name.rsplit('.', 1)[0] + '_%03d.mp4')
         
-        # Ультимативні налаштування під вимоги Instagram API + обрізання до 59 секунд
+        # Налаштування ffmpeg з використанням сегментного муксера
         ffmpeg_cmd = [
             'ffmpeg', '-y', '-i', final_upload_path,
+            '-f', 'segment',
+            '-segment_time', '50',          # Розрізаємо рівно по 50 секунд
+            '-reset_timestamps', '1',       # ⚡ КРИТИЧНО: обнуляємо таймштампи для кожної частини, щоб Meta API не падала
             '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black',
             '-c:v', 'libx264', 
             '-profile:v', 'high',         
             '-level', '4.2',
             '-crf', '23',                 
             '-preset', 'fast',
-            '-g', '60',                   # Ключовий кадр кожні 2 секунди (при 30 fps)
+            '-g', '60',                   
             '-keyint_min', '60',
             '-sc_threshold', '0',         
-            '-r', '30',                   # Фіксовані 30 FPS
+            '-r', '30',                   
             '-c:a', 'aac', 
             '-b:a', '128k',
             '-ar', '44100',               
-            '-t', '59',                   # 🔥 КРИТИЧНО: обрізаємо відео до 59 сек, щоб Instagram API не видавав помилку
             '-movflags', 'faststart',     
             '-pix_fmt', 'yuv420p',
-            story_video_path
+            segment_pattern
         ]
         
         result = subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if result.returncode == 0:
-            if final_upload_path != local_path and os.path.exists(final_upload_path): 
-                os.remove(final_upload_path)
-            final_upload_path = story_video_path
-            print("✅ Відео успішно конвертовано у вертикальний формат та обмежено до 59 секунд!")
+            # Збираємо всі створені файли-сегменти
+            prefix = 'story_part_' + orig_name.rsplit('.', 1)[0] + '_'
+            generated_parts = sorted([
+                os.path.join('temp_media', f) 
+                for f in os.listdir('temp_media') 
+                if f.startswith(prefix) and f.endswith('.mp4')
+            ])
+            if generated_parts:
+                files_to_publish = generated_parts
+                print(f"✅ Відео успішно розрізано на {len(files_to_publish)} частин(и) під Сторіс!")
+                # Видаляємо проміжний оригінал, якщо він не потрібен
+                if final_upload_path != local_path and os.path.exists(final_upload_path):
+                    os.remove(final_upload_path)
+            else:
+                print("⚠️ Файли сегментів не знайдені. Спробуємо надіслати єдиний оригінал.")
         else:
-            print("⚠️ Не вдалося обробити відео через ffmpeg, буде надіслано оригінал (можлива відмова Instagram).")
+            print("⚠️ Не вдалося нарізати відео через ffmpeg, спробуємо надіслати оригінал.")
 
+    # ГЕНЕРАЦІЯ ОПИСУ ШІ (Тільки для постів стрічки)
     caption_text = ""
     if mode == 'post':
-        analysis_image = final_upload_path
+        analysis_image = files_to_publish[0]
         if mime_type == "video/mp4":
             analysis_image = os.path.join('temp_media', 'video_frame.jpg')
-            subprocess.run(['ffmpeg', '-y', '-i', final_upload_path, '-ss', '00:00:01', '-vframes', '1', analysis_image], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['ffmpeg', '-y', '-i', files_to_publish[0], '-ss', '00:00:01', '-vframes', '1', analysis_image], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
         print("👁️ ШІ аналізує візуальний вміст файлу...")
         caption_text = generate_multimodal_caption(analysis_image, category_name, tab_name)
-        if os.path.exists(os.path.join('temp_media', 'video_frame.jpg')): os.remove(os.path.join('temp_media', 'video_frame.jpg'))
+        if os.path.exists(os.path.join('temp_media', 'video_frame.jpg')): 
+            os.remove(os.path.join('temp_media', 'video_frame.jpg'))
 
-    # Створюємо змінну для збереження fileId ДО блоку try, щоб вона була доступна у finally
-    ik_file_id = None
+    # 🔥 ЦИКЛ ПОСЛІДОВНОЇ ПУБЛІКАЦІЇ ВСІХ ПІДГОТОВЛЕНИХ ЧАСТИН
+    success_count = 0
     
-    try:
-        # Отримуємо посилання та ID файлу ImageKit (якщо завантажилось туди)
-        public_url, ik_file_id = get_google_drive_direct_url(file_id, local_file_path=final_upload_path)
-        print(f"🔗 Згенеровано стабільне посилання: {public_url}")
+    for idx, current_file in enumerate(files_to_publish):
+        part_info = f" (Частина {idx + 1}/{len(files_to_publish)})" if len(files_to_publish) > 1 else ""
+        print(f"🚀 Початок публікації файлу{part_info}: {current_file}")
         
-        # Передаємо локальний файл останнім параметром для FB Stories
-        publish_to_meta_platforms(
-            public_url, 
-            "video" if mime_type == "video/mp4" else "image", 
-            is_story=(mode == 'story'), 
-            caption=caption_text,
-            local_file_path=final_upload_path
-        )
-        
+        ik_file_id = None
+        try:
+            # Отримуємо хмарне посилання для поточної частини
+            public_url, ik_file_id = get_google_drive_direct_url(file_id, local_file_path=current_file)
+            print(f"🔗 Згенеровано посилання для буфера: {public_url}")
+            
+            # Публікуємо у Meta
+            publish_to_meta_platforms(
+                public_url, 
+                "video" if mime_type == "video/mp4" else "image", 
+                is_story=(mode == 'story'), 
+                caption=caption_text,
+                local_file_path=current_file
+            )
+            success_count += 1
+            print(f"✅ Файл{part_info} успішно опубліковано в Instagram!")
+            
+            # Невелика пауза між завантаженнями частин, щоб вони гарантовано встали в хронологічному порядку
+            if len(files_to_publish) > 1 and idx < len(files_to_publish) - 1:
+                print("⏳ Очікуємо 6 секунд перед надсиланням наступної частини для збереження хронології...")
+                time.sleep(6)
+                
+        except Exception as e:
+            print(f"❌ Критична помилка під час публікації файлу{part_info}: {e}")
+        finally:
+            # Очищення хмари ImageKit для поточного шматка
+            if ik_file_id:
+                delete_from_imagekit(ik_file_id)
+            # Видаляємо поточний тимчасовий шматок з локального диску
+            if current_file != local_path and os.path.exists(current_file):
+                os.remove(current_file)
+
+    # Оновлюємо лічильник в Google Таблиці, якщо хоча б одна частина вийшла в ефір
+    if success_count > 0:
         new_counter = selected_item["data"][counter_col_idx] + 1
         col_letter = "D" if mode == 'post' else "E"
         sheets.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID, range=f"'{tab_name}'!{col_letter}{row_line}",
             valueInputOption='RAW', body={'values': [[new_counter]]}
         ).execute()
-        print(f"📊 Лічильник оновлено на +1 для аркуша '{tab_name}' (Рядок {row_line})")
-        
-    except Exception as e:
-        print(f"❌ Критична помилка під час публікації: {e}")
+        print(f"📊 Лічильник оновлено на +1 для аркуша '{tab_name}' (Рядок {row_line}). Опубліковано шматків: {success_count}")
+    else:
+        print("❌ Жодна з частин медіа не була опублікована через помилки. Лічильник залишено без змін.")
         sys.exit(1)
-    finally:
-        # --- ТУТ ПРАЦЮЄ АВТОКЛІНІНГ ---
-        # 1. Видаляємо тимчасовий файл з хмари ImageKit, якщо він там створювався
-        if ik_file_id:
-            delete_from_imagekit(ik_file_id)
-            
-        # 2. Чистимо локальні файли на сервері
-        if os.path.exists(local_path): 
-            os.remove(local_path)
-        if final_upload_path != local_path and os.path.exists(final_upload_path): 
-            os.remove(final_upload_path)
-        print("🧹 Локальні тимчасові медіафайли видалено.")
+
+    # Остаточне очищення завантаженого з Драйву оригіналу
+    if os.path.exists(local_path): 
+        os.remove(local_path)
+    print("🧹 Всі локальні тимчасові файли повністю видалено. Роботу завершено!")
 
 if __name__ == '__main__':
     main()
