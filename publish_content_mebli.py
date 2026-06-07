@@ -33,7 +33,8 @@ DOCUMENT_EXTENSIONS = ('.pdf', '.doc', '.docx', '.djvu', '.txt', '.rtf', '.fb2',
 COMPANIES_DB = {
     "goncharenko": {
         "names": {0: "Олександр Гончаренко", 1: "Oleksandr Goncharenko", 2: "Oleksandr Goncharenko"},
-        "links": ["📸 Instagram: instagr.am/goncharenko8721"]
+        "links": ["📸 Instagram: instagr.am/goncharenko8721"],
+        "ig_handle": "@goncharenko8721"
     },
     "gurov": {
         "names": {0: "Андрій Гуров", 1: "Andrii Gurov", 2: "Andrii Gurov"},
@@ -41,7 +42,8 @@ COMPANIES_DB = {
     },
     "solovey": {
         "names": {0: "Студія меблів «Соловей»", 1: "Solovey Furniture Studio", 2: "Möbelstudio Solovey"},
-        "links": ["📸 Instagram: instagr.am/mebelsolovei"]
+        "links": ["📸 Instagram: instagr.am/mebelsolovei"],
+        "ig_handle": "@mebelsolovei"
     },
     "furniture park": {
         "names": {0: "Меблевий парк", 1: "Furniture Park", 2: "Furniture Park"},
@@ -50,6 +52,11 @@ COMPANIES_DB = {
             "📸 Instagram: instagr.am/meblovo_ukraine",
             "📢 Telegram: t.me/Meblevyi_park",
             "📸 Instagram: instagr.am/renovaelite"
+        ],
+        "ig_handle": [
+            "@meblevyi_park",
+            "@meblovo_ukraine",
+            "@renovaelite"
         ]
     }
 }
@@ -196,9 +203,10 @@ def delete_from_imagekit(file_id: str):
     if not imagekit_key: return
     try:
         requests.delete(f"https://api.imagekit.io/v1/files/{file_id}", auth=(imagekit_key, ''), timeout=15)
+        print(f"🗑️ Файл {file_id} видалено з ImageKit.")
     except: pass
 
-def get_manufacturer_header(category, date_str, lang_idx):
+def get_manufacturer_header(category, date_str, lang_idx, mode):
     """Генерує естетичний заголовок відповідно до категорії та обраної мови."""
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
     cat_lower = category.lower()
@@ -234,9 +242,15 @@ def get_manufacturer_header(category, date_str, lang_idx):
                 f"📅 {pref['year']}: {year}",
                 f"🛠️ {pref['brand']}: {correct_name}"
             ]
-            if info["links"]:
-                header_lines.extend(info["links"])
-                
+            # Логіка розподілу посилань залежно від платформи
+            if "ig_" in mode:  # Для ig_post або ig_story
+                if info.get("ig_handle"):
+                    header_lines.append(f"📸 Instagram: {info['ig_handle']}")
+                header_lines.append("🔗 Посилання на портфоліо — у шапці нашого профілю! (Link in Bio)")
+            else:  # Для fb_post
+                if info.get("links"):
+                    header_lines.extend(info["links"])
+                    
             return "\n".join(header_lines) + "\n\n"
             
     return ""
@@ -339,7 +353,7 @@ def main():
         print("💡 Необхідно передати параметри. Запуск: python script.py <mode> <tab_name>")
         return
 
-    mode = sys.argv[1].lower()  # fb_post, ig_post, ig_story
+    mode = sys.argv[1].lower()  # fb_post, ig_post
     forced_tab = sys.argv[2]
     
     current_tab = forced_tab if forced_tab else TAB_NAME
@@ -359,14 +373,11 @@ def main():
     if mode == "ig_post":
         col_idx = 3
         col_letter = "D"
-    elif mode == "ig_story":
-        col_idx = 4
-        col_letter = "E"
     elif mode == "fb_post":
         col_idx = 5
         col_letter = "F"
     else:
-        print(f"❌ Невідомий режим публікації: {mode}")
+        print(f"❌ Невідомий або непідтримуваний режим публікації: {mode}")
         return
 
     valid_rows = []
@@ -398,16 +409,14 @@ def main():
     print(f"📂 Обрано групу: {category_name} (Файлів у пулі: {len(selected_group_items)})")
 
     # =====================================================================
-    # 🌐 Управління мовами через фіксовані комірки F2, G2, H2
+    # 🌐 Управління мовами через фіксовані комірки F2, G2
     # =====================================================================
     lang_value = "UK"
     
     if mode == "fb_post":
         target_lang_cell = "'⚙️ Налаштування Папок'!F2"
-    elif mode == "ig_post":
-        target_lang_cell = "'⚙️ Налаштування Папок'!G2"
     else:
-        target_lang_cell = "'⚙️ Налаштування Папок'!H2"
+        target_lang_cell = "'⚙️ Налаштування Папок'!G2"
 
     try:
         lang_res = sheets.spreadsheets().values().get(
@@ -499,7 +508,7 @@ def main():
         print("ℹ️ Немає доступних медіафайлів для публікації.")
         return
 
-    header_text = get_manufacturer_header(category_name, target_date, lang_idx)
+    header_text = get_manufacturer_header(category_name, target_date, lang_idx, mode)
     ai_text = generate_multimodal_caption(ai_analysis_images, category_name, target_date, lang_idx)
     loc_footer = f"\n\n📍 Локація: {target_loc}" if target_loc and "Невідоме місце" not in target_loc else ""
     full_caption = f"{header_text}{ai_text}{loc_footer}"
@@ -507,7 +516,7 @@ def main():
     if not FB_PAGE_ID and mode == "fb_post":
         print("❌ Відсутній FB_PAGE_ID для публікації у Facebook!")
         return
-    if not IG_USER_ID and mode in ["ig_post", "ig_story"]:
+    if not IG_USER_ID and mode == "ig_post":
         print("❌ Відсутній IG_USER_ID для публікації в Instagram!")
         return
 
@@ -560,7 +569,10 @@ def main():
                 
                 item_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=payload).json()
                 if "id" in item_res:
-                    container_ids.append(item_res["id"])
+                    item_id = item_res["id"]
+                    if is_vid:
+                        wait_for_meta_container(item_id, META_ACCESS_TOKEN)
+                    container_ids.append(item_id)
             
             carousel_payload = {
                 "media_type": "CAROUSEL",
@@ -584,6 +596,9 @@ def main():
             
             res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=payload).json()
 
+            if res and "id" in res and is_vid:
+                wait_for_meta_container(res["id"], META_ACCESS_TOKEN)
+
         if res and "id" in res:
             creation_id = res["id"]
             if has_video:
@@ -591,7 +606,7 @@ def main():
                 
             print("🚀 Фінальна публікація контейнера в Instagram стрічку...")
             
-            # 🔄 ДОДАНО ЦИКЛ ПОВТОРНИХ СПРОБ ДЛЯ МЕДІАФАЙЛІВ Що ОБРОБЛЯЮТЬСЯ
+            # 🔄 Цикл повторних спроб для медіафайлів, що публікуються
             for attempt in range(6):
                 publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
                     "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
@@ -634,6 +649,11 @@ def main():
             print(f"🔄 Мову на наступний раз для комірки {target_lang_cell} успішно змінено на: {next_lang_value}")
         except Exception as e:
             print(f"⚠️ Не вдалося оновити мову в комірці {target_lang_cell}: {e}")
+
+        if ik_ids:
+            print("🧹 Очищення хмари ImageKit...")
+            for ik_id in ik_ids:
+                delete_from_imagekit(ik_id)
             
     else:
         print(f"❌ Помилка дистриб'юції контенту Meta API: {res}")
