@@ -280,7 +280,7 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
         f"Ти професійний копірайтер та меблевий експерт. Подивись на ці зображення. "
         f"Напиши один короткий, натхненний пост для соцмереж. "
         f"Виробник/Напрямок меблів: '{real_manufacturer}'. {lang_instructions.get(lang_idx, lang_instructions[0])} "
-        f"КРИТИЧНО: Не пиши жодних передмов чи післямов. Тільки текст поста."
+        f"КРИТИЧНО: Не пиши жодних передмов чи післямов. Тільки text поста."
     )
 
     try:
@@ -371,11 +371,9 @@ def main():
 
     valid_rows = []
     for i, r in enumerate(rows):
-        # Перевіряємо, щоб довжини рядка вистачало для зчитування нашої колонки
         if len(r) >= 3:  
             if r[2].lower() == "temporary": continue
             try:
-                # Безпечно беремо значення лічильника з потрібного індексу
                 val = r[col_idx] if len(r) > col_idx and r[col_idx] else "0"
                 counter = int(val)
                 valid_rows.append({"row_idx": i + 2, "data": r, "counter": counter})
@@ -402,18 +400,16 @@ def main():
     # =====================================================================
     # 🌐 Управління мовами через фіксовані комірки F2, G2, H2
     # =====================================================================
-    lang_value = "UK"  # Значення за замовчуванням
+    lang_value = "UK"
     
-    # Визначаємо цільову комірку залежно від режиму публікації
     if mode == "fb_post":
         target_lang_cell = "'⚙️ Налаштування Папок'!F2"
     elif mode == "ig_post":
         target_lang_cell = "'⚙️ Налаштування Папок'!G2"
-    else:  # ig_story
+    else:
         target_lang_cell = "'⚙️ Налаштування Папок'!H2"
 
     try:
-        # Зчитуємо конкретне значення поточної мови з потрібної комірки
         lang_res = sheets.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID, range=target_lang_cell
         ).execute()
@@ -423,7 +419,6 @@ def main():
     except Exception as e:
         print(f"⚠️ Не вдалося прочитати мову з комірки {target_lang_cell}: {e}")
 
-    # Мапінг значення з таблиці в цифровий індекс (0=UK, 1=EN, 2=DE) та визначення наступної мови
     if any(x in lang_value for x in ["EN", "ENG", "АНГЛ", "ENGLISH"]):
         lang_idx = 1
         next_lang_value = "DE"
@@ -431,7 +426,7 @@ def main():
         lang_idx = 2
         next_lang_value = "UK"
     else:
-        lang_idx = 0  # Українська за замовчуванням
+        lang_idx = 0
         next_lang_value = "EN"
         
     print(f"🌐 Зчитано поточну мову з {target_lang_cell}: {lang_value} (Індекс: {lang_idx}). Наступна мова буде: {next_lang_value}")
@@ -444,15 +439,10 @@ def main():
     has_video = False
     ai_analysis_images = []
 
-    # Визначаємо тип обробки геометрії
-    geom_mode = "story" if mode == "ig_story" else "post"
-
-    # 📥 Фільтрація, завантаження та оптимізація медіафайлів
     for item in selected_group_items:
         f_id, f_name = item["data"][0], item["data"][1]
         lower_name = f_name.lower()
         
-        # 🛑 ОБРОБКА НЕПІДТРИМУВАНИХ ФОРМАТІВ
         if not lower_name.endswith(VALID_MEDIA_EXTENSIONS):
             reason = "непідтримуваний формат"
             if lower_name.endswith(DOCUMENT_EXTENSIONS):
@@ -488,12 +478,10 @@ def main():
             final_path = jpg_path
             local_files.append(jpg_path)
 
-        # Оптимізація геометрії медіа для стрічки
         optimized_path = optimize_media_geometry(final_path, f_name, mime_type)
         if optimized_path != final_path and optimized_path != local_path:
             local_files.append(optimized_path)
 
-        # Створення прев'ю кадру для ШІ
         if mime_type == "video/mp4":
             frame_path = os.path.join('temp_mebli', f"frame_{f_id}.jpg")
             subprocess.run(['ffmpeg', '-y', '-i', optimized_path, '-ss', '00:00:01', '-vframes', '1', frame_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -503,7 +491,6 @@ def main():
 
         local_files.append(local_path)
 
-        # ☁️ Завантаження на хмарний хостинг
         pub_url, ik_id = get_google_drive_direct_url(f_id, local_file_path=optimized_path)
         cloud_urls.append(pub_url)
         if ik_id: ik_ids.append(ik_id)
@@ -512,7 +499,6 @@ def main():
         print("ℹ️ Немає доступних медіафайлів для публікації.")
         return
 
-    # ✍️ Збір контенту для публікації
     header_text = get_manufacturer_header(category_name, target_date, lang_idx)
     ai_text = generate_multimodal_caption(ai_analysis_images, category_name, target_date, lang_idx)
     loc_footer = f"\n\n📍 Локація: {target_loc}" if target_loc and "Невідоме місце" not in target_loc else ""
@@ -558,7 +544,6 @@ def main():
     # 📸 ВАРІАНТ 2: INSTAGRAM ПОСТ (`ig_post`)
     # ==========================================
     elif mode == "ig_post":
-        # Карусель (кілька зображень/відео)
         if len(cloud_urls) > 1:
             print(f"🗂️ Створення каруселі Instagram з {len(cloud_urls)} елементів...")
             container_ids = []
@@ -585,7 +570,6 @@ def main():
             }
             res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=carousel_payload).json()
             
-        # Один медіафайл (фото або відео)
         else:
             print("🖼️ Створення одиничного контейнера в Instagram...")
             is_vid = cloud_urls[0].lower().split('?')[0].endswith(('.mp4', '.mov', '.avi')) or "video" in cloud_urls[0]
@@ -606,10 +590,22 @@ def main():
                 wait_for_meta_container(creation_id, META_ACCESS_TOKEN)
                 
             print("🚀 Фінальна публікація контейнера в Instagram стрічку...")
-            publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
-                "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
-            }).json()
-            res = publish_res
+            
+            # 🔄 ДОДАНО ЦИКЛ ПОВТОРНИХ СПРОБ ДЛЯ МЕДІАФАЙЛІВ Що ОБРОБЛЯЮТЬСЯ
+            for attempt in range(6):
+                publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
+                    "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
+                }).json()
+                
+                if "error" in publish_res:
+                    err = publish_res["error"]
+                    # Перевіряємо за кодом або субкодом неготовності медіафайлу
+                    if err.get("error_subcode") == 2207027 or err.get("code") == 9007:
+                        print(f"⏳ Медіафайл ще обробляється серверами Meta (Спроба {attempt + 1}/6). Очікуємо 10 секунд...")
+                        time.sleep(10)
+                        continue
+                res = publish_res
+                break
 
     # ==========================================
     # 💾 ПЕРЕВІРКА РЕЗУЛЬТАТУ ТА ОНОВЛЕННЯ БАЗИ
@@ -617,11 +613,9 @@ def main():
     if res and ("id" in res or "post_id" in res):
         print(f"✅ Успішно опубліковано! ID контенту: {res.get('id', res.get('post_id'))}")
         
-        # 1. Оновлюємо лічильники використання медіафайлів (динамічна колонка)
         for item in selected_group_items:
             if item["data"][1].lower().endswith(VALID_MEDIA_EXTENSIONS):
                 new_val = item["counter"] + 1
-                # Автоматично підставляється потрібна буква: D, E або F
                 range_to_update = f"'{current_tab}'!{col_letter}{item['row_idx']}"
                 try:
                     sheets.spreadsheets().values().update(
@@ -632,7 +626,6 @@ def main():
                 except Exception as e:
                     print(f"⚠️ Помилка збереження лічильника в Таблицю: {e}")
                     
-        # 2. ОНОВЛЕННЯ МОВИ ДЛЯ НАСТУПНОГО ЗАПУСКУ (F2, G2 або H2)
         try:
             sheets.spreadsheets().values().update(
                 spreadsheetId=SPREADSHEET_ID, range=target_lang_cell,
@@ -645,7 +638,6 @@ def main():
     else:
         print(f"❌ Помилка дистриб'юції контенту Meta API: {res}")
 
-    # 🧹 Очищення тимчасових локальних медіафайлів
     for f in local_files:
         if os.path.exists(f):
             try: os.remove(f)
