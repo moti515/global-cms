@@ -350,21 +350,7 @@ def upload_to_tiktok(video_path, description):
         upload_res = requests.put(upload_url, headers=put_headers, data=video_file)
 
     if upload_res.status_code in [200, 201, 204]:
-        print("🚀 Відео успішно передано на сервери TikTok!")
-        print("Очікуємо обробку файлу сервером (15 секунд)...")
-        time.sleep(15)
-        
-        status_url = "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
-        status_res = requests.post(status_url, headers=headers, json={"publish_id": publish_id})
-        
-        if status_res.status_code == 200:
-            status_data = status_res.json()
-            current_status = status_data.get('data', {}).get('status', 'UNKNOWN')
-            fail_reason = status_data.get('data', {}).get('fail_reason', '')
-            print(f"📊 Поточний статус відео в TikTok: {current_status}")
-            if current_status == "FAILED":
-                print(f"❌ Помилка обробки сервером: {fail_reason}")
-                return False
+        print("🚀 Відео успішно передано на сервери TikTok! Файл доставлено.")
         return True
     else:
         print(f"❌ Помилка завантаження файлу: {upload_res.status_code} - {upload_res.text}")
