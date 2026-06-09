@@ -1,6 +1,6 @@
 import os
 import requests
-from auth import get_valid_tiktok_token
+from auth_tiktok import get_valid_tiktok_token
 
 def upload_to_tiktok(video_path, description):
     access_token = get_valid_tiktok_token()
