@@ -20,7 +20,6 @@ from pillow_heif import register_heif_opener
 
 # Трюк для сумісності старого MoviePy з новим Pillow в Python 3.12
 if not hasattr(Image, 'ANTIALIAS'):
-    Image.Resampling.LANCZOS = Image.Resampling.LANCZOS
     Image.ANTIALIAS = Image.Resampling.LANCZOS
 
 from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, AudioFileClip, TextClip, CompositeVideoClip
