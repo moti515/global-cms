@@ -270,12 +270,13 @@ def upload_to_tiktok(video_path, description):
         "Content-Type": "application/json; charset=UTF-8"
     }
     
-    # 🔄 ЗМІНЕНО: Для Inbox API параметри post_info не потрібні (налаштовуються в додатку)
+    # 🔄 ВИПРАВЛЕНО: Додано обов'язковий блок "video_info", навіть якщо він порожній
     body = {
         "source_info": {
             "source": "FILE_UPLOAD",
             "video_size": video_size
-        }
+        },
+        "video_info": {} 
     }
     
     print("Надсилання запиту на ініціалізацію в TikTok (Inbox/Draft)...")
