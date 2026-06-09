@@ -25,7 +25,7 @@ from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, Aud
 from moviepy.audio.AudioClip import AudioArrayClip
 import numpy as np
 
-# Реєстрація підтримки HEIC форматів для Pillow
+# Реєстрація підтримки HEIC форматів для Pillow (iPhone фото)
 register_heif_opener()
 
 # --- НАЛАШТУВАННЯ ---
@@ -41,6 +41,7 @@ TEST_FPS = 30
 
 MUSIC_FALLBACK_PATH = 'assets/trending_travel_music.mp3'
 
+# Розширений список форматів, включаючи iPhone (.mov, .heic) та Android (.mp4, .webp, .jpg)
 VALID_EXTENSIONS = (
     '.3gp', '.avi', '.gif', '.heic', '.heif', '.jpeg', '.jpg', 
     '.mkv', '.mov', '.mp4', '.mpeg', '.mpg', '.tif', '.tiff', '.webp', '.png'
@@ -65,8 +66,7 @@ def get_valid_tiktok_token():
         with open(TOKENS_FILE, 'r') as f:
             tokens = json.load(f)
     except FileNotFoundError:
-        print("❌ Файл токенів tiktok_tokens.json не знайдено!")
-        return None
+        sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Файл токенів tiktok_tokens.json не знайдено!")
 
     url = "https://open.tiktokapis.com/v2/oauth/token/"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -112,8 +112,7 @@ def count_total_files(service):
             if not page_token:
                 break
         except Exception as e:
-            print(f"❌ Помилка підрахунку файлів на Диску: {e}")
-            break
+            sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка підрахунку файлів на Google Диску: {e}")
     return total
 
 # --- РОБОТА З МЕТАДАНИМИ ТА ГЕОКОДУВАННЯМ ---
@@ -147,7 +146,7 @@ def get_exif_data(image_path):
                 if geotagging.get('GPSLatitudeRef') == 'S': lat = -lat
                 if geotagging.get('GPSLongitudeRef') == 'W': lon = -lon
     except Exception as e:
-        print(f"⚠️ Попередження: Не вдалося прочитати EXIF для {image_path}: {e}")
+        print(f"⚠️ Попередження EXIF (не критично): Не вдалося прочитати метадані для {image_path}: {e}")
     return date_str, lat, lon
 
 def get_video_metadata(video_path):
@@ -177,7 +176,7 @@ def get_video_metadata(video_path):
                     lat = float(match.group(1))
                     lon = float(match.group(2))
     except Exception as e:
-        print(f"⚠️ Не вдалося прочитати метадані відео {video_path}: {e}")
+        print(f"⚠️ Попередження відео-метаданих (не критично) для {video_path}: {e}")
     return date_str, lat, lon
 
 def get_location_name(lat, lon):
@@ -195,10 +194,10 @@ def get_location_name(lat, lon):
         elif country:
             return country
     except Exception as e:
-        print(f"⚠️ Попередження: Помилка геокодування OSM: {e}")
+        print(f"⚠️ Попередження геокодування OSM: {e}")
     return None
 
-# --- КОНВЕРТАЦІЯ ТА ОПТИМІЗАЦІЯ ФАЙЛІВ ---
+# --- CONVERSION ---
 def gif_to_mp4(input_path, output_path):
     print(f"🎞️ Конвертуємо GIF {input_path} в MP4 відео...")
     cmd = [
@@ -207,9 +206,11 @@ def gif_to_mp4(input_path, output_path):
         '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920',
         output_path
     ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"FFmpeg Error: {res.stderr}")
 
-# --- ОБРОБКА ТА МОНТАЖ ---
+# --- ОБРОБКА ТА МОНТАЖ (СТРОГИЙ КОНТРОЛЬ ПОМИЛОК) ---
 def process_media_group(file_list):
     clips = []
     clip_duration = max(4.0, TARGET_DURATION / len(file_list)) 
@@ -228,14 +229,16 @@ def process_media_group(file_list):
                 trimmed = full_video.subclip(start_time, end_time).resize(newsize=(1080, 1920))
                 clips.append(trimmed)
             except Exception as e:
-                print(f"Помилка обробки відео {file_name}: {e}")
+                # 🚨 АВАРІЯ: Відеофайл пошкоджений або має биті кодеки
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Файл відео '{file_name}' пошкоджений, має непідтримувану структуру або не може бути відкритий MoviePy. Деталі: {e}")
                 
         elif 'image' in mime:
             try:
                 img_clip = ImageClip(local_path).set_duration(clip_duration).resize(newsize=(1080, 1920))
                 clips.append(img_clip)
             except Exception as e:
-                print(f"Помилка обробки зображення {file_name}: {e}")
+                # 🚨 АВАРІЯ: Зображення бите чи не розпізнається Pillow
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Зображення '{file_name}' пошкоджене або має непідтримуваний формат для рендерингу. Деталі: {e}")
                 
     return clips
 
@@ -247,40 +250,44 @@ def generate_ai_metadata(date_str, location_geo):
 
 def compile_final_video(clips, text_info):
     trending_text, year, location = text_info
-    final_video = concatenate_videoclips(clips, method="compose")
     
-    if final_video.audio is None:
-        if os.path.exists(MUSIC_FALLBACK_PATH):
-            print("🎵 Додаємо фонову музику...")
-            bg_music = AudioFileClip(MUSIC_FALLBACK_PATH).set_duration(final_video.duration)
-            final_video = final_video.set_audio(bg_music)
-        else:
-            print("⚠️ Музику не знайдено. Генеруємо обов'язковий трек тиші для TikTok...")
-            silence_array = np.zeros((int(44100 * final_video.duration), 2))
-            silent_audio = AudioArrayClip(silence_array, fps=44100).set_duration(final_video.duration)
-            final_video = final_video.set_audio(silent_audio)
+    try:
+        final_video = concatenate_videoclips(clips, method="compose")
         
-    main_txt = TextClip(trending_text, fontsize=50, color='white', font='Arial-Bold', method='caption', size=(900, None)).set_position(('center', 400)).set_duration(final_video.duration)
-    meta_txt = TextClip(f"{location} | {year}", fontsize=40, color='yellow', font='Arial').set_position(('center', 1500)).set_duration(final_video.duration)
-    
-    result_video = CompositeVideoClip([final_video, main_txt, meta_txt])
-    output_name = f"ready_tiktok_{year}.mp4"
-    
-    result_video.write_videofile(
-        output_name, 
-        fps=TEST_FPS, 
-        codec="libx264", 
-        audio_codec="aac",
-        bitrate="2000k",
-        ffmpeg_params=["-pix_fmt", "yuv420p", "-profile:v", "baseline", "-level", "3.0"]
-    )
-    
-    result_video.close()
-    final_video.close()
-    for c in clips:
-        c.close()
+        if final_video.audio is None:
+            if os.path.exists(MUSIC_FALLBACK_PATH):
+                print("🎵 Додаємо фонову музику...")
+                bg_music = AudioFileClip(MUSIC_FALLBACK_PATH).set_duration(final_video.duration)
+                final_video = final_video.set_audio(bg_music)
+            else:
+                print("⚠️ Музику не знайдено. Генеруємо обов'язковий трек тиші для TikTok...")
+                silence_array = np.zeros((int(44100 * final_video.duration), 2))
+                silent_audio = AudioArrayClip(silence_array, fps=44100).set_duration(final_video.duration)
+                final_video = final_video.set_audio(silent_audio)
+            
+        main_txt = TextClip(trending_text, fontsize=50, color='white', font='Arial-Bold', method='caption', size=(900, None)).set_position(('center', 400)).set_duration(final_video.duration)
+        meta_txt = TextClip(f"{location} | {year}", fontsize=40, color='yellow', font='Arial').set_position(('center', 1500)).set_duration(final_video.duration)
         
-    return output_name
+        result_video = CompositeVideoClip([final_video, main_txt, meta_txt])
+        output_name = f"ready_tiktok_{year}.mp4"
+        
+        result_video.write_videofile(
+            output_name, 
+            fps=TEST_FPS, 
+            codec="libx264", 
+            audio_codec="aac",
+            bitrate="2000k",
+            ffmpeg_params=["-pix_fmt", "yuv420p", "-profile:v", "baseline", "-level", "3.0"]
+        )
+        
+        result_video.close()
+        final_video.close()
+        for c in clips:
+            c.close()
+            
+        return output_name
+    except Exception as e:
+        sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка генерації або рендерингу фінального відео файлу. Деталі: {e}")
 
 # --- ПУБЛІКАЦІЯ У TIKTOK ---
 def upload_to_tiktok(video_path, description):
@@ -293,7 +300,7 @@ def upload_to_tiktok(video_path, description):
     chunk_size = video_size  
     total_chunk_count = 1
     
-    init_url = "https://open.tiktokapis.com/v2/post/publish/video/init/"
+    init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json; charset=UTF-8"
@@ -375,7 +382,7 @@ def move_files_to_trash(service, file_list):
             ).execute()
             print(f"📦 Переміщено в архів: {f['name']}")
         except Exception as e:
-            print(f"❌ Не вдалося перемістити файл {f['name']} на Диску: {e}")
+            sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося перемістити файл {f['name']} в архів на Диску: {e}")
 
 # --- ГОЛОВНА ЛОГІКА ---
 def main():
@@ -384,16 +391,13 @@ def main():
     
     service = get_gdrive_service()
     
-    # 🎯 ЛОГІКА ПЕРЕВІРКИ ГРАФІКУ ДЛЯ КРОН-ТАЙМЕРУ
     if run_mode == 'cron':
         print("🔍 Підраховуємо загальну кількість файлів у папці...")
         total_files = count_total_files(service)
         
-        # Отримуємо поточну годину в Німеччині
         berlin_hour = datetime.now(ZoneInfo("Europe/Berlin")).hour
-        print(f"📊 На Диску знайдено файлів: {total_files} | Поточна година в DE: {berlin_hour}:21")
+        print(f"📊 На Диску знайдено файлів: {total_files} | Поточна година в DE: {berlin_hour}")
         
-        # Перевірка умов розкладу
         allowed_hours = []
         if total_files <= 1000:
             allowed_hours = [11]
@@ -408,7 +412,8 @@ def main():
             print(f"☕ [ШТАТНИЙ ПРОПУСК] Для {total_files} файлів година {berlin_hour} не передбачена графіком. Дозволені години: {allowed_hours}.")
             print("🏁 Завершуємо роботу у штатному режимі (Успішно).")
             sys.exit(0)
-        print("✅ Успішно! Умови графіку виконано. Переходимо до обробки медіа.")
+            
+        print("✅ Успішно! Умови графіку виконано. Переходимо до відбору та обробки медіа.")
 
     # Отримуємо перші 50 файлів для поточної ітерації монтажу
     try:
@@ -419,20 +424,22 @@ def main():
             pageSize=50
         ).execute()
     except Exception as e:
-        sys.exit(f"❌ Помилка отримання файлів з Google Диску: {e}")
+        sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка отримання файлів з Google Диску: {e}")
         
     gdrive_files = results.get('files', [])
     gdrive_files = [f for f in gdrive_files if f['id'] != FOLDER_TRASH_ID]
     
     if not gdrive_files:
-        sys.exit("❌ Папка вхідних медіа порожня. Немає чого монтувати.")
+        print("☕ [ШТАТНИЙ ПРОПУСК] Папка вхідних медіа порожня. Немає контенту для монтажу.")
+        print("🏁 Завершуємо роботу у штатному режимі (Успішно).")
+        sys.exit(0)
 
     print(f"Знайдено файлів для поточної збірки: {len(gdrive_files)}")
     processed_items = []
     os.makedirs('downloaded', exist_ok=True)
     
     for f in gdrive_files:
-        mime_type = f['mimeType']
+        mime_type = f.get('mimeType', '')
         lower_name = f['name'].lower()
         
         is_valid_media = mime_type.startswith(('image/', 'video/')) or lower_name.endswith(VALID_EXTENSIONS)
@@ -451,8 +458,8 @@ def main():
                 _, done = downloader.next_chunk()
             fh.close()
         except Exception as e:
-            print(f"❌ Не вдалося завантажити {f['name']}: {e}")
-            continue
+            # 🚨 АВАРІЯ: Помилка завантаження з Диску (файл заблоковано, мережевий збій тощо)
+            sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося завантажити файл '{f['name']}' з Google Диску. Причина: {e}")
 
         meta_date, lat, lon = None, None, None
         if mime_type.startswith('image/') or lower_name.endswith(('.heic', '.heif', '.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff')):
@@ -490,25 +497,32 @@ def main():
             time.sleep(1)  
             location = get_location_name(lat, lon)
             
+        # Конвертація GIF
         if mime_type == 'image/gif' or lower_name.endswith('.gif'):
             mp4_path = os.path.join('downloaded', f['name'].rsplit('.', 1)[0] + '_gif.mp4')
-            gif_to_mp4(local_path, mp4_path)
-            if os.path.exists(mp4_path):
-                os.remove(local_path)
-                local_path = mp4_path
-                mime_type = 'video/mp4'
+            try:
+                gif_to_mp4(local_path, mp4_path)
+            except Exception as e:
+                # 🚨 АВАРІЯ: GIF пошкоджений або FFmpeg впав
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося конвертувати GIF файл '{f['name']}' у MP4. Можливо, файл бінарно пошкоджений. Деталі: {e}")
+            
+            if os.path.exists(local_path): os.remove(local_path)
+            local_path = mp4_path
+            mime_type = 'video/mp4'
                 
+        # Конвертація HEIC / HEIF (Apple)
         elif mime_type in ['image/heic', 'image/heif'] or lower_name.endswith(('.heic', '.heif')):
             jpg_path = os.path.join('downloaded', f['name'].rsplit('.', 1)[0] + '.jpg')
             try:
                 with Image.open(local_path) as img:
                     img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
-                os.remove(local_path)
-                local_path = jpg_path
-                mime_type = 'image/jpeg'
             except Exception as e:
-                print(f"❌ Помилка конвертації HEIC: {e}")
-                continue
+                # 🚨 АВАРІЯ: HEIC файл битий або не зчитується Pillow
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося розкодувати iPhone-формат HEIC/HEIF для файлу '{f['name']}'. Файл пошкоджено. Деталі: {e}")
+                
+            if os.path.exists(local_path): os.remove(local_path)
+            local_path = jpg_path
+            mime_type = 'image/jpeg'
 
         processed_items.append({
             'id': f['id'],
@@ -531,7 +545,7 @@ def main():
         
         clips = process_media_group(items)
         if not clips:
-            sys.exit("❌ Не вдалося створити кліпи для цієї групи відео.")
+            sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося згенерувати кліпи для вибраної групи медіа-файлів.")
             
         text_info = generate_ai_metadata(date, loc)
         trending_text, year, location = text_info
@@ -546,14 +560,13 @@ def main():
         
         if upload_success:
             move_files_to_trash(service, items)
-            if os.path.exists(final_file):
-                os.remove(final_file)
+            if os.path.exists(final_file): os.remove(final_file)
             for item in items:
-                if os.path.exists(item['local_path']):
-                    os.remove(item['local_path'])
+                if os.path.exists(item['local_path']): os.remove(item['local_path'])
             print("🏁 Обробку поточної групи успішно завершено.")
         else:
-            sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація в TikTok зазнала невдачі. Файли залишено в папці.")
+            # 🚨 АВАРІЯ: Монтаж пройшов, але TikTok API відхилив запит (як у нашому логу помилки 403)
+            sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація в TikTok зазнала невдачі. Вхідні файли збережено на Диску для повторної спроби.")
         
         return
 
