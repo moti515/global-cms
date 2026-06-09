@@ -286,7 +286,7 @@ def upload_to_tiktok(video_path, description):
     chunk_size = video_size  
     total_chunk_count = 1
     
-    init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
+    init_url = "https://open.tiktokapis.com/v2/post/publish/video/init/"
     
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -296,7 +296,7 @@ def upload_to_tiktok(video_path, description):
     body = {
         "post_info": {
             "title": description if description else "Мій тест #travel #vlog",
-            "privacy_level": "SELF_ONLY",  
+            "privacy_level": "PUBLIC",  
             "disable_duet": True,
             "disable_comment": True,
             "disable_stitch": True,
