@@ -45,3 +45,11 @@ jobs:
         CLIENT_KEY_TIKTOK: ${{ secrets.CLIENT_KEY_TIKTOK }}
         CLIENT_SECRET_TIKTOK: ${{ secrets.CLIENT_SECRET_TIKTOK }}
       run: python publish_content_tiktok.py
+
+      - name: Commit and push updated TikTok tokens
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git add tiktok_tokens.json
+        git commit -m "chore: auto-update tiktok tokens [skip ci]" || echo "No changes to commit"
+        git push
