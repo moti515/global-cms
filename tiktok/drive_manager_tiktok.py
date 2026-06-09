@@ -2,7 +2,7 @@ import os
 import sys
 import io
 from googleapiclient.http import MediaIoBaseDownload
-from config import FOLDER_INPUT_ID, FOLDER_TRASH_ID, VALID_EXTENSIONS
+from config_tiktok import FOLDER_INPUT_ID, FOLDER_TRASH_ID, VALID_EXTENSIONS
 
 def count_total_files(service):
     total = 0
