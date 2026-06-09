@@ -33,7 +33,7 @@ TOKENS_FILE = 'tiktok_tokens.json'
 FOLDER_INPUT_ID = '19wPAbTuyGGqMI4twWXfU5gfs-vk2Ru_G'
 FOLDER_TRASH_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
 
-TARGET_DURATION = 30  # Цільова тривалість відео в секундах
+TARGET_DURATION = 5  # Цільова тривалість відео в секундах
 MUSIC_FALLBACK_PATH = 'assets/trending_travel_music.mp3'
 
 VALID_EXTENSIONS = (
@@ -245,7 +245,7 @@ def compile_final_video(clips, text_info):
     
     result_video = CompositeVideoClip([final_video, main_txt, meta_txt])
     output_name = f"ready_tiktok_{year}.mp4"
-    result_video.write_videofile(output_name, fps=30, codec="libx264", audio_codec="aac")
+    result_video.write_videofile(output_name, fps=10, codec="libx264", audio_codec="aac")
     
     return output_name
 
