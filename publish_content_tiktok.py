@@ -6,6 +6,7 @@ import time
 import subprocess
 import re
 import requests
+import random  # <-- ВИПРАВЛЕНО: додано для random.choice в AI метаданих
 from datetime import datetime
 from zoneinfo import ZoneInfo  # Нативно в Python 3.9+ для точного часу в Німеччині
 from google.oauth2 import service_account
@@ -13,12 +14,13 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 # Імпортуємо Pillow
-from PIL import Image
+from PIL import Image, ImageOps  # <-- ВИПРАВЛЕНО: додано ImageOps для Smart Crop
 from PIL.ExifTags import TAGS, GPSTAGS
 from pillow_heif import register_heif_opener
 
-# Трюк (Monkey Patch) для сумісності старого MoviePy з новим Pillow в Python 3.12
+# Трюк для сумісності старого MoviePy з новим Pillow в Python 3.12
 if not hasattr(Image, 'ANTIALIAS'):
+    Image.Resampling.LANCZOS = Image.Resampling.LANCZOS
     Image.ANTIALIAS = Image.Resampling.LANCZOS
 
 from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, AudioFileClip, TextClip, CompositeVideoClip
@@ -115,7 +117,47 @@ def count_total_files(service):
             sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка підрахунку файлів на Google Диску: {e}")
     return total
 
-# --- РОБОТА З МЕТАДАНИМИ ТА ГЕОКОДУВАННЯМ ---
+# --- РОЗУМНЕ ВИПРАВЛЕННЯ ГЕОМЕТРІЇ ВІДЕО ---
+def resize_and_crop_video(clip, target_w=1080, target_h=1920):
+    """Масштабує та обрізає відео до 9:16 без порушення геометричних пропорцій"""
+    target_ar = target_w / target_h
+    clip_ar = clip.w / clip.h
+    
+    if clip_ar > target_ar:
+        resized = clip.resize(height=target_h)
+        x_center = resized.w / 2
+        return resized.crop(x_center=x_center, width=target_w, height=target_h)
+    else:
+        resized = clip.resize(width=target_w)
+        y_center = resized.h / 2
+        return resized.crop(y_center=y_center, width=target_w, height=target_h)
+
+# --- ПРІОРИТЕТ №1: ВИЗНАЧЕННЯ ДАТИ З НАЗВИ ФАЙЛУ ---
+def extract_date_from_filename(filename):
+    """Шукає дату в назві файлу (типові кодування камер та месенджерів)"""
+    match = re.search(r'\b(20[0-2]\d)[-._]?(0[1-9]|1[0-2])[-._]?([0-2]\d|3[01])\b', filename)
+    if match:
+        year, month, day = match.groups()
+        try:
+            return datetime(int(year), int(month), int(day))
+        except ValueError:
+            pass
+            
+    match_ts = re.search(r'\b(1[4-7]\d{8,11})\b', filename)
+    if match_ts:
+        ts = int(match_ts.group(1))
+        if len(match_ts.group(1)) > 10:  
+            ts = ts / 1000
+        try:
+            dt = datetime.fromtimestamp(ts)
+            if 2000 <= dt.year <= datetime.now().year:
+                return dt
+        except:
+            pass
+            
+    return None
+
+# --- ОБРОБКА МЕТАДАНИХ ТА ГЕОЛОКАЦІЇ ---
 def get_exif_data(image_path):
     date_str, lat, lon = None, None, None
     try:
@@ -123,7 +165,6 @@ def get_exif_data(image_path):
             exif = img._getexif()
             if not exif:
                 return date_str, lat, lon
-            
             geotagging = {}
             for tag, value in exif.items():
                 decoded = TAGS.get(tag, tag)
@@ -136,31 +177,23 @@ def get_exif_data(image_path):
             
             if 'GPSLatitude' in geotagging and 'GPSLongitude' in geotagging:
                 def _to_degrees(value):
-                    d = float(value[0])
-                    m = float(value[1])
-                    s = float(value[2])
-                    return d + (m / 60.0) + (s / 3600.0)
-                
+                    return float(value[0]) + (float(value[1]) / 60.0) + (float(value[2]) / 3600.0)
                 lat = _to_degrees(geotagging['GPSLatitude'])
                 lon = _to_degrees(geotagging['GPSLongitude'])
                 if geotagging.get('GPSLatitudeRef') == 'S': lat = -lat
                 if geotagging.get('GPSLongitudeRef') == 'W': lon = -lon
     except Exception as e:
-        print(f"⚠️ Попередження EXIF (не критично): Не вдалося прочитати метадані для {image_path}: {e}")
+        print(f"⚠️ Попередження EXIF для {image_path}: {e}")
     return date_str, lat, lon
 
 def get_video_metadata(video_path):
     date_str, lat, lon = None, None, None
     try:
-        cmd = [
-            'ffprobe', '-v', 'quiet', '-print_format', 'json',
-            '-show_format', '-show_streams', video_path
-        ]
+        cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', video_path]
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode == 0:
             data = json.loads(result.stdout)
             tags = data.get('format', {}).get('tags', {})
-            
             creation_time = tags.get('creation_time')
             if creation_time:
                 try:
@@ -168,20 +201,17 @@ def get_video_metadata(video_path):
                     date_str = dt.strftime('%Y:%m:%d %H:%M:%S')
                 except:
                     pass
-            
             loc_str = tags.get('location') or tags.get('location-eng')
             if loc_str:
                 match = re.match(r'([+-]\d+\.\d+)([+-]\d+\.\d+)', loc_str)
                 if match:
-                    lat = float(match.group(1))
-                    lon = float(match.group(2))
+                    lat, lon = float(match.group(1)), float(match.group(2))
     except Exception as e:
-        print(f"⚠️ Попередження відео-метаданих (не критично) для {video_path}: {e}")
+        print(f"⚠️ Попередження відео-метаданих для {video_path}: {e}")
     return date_str, lat, lon
 
 def get_location_name(lat, lon):
-    if lat is None or lon is None:
-        return None
+    if lat is None or lon is None: return None
     try:
         url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=10&accept-language=uk"
         headers = {'User-Agent': 'TikTokAutomation_Bot_2026'}
@@ -189,12 +219,9 @@ def get_location_name(lat, lon):
         address = res.get('address', {})
         city = address.get('city') or address.get('town') or address.get('village') or address.get('county')
         country = address.get('country')
-        if city and country:
-            return f"{city}, {country}"
-        elif country:
-            return country
+        return f"{city}, {country}" if city and country else country
     except Exception as e:
-        print(f"⚠️ Попередження геокодування OSM: {e}")
+        print(f"⚠️ Помилка геокодування OSM: {e}")
     return None
 
 # --- CONVERSION ---
@@ -210,10 +237,10 @@ def gif_to_mp4(input_path, output_path):
     if res.returncode != 0:
         raise RuntimeError(f"FFmpeg Error: {res.stderr}")
 
-# --- ОБРОБКА ТА МОНТАЖ (СТРОГИЙ КОНТРОЛЬ ПОМИЛОК) ---
+# --- ОБРОБКА МЕДІА ТА МОНТАЖ ---
 def process_media_group(file_list):
     clips = []
-    clip_duration = max(4.0, TARGET_DURATION / len(file_list)) 
+    clip_duration = max(4.0, TARGET_DURATION / len(file_list))
     
     for item in file_list:
         local_path = item['local_path']
@@ -226,68 +253,136 @@ def process_media_group(file_list):
                 start_time = max(0, full_video.duration / 2 - clip_duration / 2)
                 end_time = min(full_video.duration, start_time + clip_duration)
                 
-                trimmed = full_video.subclip(start_time, end_time).resize(newsize=(1080, 1920))
-                clips.append(trimmed)
+                trimmed = full_video.subclip(start_time, end_time)
+                smart_video = resize_and_crop_video(trimmed, 1080, 1920)
+                clips.append(smart_video)
             except Exception as e:
-                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Файл відео '{file_name}' пошкоджений або має непідтримувану структуру. Деталі: {e}")
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Файл відео '{file_name}' пошкоджений. Деталі: {e}")
                 
         elif 'image' in mime:
             try:
-                img_clip = ImageClip(local_path).set_duration(clip_duration).resize(newsize=(1080, 1920))
+                temp_cropped_path = f"downloaded/cropped_{file_name}.jpg" if not file_name.lower().endswith('.jpg') else f"downloaded/cropped_{os.path.basename(local_path)}"
+                
+                with Image.open(local_path) as img:
+                    img_resized = ImageOps.fit(img, (1080, 1920), Image.Resampling.LANCZOS)
+                    if img_resized.mode != 'RGB':
+                        img_resized = img_resized.convert('RGB')
+                    img_resized.save(temp_cropped_path, 'JPEG', quality=95)
+                
+                img_clip = ImageClip(temp_cropped_path).set_duration(clip_duration)
                 clips.append(img_clip)
             except Exception as e:
-                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Зображення '{file_name}' пошкоджене або має непідтримуваний формат. Деталі: {e}")
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Зображення '{file_name}' пошкоджене. Деталі: {e}")
                 
     return clips
 
+# --- ДИНАМІЧНА ГЕНЕРАЦІЯ ТЕКСТІВ ---
 def generate_ai_metadata(date_str, location_geo):
     year = date_str.split('.')[-1] if '.' in date_str else "2026"
-    location = location_geo if location_geo != "Невідоме місце" else "Магія природи"
-    trending_text = "Місце, куди хочеться повертатися ✨"
+    
+    generic_phrases = [
+        "Магія природи, яка заліковує душу ✨",
+        "Там, де час зупиняється... 🌿",
+        "Краса в простих деталях ⛰️",
+        "Естетика цього світу зашкалює 😍",
+        "Моменти, які залишаються назавжди"
+    ]
+    
+    location_phrases = [
+        f"Місце, куди хочеться повертатися: {location_geo} ✨",
+        f"Атмосфера цього дня: {location_geo} 🌍",
+        f"Відкриваючи неймовірні куточки: {location_geo} 🌿",
+        f"Подорож, що надихає | {location_geo} 🧭",
+        f"Спогади з серця: {location_geo}"
+    ]
+    
+    if location_geo and location_geo != "Невідоме місце":
+        trending_text = random.choice(location_phrases)
+        location = location_geo
+    else:
+        trending_text = random.choice(generic_phrases)
+        location = "Магія природи"
+        
     return trending_text, year, location
 
+# --- КОМПІЛЯЦІЯ ФІНАЛЬНОГО ВІДЕО ---
 def compile_final_video(clips, text_info):
     trending_text, year, location = text_info
-    
     try:
         final_video = concatenate_videoclips(clips, method="compose")
         
         if final_video.audio is None:
             if os.path.exists(MUSIC_FALLBACK_PATH):
-                print("🎵 Додаємо фонову музику...")
                 bg_music = AudioFileClip(MUSIC_FALLBACK_PATH).set_duration(final_video.duration)
                 final_video = final_video.set_audio(bg_music)
             else:
-                print("⚠️ Музику не знайдено. Генеруємо обов'язковий трек тиші для TikTok...")
                 silence_array = np.zeros((int(44100 * final_video.duration), 2))
                 silent_audio = AudioArrayClip(silence_array, fps=44100).set_duration(final_video.duration)
                 final_video = final_video.set_audio(silent_audio)
             
-        main_txt = TextClip(trending_text, fontsize=50, color='white', font='Arial-Bold', method='caption', size=(900, None)).set_position(('center', 400)).set_duration(final_video.duration)
-        meta_txt = TextClip(f"{location} | {year}", fontsize=40, color='yellow', font='Arial').set_position(('center', 1500)).set_duration(final_video.duration)
+        main_txt = TextClip(trending_text, fontsize=48, color='white', font='Arial-Bold', method='caption', size=(950, None)).set_position(('center', 400)).set_duration(final_video.duration)
+        meta_txt = TextClip(f"{location} | {year}", fontsize=38, color='yellow', font='Arial').set_position(('center', 1500)).set_duration(final_video.duration)
         
         result_video = CompositeVideoClip([final_video, main_txt, meta_txt])
-        output_name = f"ready_tiktok_{year}.mp4"
+        output_name = f"ready_tiktok_{int(time.time())}.mp4"
         
         result_video.write_videofile(
             output_name, 
             fps=TEST_FPS, 
             codec="libx264", 
             audio_codec="aac",
-            bitrate="2000k",
-            ffmpeg_params=["-pix_fmt", "yuv420p", "-profile:v", "baseline", "-level", "3.0"]
+            bitrate="2500k",
+            ffmpeg_params=["-pix_fmt", "yuv420p"]
         )
         
         result_video.close()
         final_video.close()
-        for c in clips:
-            c.close()
-            
         return output_name
     except Exception as e:
-        sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка генерації або рендерингу фінального відео файлу. Деталі: {e}")
+        sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка рендерингу відео: {e}")
 
-# --- ПУБЛІКАЦІЯ У TIKTOK (З ПІДТРИМКОЮ ДИНАМІЧНИХ ЧАНКІВ) ---
+# --- ПОВНИЙ ІНТЕЛЕКТУАЛЬНИЙ БЛОК ВИЗНАЧЕННЯ ДАТИ (ОПТИМІЗОВАНО НА ГЕО) ---
+def get_intellectual_date(local_path, filename, gdrive_file, now_time):
+    """Реалізує повну перевірку дати й одночасно повертає знайдені геокоординати для уникнення подвійного читання файлу"""
+    fn_date = extract_date_from_filename(filename)
+
+    meta_date, lat, lon = None, None, None
+    mime_type = gdrive_file['mimeType']
+    lower_name = filename.lower()
+    
+    if mime_type.startswith('image/') or lower_name.endswith(('.heic', '.heif', '.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff')):
+        meta_date, lat, lon = get_exif_data(local_path)
+    elif mime_type.startswith('video/') or lower_name.endswith(('.mp4', '.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg')):
+        meta_date, lat, lon = get_video_metadata(local_path)
+
+    # Якщо дата є в назві - повертаємо її, але координати ми вже зберегли!
+    if fn_date:
+        print(f"🎯 Дату успішно розпізнано з назви файлу '{filename}': {fn_date.strftime('%d.%m.%Y')}")
+        return fn_date, lat, lon
+
+    # 2. ПРІОРИТЕТ II: Внутрішні метадані файлу
+    if meta_date:
+        try:
+            dt_parsed = datetime.strptime(meta_date, '%Y:%m:%d %H:%M:%S')
+            if 2000 <= dt_parsed.year <= now_time.year:
+                return dt_parsed, lat, lon
+        except:
+            pass
+
+    # 3. ПРІОРИТЕТ III: Резервний аналіз Google Drive дат
+    try:
+        dt_created = datetime.strptime(gdrive_file['createdTime'][:19], '%Y-%m-%dT%H:%M:%S')
+        dt_modified = datetime.strptime(gdrive_file['modifiedTime'][:19], '%Y-%m-%dT%H:%M:%S')
+        earliest_gdrive = min(dt_created, dt_modified)
+        if 2010 <= earliest_gdrive.year <= now_time.year:
+            return earliest_gdrive, lat, lon
+    except:
+        pass
+
+    # 4. ФОЛБЕК
+    return now_time, lat, lon
+
+# --- ПУБЛІКАЦІЯ У TIKTOK ---
 def upload_to_tiktok(video_path, description):
     access_token = get_valid_tiktok_token()
     if not access_token:
@@ -295,10 +390,8 @@ def upload_to_tiktok(video_path, description):
         return False
 
     video_size = os.path.getsize(video_path)
-    
-    # Визначаємо ліміти згідно з TikTok Media Transfer Guide
-    MAX_SINGLE_SIZE = 64 * 1024 * 1024       # 64 MB
-    DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024    # 10 MB (відповідає вимогам >5MB та <64MB)
+    MAX_SINGLE_SIZE = 64 * 1024 * 1024       
+    DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024    
 
     if video_size <= MAX_SINGLE_SIZE:
         chunk_size = video_size
@@ -351,15 +444,12 @@ def upload_to_tiktok(video_path, description):
     with open(video_path, 'rb') as video_file:
         for i in range(total_chunk_count):
             first_byte = i * chunk_size
-            # Якщо це останній чанк, він забирає залишок файлу (згідно з правилами TikTok)
             if i == total_chunk_count - 1:
                 last_byte = video_size - 1
             else:
                 last_byte = (i + 1) * chunk_size - 1
             
             byte_size_of_this_chunk = last_byte - first_byte + 1
-            
-            # Переміщуємо вказівник у файлі на потрібну позицію чанку
             video_file.seek(first_byte)
             chunk_data = video_file.read(byte_size_of_this_chunk)
             
@@ -372,14 +462,12 @@ def upload_to_tiktok(video_path, description):
             print(f"📤 Надсилання чанку {i+1}/{total_chunk_count} (байти {first_byte}-{last_byte})...")
             upload_res = requests.put(upload_url, headers=put_headers, data=chunk_data)
             
-            # Визначаємо очікуваний статус-код: 201 для завершального чанку, 206 — для проміжних
             expected_status = 201 if i == total_chunk_count - 1 else 206
-            
             if upload_res.status_code != expected_status:
-                print(f"❌ Помилка завантаження чанку {i+1}: Отримано статус {upload_res.status_code}, очікувався {expected_status}. Текст: {upload_res.text}")
+                print(f"❌ Помилка завантаження чанку {i+1}: Отримано статус {upload_res.status_code}, очікувався {expected_status}.")
                 return False
 
-    print("🚀 Відео успішно передано на сервери TikTok! Усі частини доставлено.")
+    print("🚀 Відео успішно передано на сервери TikTok!")
     return True
 
 # --- ОЧИЩЕННЯ ТА АРХІВАЦІЯ GOOGLE DRIVE ---
@@ -421,13 +509,11 @@ def main():
             allowed_hours = [5, 11, 17, 23]
             
         if berlin_hour not in allowed_hours:
-            print(f"☕ [ШТАТНИЙ ПРОПУСК] Для {total_files} файлів година {berlin_hour} не передбачена графіком. Дозволені години: {allowed_hours}.")
-            print("🏁 Завершуємо роботу у штатному режимі (Успішно).")
+            print(f"☕ [ШТАТНИЙ ПРОПУСК] Для {total_files} файлів година {berlin_hour} не передбачена графіком.")
             sys.exit(0)
             
         print("✅ Успішно! Умови графіку виконано. Переходимо до відбору та обробки медіа.")
 
-    # Отримуємо перші 50 файлів для поточної ітерації монтажу
     try:
         results = service.files().list(
             q=f"'{FOLDER_INPUT_ID}' in parents and trashed = false",
@@ -442,8 +528,7 @@ def main():
     gdrive_files = [f for f in gdrive_files if f['id'] != FOLDER_TRASH_ID]
     
     if not gdrive_files:
-        print("☕ [ШТАТНИЙ ПРОПУСК] Папка вхідних медіа порожня. Немає контенту для монтажу.")
-        print("🏁 Завершуємо роботу у штатному режимі (Успішно).")
+        print("☕ [ШТАТНИЙ ПРОПУСК] Папка вхідних медіа порожня.")
         sys.exit(0)
 
     print(f"Знайдено файлів для поточної збірки: {len(gdrive_files)}")
@@ -472,41 +557,16 @@ def main():
         except Exception as e:
             sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося завантажити файл '{f['name']}' з Google Диску. Причина: {e}")
 
-        meta_date, lat, lon = None, None, None
-        if mime_type.startswith('image/') or lower_name.endswith(('.heic', '.heif', '.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff')):
-            meta_date, lat, lon = get_exif_data(local_path)
-        elif mime_type.startswith('video/') or lower_name.endswith(('.mp4', '.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg')):
-            meta_date, lat, lon = get_video_metadata(local_path)
-
-        final_dt = None
+        # --- ТУТ ІНТЕГРОВАНО ТВІЙ БЛОК (ОПТИМІЗОВАНИЙ) ---
         now = datetime.now()
-        if meta_date:
-            try:
-                dt_parsed = datetime.strptime(meta_date, '%Y:%m:%d %H:%M:%S')
-                if dt_parsed.year >= 2000 and dt_parsed <= now:
-                    final_dt = dt_parsed
-            except:
-                pass
-                
-        if not final_dt:
-            try:
-                dt_created = datetime.strptime(f['createdTime'][:19], '%Y-%m-%dT%H:%M:%S')
-                dt_modified = datetime.strptime(f['modifiedTime'][:19], '%Y-%m-%dT%H:%M:%S')
-                earliest_gdrive = min(dt_created, dt_modified)
-                if earliest_gdrive.year >= 2010 and earliest_gdrive <= now:
-                    final_dt = earliest_gdrive
-            except:
-                pass
-
-        if not final_dt:
-            final_dt = now
-            
+        # Отримуємо дату і координати за один виклик
+        final_dt, lat, lon = get_intellectual_date(local_path, f['name'], f, now)
         file_date = final_dt.strftime('%d.%m.%Y')
         
-        location = None
+        location = "Невідоме місце"
         if lat and lon:
-            time.sleep(1)  
-            location = get_location_name(lat, lon)
+            time.sleep(1)  # Захист від блокування IP сервером OpenStreetMap Nominatim
+            location = get_location_name(lat, lon) or "Невідоме місце"
             
         # Конвертація GIF
         if mime_type == 'image/gif' or lower_name.endswith('.gif'):
@@ -514,7 +574,7 @@ def main():
             try:
                 gif_to_mp4(local_path, mp4_path)
             except Exception as e:
-                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося конвертувати GIF файл '{f['name']}' у MP4. Деталі: {e}")
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося конвертувати GIF у MP4. Деталі: {e}")
             
             if os.path.exists(local_path): os.remove(local_path)
             local_path = mp4_path
@@ -527,21 +587,23 @@ def main():
                 with Image.open(local_path) as img:
                     img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
             except Exception as e:
-                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося розкодувати iPhone-формат HEIC/HEIF для файлу '{f['name']}'. Деталі: {e}")
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося розкодувати iPhone-формат HEIC/HEIF. Деталі: {e}")
                 
             if os.path.exists(local_path): os.remove(local_path)
             local_path = jpg_path
             mime_type = 'image/jpeg'
 
+        # Додавання до списку обробки (з актуальними шляхами після конвертації)
         processed_items.append({
             'id': f['id'],
             'name': f['name'],
             'mime': mime_type,
             'local_path': local_path,
             'date': file_date,
-            'location': location or "Невідоме місце"
+            'location': location
         })
 
+    # --- ГРУПУВАННЯ ТА МОНТАЖ ---
     groups = {}
     for item in processed_items:
         key = (item['date'], item['location'])
@@ -550,7 +612,6 @@ def main():
         groups[key].append(item)
         
     for (date, loc), items in groups.items():
-        # Виводимо в лог назви файлів з поточної групи
         file_names = ", ".join([f"'{item['name']}'" for item in items])
         print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація: {loc}. Файлів: {len(items)} | Склад: [{file_names}]")
         
