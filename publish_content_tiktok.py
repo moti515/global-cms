@@ -260,9 +260,14 @@ def upload_to_tiktok(video_path, description):
         print("Публікація скасована через відсутність дійсного токена.")
         return False
 
+    # Динамічно отримуємо точний розмір відео в байтах
     video_size = os.path.getsize(video_path)
     
-    # 🔄 ЗМІНЕНО: Новий ендпоінт для завантаження в Чернетки (Inbox)
+    # Оскільки відео тестові й маленькі, передаємо одним чанком
+    chunk_size = video_size  
+    total_chunk_count = 1
+    
+    # 🔄 Ендпоінт для завантаження в Чернетки (Inbox)
     init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
     
     headers = {
@@ -270,40 +275,47 @@ def upload_to_tiktok(video_path, description):
         "Content-Type": "application/json; charset=UTF-8"
     }
     
-    # 🎯 ПРАВИЛЬНА СТРУКТУРА ДЛЯ INBOX (DRAFT) ЕНДПОІНТУ:
+    # 🎯 ІНТЕГРОВАНА СТРУКТУРА: додано чанки та динамічний опис
     body = {
-        "source_info": {
-            "source": "FILE_UPLOAD",
-            "video_size": video_size
-        },
         "post_info": {
-            "title": "Мій тестовий контент #travel",
-            "privacy_level": "SELF_ONLY",  # Відео буде видно лише вам у чернетках
+            "title": description if description else "Мій тестовий контент #travel #vlog",
+            "privacy_level": "SELF_ONLY",  # Для приватного тестування в чернетках
             "disable_duet": True,
             "disable_comment": True,
-            "disable_stitch": True
+            "disable_stitch": True,
+            "video_cover_timestamp_ms": 1000
+        },
+        "source_info": {
+            "source": "FILE_UPLOAD",
+            "video_size": video_size,
+            "chunk_size": chunk_size,
+            "total_chunk_count": total_chunk_count
         }
     }
     
     print("Надсилання запиту на ініціалізацію в TikTok (Inbox/Draft)...")
     init_res = requests.post(init_url, headers=headers, json=body)
     
+    # Якщо TikTok повернув помилку (наприклад, не 200), виводимо відповідь сервера
     if init_res.status_code != 200:
-        print(f"❌ Помилка ініціалізації чернетки: {init_res.text}")
+        print(f"❌ Помилка ініціалізації чернетки: {init_res.status_code} - {init_res.text}")
         return False
         
     res_data = init_res.json()
-    if 'data' not in res_data:
+    if 'data' not in res_data or 'upload_url' not in res_data['data']:
         print(f"❌ Помилка API TikTok: {res_data.get('error')}")
         return False
 
     upload_url = res_data['data']['upload_url']
     print("Дозвіл отримано. Починаємо бінарне завантаження файлу...")
 
+    # PUT-запит для прямого завантаження бінарного файлу на сервера TikTok
     with open(video_path, 'rb') as video_file:
         put_headers = {
             "Content-Type": "video/mp4",
-            "Content-Length": str(video_size)
+            "Content-Length": str(video_size),
+            # Додаємо Range для одного повного чанку за стандартом TikTok
+            "Content-Range": f"bytes 0-{video_size-1}/{video_size}"
         }
         upload_res = requests.put(upload_url, headers=put_headers, data=video_file)
 
