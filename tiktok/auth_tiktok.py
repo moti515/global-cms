@@ -4,7 +4,7 @@ import json
 import requests
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from config import CLIENT_KEY, CLIENT_SECRET, TOKENS_FILE
+from config_tiktok import CLIENT_KEY, CLIENT_SECRET, TOKENS_FILE
 
 def get_gdrive_service():
     try:
