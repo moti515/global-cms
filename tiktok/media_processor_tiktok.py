@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image, ImageOps
 from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, AudioFileClip, TextClip, CompositeVideoClip
 from moviepy.audio.AudioClip import AudioArrayClip
-from config import TEST_FPS, MUSIC_FALLBACK_PATH
+from config_tiktok import FINAL_FPS, MUSIC_FALLBACK_PATH
 
 def fit_video_with_background(clip, target_w=1080, target_h=1920):
     target_ar = target_w / target_h
@@ -84,7 +84,7 @@ def compile_final_video(clips, text_info):
         
         result_video.write_videofile(
             output_name, 
-            fps=TEST_FPS, 
+            fps=FINAL_FPS, 
             codec="libx264", 
             audio_codec="aac",
             bitrate="2500k",
