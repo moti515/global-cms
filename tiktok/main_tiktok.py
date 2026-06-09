@@ -118,15 +118,15 @@ def main():
             local_path = jpg_path
             mime_type = 'image/jpeg'
 
-            processed_items.append({
-                'id': f['id'],
-                'name': f['name'],
-                'mime': mime_type,
-                'local_path': local_path,
-                'date': file_date,
-                'location': location
-            })
-
+        # ✅ зміщено ліворуч, додає абсолютно всі файли після перевірок
+        processed_items.append({
+            'id': f['id'],
+            'name': f['name'],
+            'mime': mime_type,
+            'local_path': local_path,
+            'date': file_date,
+            'location': location
+        })
     # --- ГРУПУВАННЯ ТА МОНТАЖ ---
     groups = {}
     for item in processed_items:
