@@ -1,19 +1,19 @@
 name: TikTok Automated Publisher
 
 on:
-  workflow_dispatch: # Дозволяє запускати вручну з інтерфейсу GitHub
-  # schedule:
-  #   - cron: '0 12 * * *'
+  workflow_dispatch: # Дозволяє запускати вручну з інтерфейсу GitHub (Режим Тестування)
+  repository_dispatch:
+    types: [cron_trigger] # Дозволяє запускати зовнішнім кроном (cron-job.org)
 
-# Переводимо екшени на Node 24, щоб прибрати попередження GitHub у логах
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  # Автоматично вираховуємо режим: якщо запуск через репозиторій (крон) — ставимо 'cron', інакше 'manual'
+  RUN_MODE: ${{ github.event_name == 'repository_dispatch' && 'cron' || 'manual' }}
 
 jobs:
   publish-video:
     runs-on: ubuntu-latest
     
-    # 🔐 ДОДАНО: Дозволяємо воркфло записувати зміни назад у репозиторій
     permissions:
       contents: write
 
@@ -31,8 +31,6 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y ffmpeg imagemagick
-        
-        # Універсальне виправлення політики безпеки ImageMagick
         sudo sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@\*"/g' /etc/ImageMagick-*/policy.xml || true
         sudo sed -i 's/domain="coder" rights="none" pattern="PDF"/domain="coder" rights="read|write" pattern="PDF"/' /etc/ImageMagick-*/policy.xml || true
 
@@ -46,9 +44,9 @@ jobs:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         CLIENT_KEY_TIKTOK: ${{ secrets.CLIENT_KEY_TIKTOK }}
         CLIENT_SECRET_TIKTOK: ${{ secrets.CLIENT_SECRET_TIKTOK }}
+        RUN_MODE: ${{ env.RUN_MODE }}
       run: python publish_content_tiktok.py
 
-    # 🛠️ ВИПРАВЛЕНО: Вирівняно відступи для кроку збереження токенів
     - name: Commit and push updated TikTok tokens
       run: |
         git config --global user.name "github-actions[bot]"
