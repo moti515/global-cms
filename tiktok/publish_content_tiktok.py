@@ -6,6 +6,7 @@ import time
 import subprocess
 import re
 import requests
+import math
 import random  # <-- ВИПРАВЛЕНО: додано для random.choice в AI метаданих
 from datetime import datetime
 from zoneinfo import ZoneInfo  # Нативно в Python 3.9+ для точного часу в Німеччині
