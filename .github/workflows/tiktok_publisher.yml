@@ -21,8 +21,8 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.12' # Оновлено до 3.12, щоб уникнути попереджень від Google SDK
-        cache: 'pip' # Кешує завантажені пакети для швидших наступних запусків
+        python-version: '3.12'
+        cache: 'pip'
 
     - name: Install System Dependencies (FFmpeg & ImageMagick)
       run: |
@@ -36,8 +36,8 @@ jobs:
     - name: Install Python Dependencies
       run: |
         python -m pip install --upgrade pip
-        # Встановлюємо всі необхідні бібліотеки для Google Drive, Pillow, HEIC та MoviePy
-        pip install google-api-python-client google-auth requests pillow pillow-heif moviepy
+        # "moviepy<2.0" гарантує наявність moviepy.editor та сумісність з ImageMagick
+        pip install google-api-python-client google-auth requests pillow pillow-heif "moviepy<2.0"
 
     - name: Run TikTok Automation Script
       env:
