@@ -34,8 +34,8 @@ FOLDER_INPUT_ID = '19wPAbTuyGGqMI4twWXfU5gfs-vk2Ru_G'
 FOLDER_TRASH_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
 
 # ⚡ ОБМЕЖЕННЯ НА ЧАС ТЕСТУВАННЯ (Змінено для швидкості)
-TARGET_DURATION = 3  # Робимо тестове відео всього 3 секунди!
-TEST_FPS = 10        # Знижуємо кадри в секунду для миттєвого рендерингу
+TARGET_DURATION = 5  # Робимо тестове відео всього 3 секунди!
+TEST_FPS = 30        # Знижуємо кадри в секунду для миттєвого рендерингу
 
 MUSIC_FALLBACK_PATH = 'assets/trending_travel_music.mp3'
 
