@@ -38,4 +38,4 @@ jobs:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         CLIENT_KEY_TIKTOK: ${{ secrets.CLIENT_KEY_TIKTOK }}
         CLIENT_SECRET_TIKTOK: ${{ secrets.CLIENT_SECRET_TIKTOK }}
-      run: python tiktok_automation.py
+      run: python publish_content_tiktok.py
