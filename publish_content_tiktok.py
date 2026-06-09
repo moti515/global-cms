@@ -270,13 +270,19 @@ def upload_to_tiktok(video_path, description):
         "Content-Type": "application/json; charset=UTF-8"
     }
     
-    # 🔄 ВИПРАВЛЕНО: Додано обов'язковий блок "video_info", навіть якщо він порожній
+    # 🎯 ПРАВИЛЬНА СТРУКТУРА ДЛЯ INBOX (DRAFT) ЕНДПОІНТУ:
     body = {
         "source_info": {
             "source": "FILE_UPLOAD",
             "video_size": video_size
         },
-        "video_info": {} 
+        "post_info": {
+            "title": "Мій тестовий контент #travel",
+            "privacy_level": "SELF_ONLY",  # Відео буде видно лише вам у чернетках
+            "disable_duet": True,
+            "disable_comment": True,
+            "disable_stitch": True
+        }
     }
     
     print("Надсилання запиту на ініціалізацію в TikTok (Inbox/Draft)...")
