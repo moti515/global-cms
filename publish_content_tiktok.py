@@ -21,6 +21,9 @@ if not hasattr(Image, 'ANTIALIAS'):
     Image.ANTIALIAS = Image.Resampling.LANCZOS
 
 from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, AudioFileClip, TextClip, CompositeVideoClip
+# Додано для генерації тиші, якщо немає аудіофайлу
+from moviepy.audio.AudioClip import AudioArrayClip
+import numpy as np
 
 # Реєстрація підтримки HEIC форматів для Pillow
 register_heif_opener()
@@ -33,9 +36,9 @@ TOKENS_FILE = 'tiktok_tokens.json'
 FOLDER_INPUT_ID = '19wPAbTuyGGqMI4twWXfU5gfs-vk2Ru_G'
 FOLDER_TRASH_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
 
-# ⚡ ОБМЕЖЕННЯ НА ЧАС ТЕСТУВАННЯ (Змінено для швидкості)
-TARGET_DURATION = 5  # Робимо тестове відео всього 3 секунди!
-TEST_FPS = 30        # Знижуємо кадри в секунду для миттєвого рендерингу
+# Збільшено до 8 секунд для стабільної перевірки алгоритмами TikTok
+TARGET_DURATION = 8  
+TEST_FPS = 30        
 
 MUSIC_FALLBACK_PATH = 'assets/trending_travel_music.mp3'
 
@@ -171,7 +174,7 @@ def get_location_name(lat, lon):
         print(f"⚠️ Попередження: Помилка геокодування OSM: {e}")
     return None
 
-# --- КОНВЕРТАЦІЯ ТА ОПТИМІЗАЦІЯ ФАЙЛІВ ---
+# --- KONVERTАЦІЯ ТА ОПТИМІЗАЦІЯ ФАЙЛІВ ---
 def convert_to_mp4(input_path, output_path):
     print(f"🎬 Оптимізуємо відео {input_path} в стандартний MP4...")
     cmd = [
@@ -179,7 +182,7 @@ def convert_to_mp4(input_path, output_path):
         '-vcodec', 'libx264', '-crf', '24',
         '-preset', 'faster', '-acodec', 'aac',
         '-b:a', '128k', '-pix_fmt', 'yuv420p',
-        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920',
         output_path
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -189,7 +192,7 @@ def gif_to_mp4(input_path, output_path):
     cmd = [
         'ffmpeg', '-y', '-i', input_path,
         '-movflags', 'faststart', '-pix_fmt', 'yuv420p',
-        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920',
         output_path
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -197,7 +200,7 @@ def gif_to_mp4(input_path, output_path):
 # --- ОБРОБКА ТА МОНТАЖ ВЕЙВЛЕНТІВ ---
 def process_media_group(file_list):
     clips = []
-    clip_duration = max(2.5, TARGET_DURATION / len(file_list)) 
+    clip_duration = max(4.0, TARGET_DURATION / len(file_list)) 
     
     for item in file_list:
         local_path = item['local_path']
@@ -227,7 +230,7 @@ def process_media_group(file_list):
 def generate_ai_metadata(date_str, location_geo):
     year = date_str.split('.')[-1] if '.' in date_str else "2026"
     location = location_geo if location_geo != "Невідоме місце" else "Магія природи"
-    trending_text = "Місце, куди хочеться повертатися знову і знову ✨"
+    trending_text = "Місце, куди хочеться повертатися ✨"
     return trending_text, year, location
 
 def compile_final_video(clips, text_info):
@@ -235,12 +238,17 @@ def compile_final_video(clips, text_info):
     
     final_video = concatenate_videoclips(clips, method="compose")
     
+    # 🎯 ВИПРАВЛЕННЯ АУДІО: Якщо музики немає, створюємо трек тиші (інакше TikTok забанить ролик)
     if final_video.audio is None:
         if os.path.exists(MUSIC_FALLBACK_PATH):
+            print("🎵 Додаємо фонову музику...")
             bg_music = AudioFileClip(MUSIC_FALLBACK_PATH).set_duration(final_video.duration)
             final_video = final_video.set_audio(bg_music)
         else:
-            print("⚠️ Фонова музика за замовчуванням не знайдена.")
+            print("⚠️ Музику не знайдено. Генеруємо обов'язковий трек тиші для TikTok...")
+            silence_array = np.zeros((int(44100 * final_video.duration), 2))
+            silent_audio = AudioArrayClip(silence_array, fps=44100)
+            final_video = final_video.set_audio(silent_audio)
         
     main_txt = TextClip(trending_text, fontsize=50, color='white', font='Arial-Bold', method='caption', size=(900, None)).set_position(('center', 400)).set_duration(final_video.duration)
     meta_txt = TextClip(f"{location} | {year}", fontsize=40, color='yellow', font='Arial').set_position(('center', 1500)).set_duration(final_video.duration)
@@ -248,26 +256,35 @@ def compile_final_video(clips, text_info):
     result_video = CompositeVideoClip([final_video, main_txt, meta_txt])
     output_name = f"ready_tiktok_{year}.mp4"
     
-    # Використовуємо TEST_FPS для швидкої обробки
-    result_video.write_videofile(output_name, fps=TEST_FPS, codec="libx264", audio_codec="aac")
+    # 🎯 СУВОРІ НАЛАШТУВАННЯ КОДУВАННЯ ДЛЯ СЕРВЕРІВ TIKTOK
+    result_video.write_videofile(
+        output_name, 
+        fps=TEST_FPS, 
+        codec="libx264", 
+        audio_codec="aac",
+        bitrate="2000k",
+        ffmpeg_params=["-pix_fmt", "yuv420p", "-profile:v", "baseline", "-level", "3.0"]
+    )
     
+    # Закриваємо кліпи для очищення оперативної пам'яті
+    result_video.close()
+    final_video.close()
+    for c in clips:
+        c.close()
+        
     return output_name
 
-# --- ПУБЛІКАЦІЯ У TIKTOK (Змінено під чернетки / video.upload) ---
+# --- ПУБЛІКАЦІЯ У TIKTOK ---
 def upload_to_tiktok(video_path, description):
     access_token = get_valid_tiktok_token()
     if not access_token:
         print("Публікація скасована через відсутність дійсного токена.")
         return False
 
-    # Динамічно отримуємо точний розмір відео в байтах
     video_size = os.path.getsize(video_path)
-    
-    # Оскільки відео тестові й маленькі, передаємо одним чанком
     chunk_size = video_size  
     total_chunk_count = 1
     
-    # 🔄 Ендпоінт для завантаження в Чернетки (Inbox)
     init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
     
     headers = {
@@ -275,11 +292,10 @@ def upload_to_tiktok(video_path, description):
         "Content-Type": "application/json; charset=UTF-8"
     }
     
-    # 🎯 ІНТЕГРОВАНА СТРУКТУРА: додано чанки та динамічний опис
     body = {
         "post_info": {
-            "title": description if description else "Мій тестовий контент #travel #vlog",
-            "privacy_level": "SELF_ONLY",  # Для приватного тестування в чернетках
+            "title": description if description else "Мій тест #travel #vlog",
+            "privacy_level": "SELF_ONLY",  
             "disable_duet": True,
             "disable_comment": True,
             "disable_stitch": True,
@@ -296,7 +312,6 @@ def upload_to_tiktok(video_path, description):
     print("Надсилання запиту на ініціалізацію в TikTok (Inbox/Draft)...")
     init_res = requests.post(init_url, headers=headers, json=body)
     
-    # Якщо TikTok повернув помилку (наприклад, не 200), виводимо відповідь сервера
     if init_res.status_code != 200:
         print(f"❌ Помилка ініціалізації чернетки: {init_res.status_code} - {init_res.text}")
         return False
@@ -306,32 +321,42 @@ def upload_to_tiktok(video_path, description):
         print(f"❌ Помилка API TikTok: {res_data.get('error')}")
         return False
 
-    # 👁️ ДОДАНО ЛОГУВАННЯ ДЛЯ ПЕРЕВІРКИ:
     publish_id = res_data['data'].get('publish_id')
     upload_url = res_data['data']['upload_url']
     
     print(f"✅ Успішна ініціалізація TikTok!")
-    print(f"🆔 TikTok Publish ID: {publish_id}")  # 👈 Тепер цей ID буде видно в логах GitHub!
-    print(f"📄 Повна відповідь ініціалізації: {res_data}")
+    print(f"🆔 TikTok Publish ID: {publish_id}")
     
     print("Починаємо бінарне завантаження файлу...")
 
-    upload_url = res_data['data']['upload_url']
-    print("Дозвіл отримано. Починаємо бінарне завантаження файлу...")
-
-    # PUT-запит для прямого завантаження бінарного файлу на сервера TikTok
+    # 🎯 ОПТИМІЗАЦІЯ PUT ЗAПРОСУ (Прибрано конфліктний Content-Range для Single Chunk)
     with open(video_path, 'rb') as video_file:
         put_headers = {
             "Content-Type": "video/mp4",
-            "Content-Length": str(video_size),
-            # Додаємо Range для одного повного чанку за стандартом TikTok
-            "Content-Range": f"bytes 0-{video_size-1}/{video_size}"
+            "Content-Length": str(video_size)
         }
         upload_res = requests.put(upload_url, headers=put_headers, data=video_file)
 
     if upload_res.status_code in [200, 201, 204]:
-        print("🚀 Відео успішно завантажено в Чернетки вашого TikTok!")
-        print("📱 Відкрийте TikTok на телефоні -> Вхідні (Inbox) -> Системні сповіщення, щоб опублікувати його.")
+        print("🚀 Відео успішно передано на сервери TikTok!")
+        
+        # 🔄 Автоматичне очікування зміни статусу
+        print("Очікуємо обробку файлу сервером (15 секунд)...")
+        time.sleep(15)
+        
+        status_url = "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
+        status_res = requests.post(status_url, headers=headers, json={"publish_id": publish_id})
+        
+        if status_res.status_code == 200:
+            status_data = status_res.json()
+            current_status = status_data.get('data', {}).get('status', 'UNKNOWN')
+            fail_reason = status_data.get('data', {}).get('fail_reason', '')
+            print(f"📊 Поточний статус відео в TikTok: {current_status}")
+            if current_status == "FAILED":
+                print(f"❌ Помилка обробки сервером: {fail_reason}")
+                return False
+        
+        print("📱 Відкрийте TikTok на телефоні -> Вхідні (Inbox) -> Системні сповіщення.")
         return True
     else:
         print(f"❌ Помилка завантаження файлу: {upload_res.status_code} - {upload_res.text}")
@@ -434,7 +459,7 @@ def main():
         
         location = None
         if lat and lon:
-            time.sleep(1)  # Захист лімітів OSM
+            time.sleep(1)  
             location = get_location_name(lat, lon)
             
         if mime_type == 'image/gif' or lower_name.endswith('.gif'):
