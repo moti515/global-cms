@@ -15,7 +15,7 @@ FOLDER_INPUT_ID = '19wPAbTuyGGqMI4twWXfU5gfs-vk2Ru_G'
 FOLDER_TRASH_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
 
 TARGET_DURATION = 8  
-TEST_FPS = 30        
+FINAL_FPS = 30        
 
 MUSIC_FALLBACK_PATH = 'assets/trending_travel_music.mp3'
 
