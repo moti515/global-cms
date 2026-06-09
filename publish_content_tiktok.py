@@ -247,7 +247,8 @@ def compile_final_video(clips, text_info):
         else:
             print("⚠️ Музику не знайдено. Генеруємо обов'язковий трек тиші для TikTok...")
             silence_array = np.zeros((int(44100 * final_video.duration), 2))
-            silent_audio = AudioArrayClip(silence_array, fps=44100)
+            # 🎯 ОБОВ'ЯЗКОВО додаємо .set_duration(...) в кінці рядка:
+            silent_audio = AudioArrayClip(silence_array, fps=44100).set_duration(final_video.duration)
             final_video = final_video.set_audio(silent_audio)
         
     main_txt = TextClip(trending_text, fontsize=50, color='white', font='Arial-Bold', method='caption', size=(900, None)).set_position(('center', 400)).set_duration(final_video.duration)
