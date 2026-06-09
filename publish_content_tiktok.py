@@ -33,7 +33,10 @@ TOKENS_FILE = 'tiktok_tokens.json'
 FOLDER_INPUT_ID = '19wPAbTuyGGqMI4twWXfU5gfs-vk2Ru_G'
 FOLDER_TRASH_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
 
-TARGET_DURATION = 5  # Цільова тривалість відео в секундах
+# ⚡ ОБМЕЖЕННЯ НА ЧАС ТЕСТУВАННЯ (Змінено для швидкості)
+TARGET_DURATION = 3  # Робимо тестове відео всього 3 секунди!
+TEST_FPS = 10        # Знижуємо кадри в секунду для миттєвого рендерингу
+
 MUSIC_FALLBACK_PATH = 'assets/trending_travel_music.mp3'
 
 VALID_EXTENSIONS = (
@@ -59,7 +62,6 @@ def get_gdrive_service():
 
 # --- АВТОРИЗАЦІЯ TIKTOK ---
 def get_valid_tiktok_token():
-    """Завантажує токен та автоматично оновлює його."""
     try:
         with open(TOKENS_FILE, 'r') as f:
             tokens = json.load(f)
@@ -245,11 +247,13 @@ def compile_final_video(clips, text_info):
     
     result_video = CompositeVideoClip([final_video, main_txt, meta_txt])
     output_name = f"ready_tiktok_{year}.mp4"
-    result_video.write_videofile(output_name, fps=10, codec="libx264", audio_codec="aac")
+    
+    # Використовуємо TEST_FPS для швидкої обробки
+    result_video.write_videofile(output_name, fps=TEST_FPS, codec="libx264", audio_codec="aac")
     
     return output_name
 
-# --- ПУБЛІКАЦІЯ У TIKTOK ---
+# --- ПУБЛІКАЦІЯ У TIKTOK (Змінено під чернетки / video.upload) ---
 def upload_to_tiktok(video_path, description):
     access_token = get_valid_tiktok_token()
     if not access_token:
@@ -258,29 +262,27 @@ def upload_to_tiktok(video_path, description):
 
     video_size = os.path.getsize(video_path)
     
-    init_url = "https://open.tiktokapis.com/v2/post/publish/video/init/"
+    # 🔄 ЗМІНЕНО: Новий ендпоінт для завантаження в Чернетки (Inbox)
+    init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
+    
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json; charset=UTF-8"
     }
     
+    # 🔄 ЗМІНЕНО: Для Inbox API параметри post_info не потрібні (налаштовуються в додатку)
     body = {
-        "post_info": {
-            "title": description,
-            "privacy_level": "SELF_ONLY",  # Для Sandbox дозволено лише приватний режим
-            "video_cover_timestamp_ms": 1000
-        },
         "source_info": {
             "source": "FILE_UPLOAD",
             "video_size": video_size
         }
     }
     
-    print("Надсилання запиту на ініціалізацію в TikTok...")
+    print("Надсилання запиту на ініціалізацію в TikTok (Inbox/Draft)...")
     init_res = requests.post(init_url, headers=headers, json=body)
     
     if init_res.status_code != 200:
-        print(f"❌ Помилка ініціалізації: {init_res.text}")
+        print(f"❌ Помилка ініціалізації чернетки: {init_res.text}")
         return False
         
     res_data = init_res.json()
@@ -299,7 +301,8 @@ def upload_to_tiktok(video_path, description):
         upload_res = requests.put(upload_url, headers=put_headers, data=video_file)
 
     if upload_res.status_code in [200, 201, 204]:
-        print("🚀 Відео успішно відправлено у ваш TikTok акаунт!")
+        print("🚀 Відео успішно завантажено в Чернетки вашого TikTok!")
+        print("📱 Відкрийте TikTok на телефоні -> Вхідні (Inbox) -> Системні сповіщення, щоб опублікувати його.")
         return True
     else:
         print(f"❌ Помилка завантаження файлу: {upload_res.status_code} - {upload_res.text}")
@@ -405,7 +408,6 @@ def main():
             time.sleep(1)  # Захист лімітів OSM
             location = get_location_name(lat, lon)
             
-        # Конвертація форматів для 100% сумісності з MoviePy
         if mime_type == 'image/gif' or lower_name.endswith('.gif'):
             mp4_path = os.path.join('downloaded', f['name'].rsplit('.', 1)[0] + '_gif.mp4')
             gif_to_mp4(local_path, mp4_path)
@@ -435,7 +437,6 @@ def main():
             'location': location or "Невідоме місце"
         })
 
-    # Розумне групування за [Дата + Місце]
     groups = {}
     for item in processed_items:
         key = (item['date'], item['location'])
@@ -443,7 +444,6 @@ def main():
             groups[key] = []
         groups[key].append(item)
         
-    # Монтуємо та публікуємо ТІЛЬКИ одну групу за один запуск скрипта
     for (date, loc), items in groups.items():
         print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація: {loc}. Файлів: {len(items)}")
         
@@ -455,26 +455,18 @@ def main():
         text_info = generate_ai_metadata(date, loc)
         trending_text, year, location = text_info
         
-        # Створення текстового опису для відео
         hash_tag = location.split(',')[0].strip().replace(" ", "")
         tiktok_description = f"{trending_text} 🌍 #travel #{hash_tag}"
         
-        # Монтаж відео
         final_file = compile_final_video(clips, text_info)
         print(f"🎉 Відео успішно змонтовано: {final_file}")
         
-        # Публікація в TikTok
         upload_success = upload_to_tiktok(final_file, tiktok_description)
         
         if upload_success:
-            # Переміщуємо оригінали на Google Диску у кошик архіву
             move_files_to_trash(service, items)
-            
-            # Локальне очищення відрендереного відео
             if os.path.exists(final_file):
                 os.remove(final_file)
-            
-            # Очищення тимчасово завантажених медіафайлів
             for item in items:
                 if os.path.exists(item['local_path']):
                     os.remove(item['local_path'])
@@ -482,7 +474,6 @@ def main():
         else:
             print("⚠ Очищення папок скасовано, оскільки публікація в TikTok зазнала невдачі.")
         
-        # Виходимо, забезпечуючи ліміт: 1 запуск = 1 готове відео
         return
 
 if __name__ == '__main__':
