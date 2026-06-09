@@ -306,6 +306,16 @@ def upload_to_tiktok(video_path, description):
         print(f"❌ Помилка API TikTok: {res_data.get('error')}")
         return False
 
+    # 👁️ ДОДАНО ЛОГУВАННЯ ДЛЯ ПЕРЕВІРКИ:
+    publish_id = res_data['data'].get('publish_id')
+    upload_url = res_data['data']['upload_url']
+    
+    print(f"✅ Успішна ініціалізація TikTok!")
+    print(f"🆔 TikTok Publish ID: {publish_id}")  # 👈 Тепер цей ID буде видно в логах GitHub!
+    print(f"📄 Повна відповідь ініціалізації: {res_data}")
+    
+    print("Починаємо бінарне завантаження файлу...")
+
     upload_url = res_data['data']['upload_url']
     print("Дозвіл отримано. Починаємо бінарне завантаження файлу...")
 
