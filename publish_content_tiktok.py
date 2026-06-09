@@ -11,14 +11,14 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-# Імпортуємо Pillow та додаємо фікс для сумісності з MoviePy
-from PIL import Image, Resampling
+# Імпортуємо Pillow
+from PIL import Image
 from PIL.ExifTags import TAGS, GPSTAGS
 from pillow_heif import register_heif_opener
 
 # Трюк (Monkey Patch) для сумісності старого MoviePy з новим Pillow в Python 3.12
 if not hasattr(Image, 'ANTIALIAS'):
-    Image.ANTIALIAS = Resampling.LANCZOS
+    Image.ANTIALIAS = Image.Resampling.LANCZOS
 
 from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, AudioFileClip, TextClip, CompositeVideoClip
 
