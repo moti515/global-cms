@@ -116,20 +116,33 @@ def count_total_files(service):
             sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка підрахунку файлів на Google Диску: {e}")
     return total
 
-# --- РОЗУМНЕ ВИПРАВЛЕННЯ ГЕОМЕТРІЇ ВІДЕО ---
-def resize_and_crop_video(clip, target_w=1080, target_h=1920):
-    """Масштабує та обрізає відео до 9:16 без порушення геометричних пропорцій"""
+# --- РОЗУМНЕ ВИПРАВЛЕННЯ ГЕОМЕТРІЇ (БЕЗ СПОТВОРЕННЯ) ---
+def fit_video_with_background(clip, target_w=1080, target_h=1920):
+    """Пропорційно масштабує відео та додає чорні поля (letterbox/pillarbox) замість спотворення"""
     target_ar = target_w / target_h
     clip_ar = clip.w / clip.h
     
     if clip_ar > target_ar:
-        resized = clip.resize(height=target_h)
-        x_center = resized.w / 2
-        return resized.crop(x_center=x_center, width=target_w, height=target_h)
-    else:
+        # Альбомне (широке) відео -> підганяємо по ширині
         resized = clip.resize(width=target_w)
-        y_center = resized.h / 2
-        return resized.crop(y_center=y_center, width=target_w, height=target_h)
+    else:
+        # Портретне (вузьке/високе) відео -> підганяємо по висоті
+        resized = clip.resize(height=target_h)
+        
+    # Накладаємо по центру на чорний екран заданого розміру
+    return CompositeVideoClip([resized.set_position("center")], size=(target_w, target_h))
+
+def prepare_padded_image(local_path, output_path, target_w=1080, target_h=1920):
+    """Масштабує фото пропорційно з додаванням чорних полів та урахуванням EXIF-поворотів"""
+    with Image.open(local_path) as img:
+        # Авто-орієнтація на основі EXIF (захист від перевернутих мобільних фото)
+        img = ImageOps.exif_transpose(img)
+        
+        img.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
+        background = Image.new('RGB', (target_w, target_h), (0, 0, 0))
+        offset = ((target_w - img.width) // 2, (target_h - img.height) // 2)
+        background.paste(img, offset)
+        background.save(output_path, 'JPEG', quality=95)
 
 # --- ПРІОРИТЕТ №1: ВИЗНАЧЕННЯ ДАТИ З НАЗВИ ФАЙЛУ ---
 def extract_date_from_filename(filename):
@@ -148,9 +161,7 @@ def extract_date_from_filename(filename):
         if len(match_ts.group(1)) > 10:  
             ts = ts / 1000
         try:
-            dt = datetime.fromtimestamp(ts)
-            if 2000 <= dt.year <= datetime.now().year:
-                return dt
+            return datetime.fromtimestamp(ts)
         except:
             pass
             
@@ -236,45 +247,6 @@ def gif_to_mp4(input_path, output_path):
     if res.returncode != 0:
         raise RuntimeError(f"FFmpeg Error: {res.stderr}")
 
-# --- ОБРОБКА МЕДІА ТА МОНТАЖ ---
-def process_media_group(file_list):
-    clips = []
-    clip_duration = max(4.0, TARGET_DURATION / len(file_list))
-    
-    for item in file_list:
-        local_path = item['local_path']
-        mime = item['mime']
-        file_name = item['name']
-        
-        if 'video' in mime:
-            try:
-                full_video = VideoFileClip(local_path)
-                start_time = max(0, full_video.duration / 2 - clip_duration / 2)
-                end_time = min(full_video.duration, start_time + clip_duration)
-                
-                trimmed = full_video.subclip(start_time, end_time)
-                smart_video = resize_and_crop_video(trimmed, 1080, 1920)
-                clips.append(smart_video)
-            except Exception as e:
-                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Файл відео '{file_name}' пошкоджений. Деталі: {e}")
-                
-        elif 'image' in mime:
-            try:
-                temp_cropped_path = f"downloaded/cropped_{file_name}.jpg" if not file_name.lower().endswith('.jpg') else f"downloaded/cropped_{os.path.basename(local_path)}"
-                
-                with Image.open(local_path) as img:
-                    img_resized = ImageOps.fit(img, (1080, 1920), Image.Resampling.LANCZOS)
-                    if img_resized.mode != 'RGB':
-                        img_resized = img_resized.convert('RGB')
-                    img_resized.save(temp_cropped_path, 'JPEG', quality=95)
-                
-                img_clip = ImageClip(temp_cropped_path).set_duration(clip_duration)
-                clips.append(img_clip)
-            except Exception as e:
-                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Зображення '{file_name}' пошкоджене. Деталі: {e}")
-                
-    return clips
-
 # --- ДИНАМІЧНА ГЕНЕРАЦІЯ ТЕКСТІВ ---
 def generate_ai_metadata(date_str, location_geo):
     year = date_str.split('.')[-1] if '.' in date_str else "2026"
@@ -340,11 +312,9 @@ def compile_final_video(clips, text_info):
     except Exception as e:
         sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка рендерингу відео: {e}")
 
-# --- ПОВНИЙ ІНТЕЛЕКТУАЛЬНИЙ БЛОК ВИЗНАЧЕННЯ ДАТИ (ОПТИМІЗОВАНО НА ГЕО) ---
+# --- ПОВНИЙ ІНТЕЛЕКТУАЛЬНИЙ БЛОК ВИЗНАЧЕННЯ ДАТИ ---
 def get_intellectual_date(local_path, filename, gdrive_file, now_time):
-    """Реалізує повну перевірку дати й одночасно повертає знайдені геокоординати для уникнення подвійного читання файлу"""
     fn_date = extract_date_from_filename(filename)
-
     meta_date, lat, lon = None, None, None
     mime_type = gdrive_file['mimeType']
     lower_name = filename.lower()
@@ -354,12 +324,10 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time):
     elif mime_type.startswith('video/') or lower_name.endswith(('.mp4', '.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg')):
         meta_date, lat, lon = get_video_metadata(local_path)
 
-    # Якщо дата є в назві - повертаємо її, але координати ми вже зберегли!
     if fn_date:
         print(f"🎯 Дату успішно розпізнано з назви файлу '{filename}': {fn_date.strftime('%d.%m.%Y')}")
         return fn_date, lat, lon
 
-    # 2. ПРІОРИТЕТ II: Внутрішні метадані файлу
     if meta_date:
         try:
             dt_parsed = datetime.strptime(meta_date, '%Y:%m:%d %H:%M:%S')
@@ -368,7 +336,6 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time):
         except:
             pass
 
-    # 3. ПРІОРИТЕТ III: Резервний аналіз Google Drive дат
     try:
         dt_created = datetime.strptime(gdrive_file['createdTime'][:19], '%Y-%m-%dT%H:%M:%S')
         dt_modified = datetime.strptime(gdrive_file['modifiedTime'][:19], '%Y-%m-%dT%H:%M:%S')
@@ -378,7 +345,6 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time):
     except:
         pass
 
-    # 4. ФОЛБЕК
     return now_time, lat, lon
 
 # --- ПУБЛІКАЦІЯ У TIKTOK ---
@@ -556,15 +522,13 @@ def main():
         except Exception as e:
             sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося завантажити файл '{f['name']}' з Google Диску. Причина: {e}")
 
-        # --- ТУТ ІНТЕГРОВАНО ТВІЙ БЛОК (ОПТИМІЗОВАНИЙ) ---
         now = datetime.now()
-        # Отримуємо дату і координати за один виклик
         final_dt, lat, lon = get_intellectual_date(local_path, f['name'], f, now)
         file_date = final_dt.strftime('%d.%m.%Y')
         
         location = "Невідоме місце"
         if lat and lon:
-            time.sleep(1)  # Захист від блокування IP сервером OpenStreetMap Nominatim
+            time.sleep(1)  
             location = get_location_name(lat, lon) or "Невідоме місце"
             
         # Конвертація GIF
@@ -587,12 +551,11 @@ def main():
                     img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
             except Exception as e:
                 sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося розкодувати iPhone-формат HEIC/HEIF. Деталі: {e}")
-                
+            
             if os.path.exists(local_path): os.remove(local_path)
             local_path = jpg_path
             mime_type = 'image/jpeg'
 
-        # Додавання до списку обробки (з актуальними шляхами після конвертації)
         processed_items.append({
             'id': f['id'],
             'name': f['name'],
@@ -602,7 +565,7 @@ def main():
             'location': location
         })
 
-    # --- ГРУПУВАННЯ ТА МОНТАЖ ---
+    # --- ГРУПУВАННЯ ТА МОНТАЖ (КОРЕКЦІЯ ТАЙМІНГІВ ТА ГЕОМЕТРІЇ) ---
     groups = {}
     for item in processed_items:
         key = (item['date'], item['location'])
@@ -610,35 +573,192 @@ def main():
             groups[key] = []
         groups[key].append(item)
         
+    MIN_DURATION = 20
+    MAX_DURATION = 40
+    PHOTO_DURATION = 3.0  # Оптимально для перегляду одного фото в TikTok
+
     for (date, loc), items in groups.items():
-        file_names = ", ".join([f"'{item['name']}'" for item in items])
-        print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація: {loc}. Файлів: {len(items)} | Склад: [{file_names}]")
+        print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація: {loc}. Всього файлів у групі: {len(items)}")
         
-        clips = process_media_group(items)
-        if not clips:
-            sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося згенерувати кліпи для вибраної групи медіа-файлів.")
+        # Визначаємо тривалість оригінальних файлів у групі
+        valid_items = []
+        for item in items:
+            mime = item['mime']
+            local_path = item['local_path']
+            if 'video' in mime:
+                try:
+                    with VideoFileClip(local_path) as clip:
+                        item['duration'] = clip.duration
+                    valid_items.append(item)
+                except Exception as e:
+                    print(f"⚠️ Відео '{item['name']}' пошкоджене: {e}. Пропускаємо.")
+            elif 'image' in mime:
+                item['duration'] = PHOTO_DURATION
+                valid_items.append(item)
+
+        if not valid_items:
+            print("☕ Немає валідних медіафайлів у цій групі.")
+            continue
+
+        # --- КЕЙС 1: ОДИН ДОВГИЙ ФАЙЛ (> 40 секунд) -> Серійна нарізка ---
+        if len(valid_items) == 1 and valid_items[0]['duration'] > MAX_DURATION:
+            single_item = valid_items[0]
+            total_dur = single_item['duration']
+            print(f"✂️ Виявлено один довгий файл ({total_dur:.1f} сек). Ріжемо на частини та публікуємо послідовно...")
             
+            start = 0
+            part_num = 1
+            all_parts_success = True
+            generated_files = []
+            chunk_length = 35.0  # Зручний розмір кроку, щоб красиво вкладатися в ліміти
+            
+            while start < total_dur:
+                end = min(start + chunk_length, total_dur)
+                part_duration = end - start
+                print(f"📦 Обробка частини {part_num} ({start:.1f}s - {end:.1f}s, тривалість: {part_duration:.1f}s)")
+                
+                try:
+                    with VideoFileClip(single_item['local_path']) as full_video:
+                        trimmed = full_video.subclip(start, end)
+                        
+                        # Якщо фінальний залишковий шматочок менший за 20 секунд — зациклюємо його
+                        if part_duration < MIN_DURATION:
+                            print(f"🔄 Фінальна частина закоротка ({part_duration:.1f}s). Зациклюємо для виконання ліміту...")
+                            loops = int(np.ceil(MIN_DURATION / part_duration))
+                            trimmed = concatenate_videoclips([trimmed] * loops)
+                        
+                        smart_video = fit_video_with_background(trimmed, 1080, 1920)
+                        
+                        text_info = generate_ai_metadata(date, loc)
+                        trending_text, year, location = text_info
+                        hash_tag = location.split(',')[0].strip().replace(" ", "")
+                        tiktok_description = f"{trending_text} (Частина {part_num}) 🌍 #travel #{hash_tag}"
+                        
+                        final_file = compile_final_video([smart_video], text_info)
+                        generated_files.append(final_file)
+                        
+                        upload_success = upload_to_tiktok(final_file, tiktok_description)
+                        if not upload_success:
+                            print(f"❌ Помилка завантаження частини {part_num}.")
+                            all_parts_success = False
+                            break
+                except Exception as e:
+                    print(f"❌ Помилка обробки довгого відео на частині {part_num}: {e}")
+                    all_parts_success = False
+                    break
+                
+                start = end
+                part_num += 1
+                
+            if all_parts_success:
+                move_files_to_trash(service, [single_item])
+                for gf in generated_files:
+                    if os.path.exists(gf): os.remove(gf)
+                if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
+                print("🏁 Послідовну публікацію великого файлу завершено успішно.")
+            else:
+                sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація однієї з частин довгого ролика зазнала невдачі.")
+            
+            return  # Скрипт обробляє лише одну групу за один запуск крону
+
+        # --- КЕЙС 2 ТА 3: ЗВИЧАЙНА ГРУПА (ОБМЕЖЕННЯ ДО 40 СЕК / ЗАЦИКЛЕННЯ МЕНШЕ 20 СЕК) ---
+        selected_items = []
+        accumulated_duration = 0
+        
+        for item in valid_items:
+            if accumulated_duration + item['duration'] <= MAX_DURATION:
+                selected_items.append(item)
+                accumulated_duration += item['duration']
+            else:
+                if accumulated_duration >= MIN_DURATION:
+                    break
+                else:
+                    # Якщо ліміт в 20 сек ще не набрано, але поточний файл перестрибує ліміт 40 сек, обрізаємо частину відео
+                    remaining_space = MAX_DURATION - accumulated_duration
+                    if remaining_space >= 4.0 and 'video' in item['mime']:
+                        item['crop_to_duration'] = remaining_space
+                        item['duration'] = remaining_space
+                        selected_items.append(item)
+                        accumulated_duration += remaining_space
+                    break
+
+        print(f"📐 Розумний відбір: {len(selected_items)} файлів. Чиста тривалість збірки: {accumulated_duration:.1f} сек.")
+
+        # Якщо сумарний час відібраних оригіналів менший за 20 секунд — циклічно розмножуємо сам перелік файлів
+        final_items_to_render = list(selected_items)
+        if accumulated_duration < MIN_DURATION:
+            print(f"🔄 Загальний час {accumulated_duration:.1f}s менший за {MIN_DURATION}s. Зациклюємо файли...")
+            while accumulated_duration < MIN_DURATION:
+                for item in selected_items:
+                    final_items_to_render.append(item)
+                    accumulated_duration += item['duration']
+                    if accumulated_duration >= MIN_DURATION:
+                        break
+
+        # Створення медіакліпів з правильними пропорціями та полями
+        clips = []
+        temp_images_to_clean = []
+        
+        for item in final_items_to_render:
+            local_path = item['local_path']
+            mime = item['mime']
+            
+            if 'video' in mime:
+                try:
+                    full_video = VideoFileClip(local_path)
+                    dur = item.get('crop_to_duration', full_video.duration)
+                    start_time = max(0, full_video.duration / 2 - dur / 2)
+                    end_time = min(full_video.duration, start_time + dur)
+                    
+                    trimmed = full_video.subclip(start_time, end_time)
+                    smart_video = fit_video_with_background(trimmed, 1080, 1920)
+                    clips.append(smart_video)
+                except Exception as e:
+                    print(f"⚠️ Пропуск кліпу відео через помилку рендеру: {e}")
+            elif 'image' in mime:
+                try:
+                    # Генеруємо унікальний тимчасовий файл для зображення з чорними полями
+                    temp_img_path = os.path.join('downloaded', f"padded_{int(time.time())}_{os.path.basename(local_path)}")
+                    prepare_padded_image(local_path, temp_img_path, 1080, 1920)
+                    temp_images_to_clean.append(temp_img_path)
+                    
+                    img_clip = ImageClip(temp_img_path).set_duration(PHOTO_DURATION)
+                    clips.append(img_clip)
+                except Exception as e:
+                    print(f"⚠️ Не вдалося пропорційно обробити фото {local_path}: {e}")
+
+        if not clips:
+            sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося зібрати жодного кліпу для фінального монтажу.")
+
+        # Генерація метаданих, компіляція та вивантаження
         text_info = generate_ai_metadata(date, loc)
         trending_text, year, location = text_info
-        
         hash_tag = location.split(',')[0].strip().replace(" ", "")
         tiktok_description = f"{trending_text} 🌍 #travel #{hash_tag}"
         
         final_file = compile_final_video(clips, text_info)
-        print(f"🎉 Відео успішно змонтовано: {final_file}")
+        print(f"🎉 Фінальне відео зібрано: {final_file}")
         
         upload_success = upload_to_tiktok(final_file, tiktok_description)
         
         if upload_success:
-            move_files_to_trash(service, items)
+            # Переміщуємо в архів ТІЛЬКИ ті файли, які реально увійшли в цю збірку (selected_items). 
+            # Залишок залишиться для наступних кронів.
+            move_files_to_trash(service, selected_items)
+            
+            # Повне очищення локального кешу
             if os.path.exists(final_file): os.remove(final_file)
-            for item in items:
+            for img_p in temp_images_to_clean:
+                if os.path.exists(img_p): os.remove(img_p)
+            for item in selected_items:
                 if os.path.exists(item['local_path']): os.remove(item['local_path'])
-            print("🏁 Обробку поточної групи успішно завершено.")
+            print("🏁 Публікацію поточної групи успішно завершено.")
         else:
-            sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація в TikTok зазнала невдачі. Вхідні файли збережено на Диску для повторної спроби.")
-        
-        return
+            for img_p in temp_images_to_clean:
+                if os.path.exists(img_p): os.remove(img_p)
+            sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація в TikTok зазнала невдачі. Файли збережено на Диску для повтору.")
+            
+        return  # Обробили першу групу, виходимо
 
 if __name__ == '__main__':
     main()
