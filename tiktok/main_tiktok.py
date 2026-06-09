@@ -9,11 +9,11 @@ from pillow_heif import register_heif_opener
 from moviepy.editor import VideoFileClip, concatenate_videoclips, ImageClip
 
 # Імпорт власних модулів
-from config import FOLDER_INPUT_ID, FOLDER_TRASH_ID, VALID_EXTENSIONS
-from auth import get_gdrive_service
-from drive_manager import count_total_files, download_file, move_files_to_trash
-from metadata_extractor import get_intellectual_date, get_location_name
-from media_processor import (
+from config_tiktok import FOLDER_INPUT_ID, FOLDER_TRASH_ID, VALID_EXTENSIONS
+from auth_tiktok import get_gdrive_service
+from drive_manager_tiktok import count_total_files, download_file, move_files_to_trash
+from metadata_extractor_tiktok import get_intellectual_date, get_location_name
+from media_processor_tiktok import (
     gif_to_mp4, prepare_padded_image, fit_video_with_background,
     generate_ai_metadata, compile_final_video
 )
