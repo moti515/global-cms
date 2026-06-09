@@ -229,16 +229,14 @@ def process_media_group(file_list):
                 trimmed = full_video.subclip(start_time, end_time).resize(newsize=(1080, 1920))
                 clips.append(trimmed)
             except Exception as e:
-                # 🚨 АВАРІЯ: Відеофайл пошкоджений або має биті кодеки
-                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Файл відео '{file_name}' пошкоджений, має непідтримувану структуру або не може бути відкритий MoviePy. Деталі: {e}")
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Файл відео '{file_name}' пошкоджений або має непідтримувану структуру. Деталі: {e}")
                 
         elif 'image' in mime:
             try:
                 img_clip = ImageClip(local_path).set_duration(clip_duration).resize(newsize=(1080, 1920))
                 clips.append(img_clip)
             except Exception as e:
-                # 🚨 АВАРІЯ: Зображення бите чи не розпізнається Pillow
-                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Зображення '{file_name}' пошкоджене або має непідтримуваний формат для рендерингу. Деталі: {e}")
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Зображення '{file_name}' пошкоджене або має непідтримуваний формат. Деталі: {e}")
                 
     return clips
 
@@ -289,7 +287,7 @@ def compile_final_video(clips, text_info):
     except Exception as e:
         sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка генерації або рендерингу фінального відео файлу. Деталі: {e}")
 
-# --- ПУБЛІКАЦІЯ У TIKTOK ---
+# --- ПУБЛІКАЦІЯ У TIKTOK (З ПІДТРИМКОЮ ДИНАМІЧНИХ ЧАНКІВ) ---
 def upload_to_tiktok(video_path, description):
     access_token = get_valid_tiktok_token()
     if not access_token:
@@ -297,9 +295,18 @@ def upload_to_tiktok(video_path, description):
         return False
 
     video_size = os.path.getsize(video_path)
-    chunk_size = video_size  
-    total_chunk_count = 1
     
+    # Визначаємо ліміти згідно з TikTok Media Transfer Guide
+    MAX_SINGLE_SIZE = 64 * 1024 * 1024       # 64 MB
+    DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024    # 10 MB (відповідає вимогам >5MB та <64MB)
+
+    if video_size <= MAX_SINGLE_SIZE:
+        chunk_size = video_size
+        total_chunk_count = 1
+    else:
+        chunk_size = DEFAULT_CHUNK_SIZE
+        total_chunk_count = video_size // chunk_size
+
     init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -323,7 +330,7 @@ def upload_to_tiktok(video_path, description):
         }
     }
     
-    print("Надсилання запиту на ініціалізацію в TikTok (Inbox/Draft)...")
+    print(f"Надсилання запиту на ініціалізацію в TikTok (Розмір файлу: {video_size} байт)...")
     init_res = requests.post(init_url, headers=headers, json=body)
     
     if init_res.status_code != 200:
@@ -339,22 +346,41 @@ def upload_to_tiktok(video_path, description):
     upload_url = res_data['data']['upload_url']
     
     print(f"✅ Успішна ініціалізація TikTok! ID: {publish_id}")
-    print("Починаємо бінарне завантаження файлу...")
+    print(f"Починаємо передачу файлу частинами (Всього чанків: {total_chunk_count})...")
 
     with open(video_path, 'rb') as video_file:
-        put_headers = {
-            "Content-Type": "video/mp4",
-            "Content-Length": str(video_size),
-            "Content-Range": f"bytes 0-{video_size - 1}/{video_size}"
-        }
-        upload_res = requests.put(upload_url, headers=put_headers, data=video_file)
+        for i in range(total_chunk_count):
+            first_byte = i * chunk_size
+            # Якщо це останній чанк, він забирає залишок файлу (згідно з правилами TikTok)
+            if i == total_chunk_count - 1:
+                last_byte = video_size - 1
+            else:
+                last_byte = (i + 1) * chunk_size - 1
+            
+            byte_size_of_this_chunk = last_byte - first_byte + 1
+            
+            # Переміщуємо вказівник у файлі на потрібну позицію чанку
+            video_file.seek(first_byte)
+            chunk_data = video_file.read(byte_size_of_this_chunk)
+            
+            put_headers = {
+                "Content-Type": "video/mp4",
+                "Content-Length": str(byte_size_of_this_chunk),
+                "Content-Range": f"bytes {first_byte}-{last_byte}/{video_size}"
+            }
+            
+            print(f"📤 Надсилання чанку {i+1}/{total_chunk_count} (байти {first_byte}-{last_byte})...")
+            upload_res = requests.put(upload_url, headers=put_headers, data=chunk_data)
+            
+            # Визначаємо очікуваний статус-код: 201 для завершального чанку, 206 — для проміжних
+            expected_status = 201 if i == total_chunk_count - 1 else 206
+            
+            if upload_res.status_code != expected_status:
+                print(f"❌ Помилка завантаження чанку {i+1}: Отримано статус {upload_res.status_code}, очікувався {expected_status}. Текст: {upload_res.text}")
+                return False
 
-    if upload_res.status_code in [200, 201, 204]:
-        print("🚀 Відео успішно передано на сервери TikTok! Файл доставлено.")
-        return True
-    else:
-        print(f"❌ Помилка завантаження файлу: {upload_res.status_code} - {upload_res.text}")
-        return False
+    print("🚀 Відео успішно передано на сервери TikTok! Усі частини доставлено.")
+    return True
 
 # --- ОЧИЩЕННЯ ТА АРХІВАЦІЯ GOOGLE DRIVE ---
 def move_files_to_trash(service, file_list):
@@ -444,7 +470,6 @@ def main():
                 _, done = downloader.next_chunk()
             fh.close()
         except Exception as e:
-            # 🚨 АВАРІЯ: Помилка завантаження з Диску (файл заблоковано, мережевий збій тощо)
             sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося завантажити файл '{f['name']}' з Google Диску. Причина: {e}")
 
         meta_date, lat, lon = None, None, None
@@ -489,8 +514,7 @@ def main():
             try:
                 gif_to_mp4(local_path, mp4_path)
             except Exception as e:
-                # 🚨 АВАРІЯ: GIF пошкоджений або FFmpeg впав
-                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося конвертувати GIF файл '{f['name']}' у MP4. Можливо, файл бінарно пошкоджений. Деталі: {e}")
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося конвертувати GIF файл '{f['name']}' у MP4. Деталі: {e}")
             
             if os.path.exists(local_path): os.remove(local_path)
             local_path = mp4_path
@@ -503,8 +527,7 @@ def main():
                 with Image.open(local_path) as img:
                     img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
             except Exception as e:
-                # 🚨 АВАРІЯ: HEIC файл битий або не зчитується Pillow
-                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося розкодувати iPhone-формат HEIC/HEIF для файлу '{f['name']}'. Файл пошкоджено. Деталі: {e}")
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося розкодувати iPhone-формат HEIC/HEIF для файлу '{f['name']}'. Деталі: {e}")
                 
             if os.path.exists(local_path): os.remove(local_path)
             local_path = jpg_path
@@ -527,6 +550,7 @@ def main():
         groups[key].append(item)
         
     for (date, loc), items in groups.items():
+        # Виводимо в лог назви файлів з поточної групи
         file_names = ", ".join([f"'{item['name']}'" for item in items])
         print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація: {loc}. Файлів: {len(items)} | Склад: [{file_names}]")
         
@@ -552,7 +576,6 @@ def main():
                 if os.path.exists(item['local_path']): os.remove(item['local_path'])
             print("🏁 Обробку поточної групи успішно завершено.")
         else:
-            # 🚨 АВАРІЯ: Монтаж пройшов, але TikTok API відхилив запит (як у нашому логу помилки 403)
             sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація в TikTok зазнала невдачі. Вхідні файли збережено на Диску для повторної спроби.")
         
         return
