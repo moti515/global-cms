@@ -26,7 +26,7 @@ def get_drive_service():
     pass
 
 def get_valid_tiktok_token():
-    """Завантажує токен та автоматично оновлює його, якщо термін дії вичерпано."""
+    """Завантажує токен та автоматично оновлює його."""
     try:
         with open(TOKENS_FILE, 'r') as f:
             tokens = json.load(f)
@@ -47,13 +47,17 @@ def get_valid_tiktok_token():
     response = requests.post(url, headers=headers, data=data)
     if response.status_code == 200:
         new_tokens = response.json()
-        # Зберігаємо оновлені токени назад у файл
+        
+        # 🔥 ВИПРАВЛЕННЯ: Оновлюємо старий словник новими даними,
+        # щоб випадково не затерти початковий refresh_token
+        tokens.update(new_tokens) 
+        
         with open(TOKENS_FILE, 'w') as f:
-            json.dump(new_tokens, f)
-        return new_tokens['access_token']
+            json.dump(tokens, f, indent=4)
+        return tokens['access_token']
     else:
         print(f"❌ Помилка оновлення токена: {response.text}")
-        return tokens.get('access_token') # повертаємо старий як запасний варіант
+        return tokens.get('access_token')
 
 # 1. ЗБІР ТА ГРУПУВАННЯ МЕДІАФАЙЛІВ
 def get_and_group_files(service):
