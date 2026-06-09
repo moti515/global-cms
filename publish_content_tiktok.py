@@ -7,6 +7,7 @@ import subprocess
 import re
 import requests
 from datetime import datetime
+from zoneinfo import ZoneInfo  # Нативно в Python 3.9+ для точного часу в Німеччині
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -21,7 +22,6 @@ if not hasattr(Image, 'ANTIALIAS'):
     Image.ANTIALIAS = Image.Resampling.LANCZOS
 
 from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, AudioFileClip, TextClip, CompositeVideoClip
-# Додано для генерації тиші, якщо немає аудіофайлу
 from moviepy.audio.AudioClip import AudioArrayClip
 import numpy as np
 
@@ -36,7 +36,6 @@ TOKENS_FILE = 'tiktok_tokens.json'
 FOLDER_INPUT_ID = '19wPAbTuyGGqMI4twWXfU5gfs-vk2Ru_G'
 FOLDER_TRASH_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
 
-# Збільшено до 8 секунд для стабільної перевірки алгоритмами TikTok
 TARGET_DURATION = 8  
 TEST_FPS = 30        
 
@@ -54,14 +53,11 @@ def get_gdrive_service():
         creds = service_account.Credentials.from_service_account_info(key_dict, scopes=['https://www.googleapis.com/auth/drive'])
         return build('drive', 'v3', credentials=creds)
     except KeyError:
-        print("❌ ПОМИЛКА: Секрет GDRIVE_SERVICE_ACCOUNT_KEY не знайдено в змінних оточення!")
-        raise
+        sys.exit("❌ ПОМИЛКА: Секрет GDRIVE_SERVICE_ACCOUNT_KEY не знайдено в змінних оточення!")
     except json.JSONDecodeError:
-        print("❌ ПОМИЛКА: Вміст GDRIVE_SERVICE_ACCOUNT_KEY не є коректним JSON!")
-        raise
+        sys.exit("❌ ПОМИЛКА: Вміст GDRIVE_SERVICE_ACCOUNT_KEY не є коректним JSON!")
     except Exception as e:
-        print(f"❌ ПОМИЛКА ініціалізації Google Drive: {e}")
-        raise
+        sys.exit(f"❌ ПОМИЛКА ініціалізації Google Drive: {e}")
 
 # --- АВТОРИЗАЦІЯ TIKTOK ---
 def get_valid_tiktok_token():
@@ -91,6 +87,34 @@ def get_valid_tiktok_token():
     else:
         print(f"❌ Помилка оновлення токена TikTok: {response.text}")
         return tokens.get('access_token')
+
+# --- ПІДРАХУНОК ВСІХ ФАЙЛІВ ДЛЯ КРОНУ ---
+def count_total_files(service):
+    total = 0
+    page_token = None
+    while True:
+        try:
+            results = service.files().list(
+                q=f"'{FOLDER_INPUT_ID}' in parents and trashed = false",
+                fields="nextPageToken, files(id, name, mimeType)",
+                pageSize=1000,
+                pageToken=page_token
+            ).execute()
+            files = results.get('files', [])
+            for f in files:
+                if f['id'] == FOLDER_TRASH_ID:
+                    continue
+                mime_type = f.get('mimeType', '')
+                lower_name = f.get('name', '').lower()
+                if mime_type.startswith(('image/', 'video/')) or lower_name.endswith(VALID_EXTENSIONS):
+                    total += 1
+            page_token = results.get('nextPageToken')
+            if not page_token:
+                break
+        except Exception as e:
+            print(f"❌ Помилка підрахунку файлів на Диску: {e}")
+            break
+    return total
 
 # --- РОБОТА З МЕТАДАНИМИ ТА ГЕОКОДУВАННЯМ ---
 def get_exif_data(image_path):
@@ -174,19 +198,7 @@ def get_location_name(lat, lon):
         print(f"⚠️ Попередження: Помилка геокодування OSM: {e}")
     return None
 
-# --- KONVERTАЦІЯ ТА ОПТИМІЗАЦІЯ ФАЙЛІВ ---
-def convert_to_mp4(input_path, output_path):
-    print(f"🎬 Оптимізуємо відео {input_path} в стандартний MP4...")
-    cmd = [
-        'ffmpeg', '-y', '-i', input_path,
-        '-vcodec', 'libx264', '-crf', '24',
-        '-preset', 'faster', '-acodec', 'aac',
-        '-b:a', '128k', '-pix_fmt', 'yuv420p',
-        '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920',
-        output_path
-    ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
+# --- КОНВЕРТАЦІЯ ТА ОПТИМІЗАЦІЯ ФАЙЛІВ ---
 def gif_to_mp4(input_path, output_path):
     print(f"🎞️ Конвертуємо GIF {input_path} в MP4 відео...")
     cmd = [
@@ -197,7 +209,7 @@ def gif_to_mp4(input_path, output_path):
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-# --- ОБРОБКА ТА МОНТАЖ ВЕЙВЛЕНТІВ ---
+# --- ОБРОБКА ТА МОНТАЖ ---
 def process_media_group(file_list):
     clips = []
     clip_duration = max(4.0, TARGET_DURATION / len(file_list)) 
@@ -235,10 +247,8 @@ def generate_ai_metadata(date_str, location_geo):
 
 def compile_final_video(clips, text_info):
     trending_text, year, location = text_info
-    
     final_video = concatenate_videoclips(clips, method="compose")
     
-    # 🎯 ВИПРАВЛЕННЯ АУДІО: Якщо музики немає, створюємо трек тиші (інакше TikTok забанить ролик)
     if final_video.audio is None:
         if os.path.exists(MUSIC_FALLBACK_PATH):
             print("🎵 Додаємо фонову музику...")
@@ -247,7 +257,6 @@ def compile_final_video(clips, text_info):
         else:
             print("⚠️ Музику не знайдено. Генеруємо обов'язковий трек тиші для TikTok...")
             silence_array = np.zeros((int(44100 * final_video.duration), 2))
-            # 🎯 ОБОВ'ЯЗКОВО додаємо .set_duration(...) в кінці рядка:
             silent_audio = AudioArrayClip(silence_array, fps=44100).set_duration(final_video.duration)
             final_video = final_video.set_audio(silent_audio)
         
@@ -257,7 +266,6 @@ def compile_final_video(clips, text_info):
     result_video = CompositeVideoClip([final_video, main_txt, meta_txt])
     output_name = f"ready_tiktok_{year}.mp4"
     
-    # 🎯 СУВОРІ НАЛАШТУВАННЯ КОДУВАННЯ ДЛЯ СЕРВЕРІВ TIKTOK
     result_video.write_videofile(
         output_name, 
         fps=TEST_FPS, 
@@ -267,7 +275,6 @@ def compile_final_video(clips, text_info):
         ffmpeg_params=["-pix_fmt", "yuv420p", "-profile:v", "baseline", "-level", "3.0"]
     )
     
-    # Закриваємо кліпи для очищення оперативної пам'яті
     result_video.close()
     final_video.close()
     for c in clips:
@@ -287,7 +294,6 @@ def upload_to_tiktok(video_path, description):
     total_chunk_count = 1
     
     init_url = "https://open.tiktokapis.com/v2/post/publish/video/init/"
-    
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json; charset=UTF-8"
@@ -325,12 +331,9 @@ def upload_to_tiktok(video_path, description):
     publish_id = res_data['data'].get('publish_id')
     upload_url = res_data['data']['upload_url']
     
-    print(f"✅ Успішна ініціалізація TikTok!")
-    print(f"🆔 TikTok Publish ID: {publish_id}")
-    
+    print(f"✅ Успішна ініціалізація TikTok! ID: {publish_id}")
     print("Починаємо бінарне завантаження файлу...")
 
-    # 🎯 Повертаємо обов'язковий Content-Range для єдиного чанку
     with open(video_path, 'rb') as video_file:
         put_headers = {
             "Content-Type": "video/mp4",
@@ -341,8 +344,6 @@ def upload_to_tiktok(video_path, description):
 
     if upload_res.status_code in [200, 201, 204]:
         print("🚀 Відео успішно передано на сервери TikTok!")
-        
-        # 🔄 Автоматичне очікування зміни статусу
         print("Очікуємо обробку файлу сервером (15 секунд)...")
         time.sleep(15)
         
@@ -357,8 +358,6 @@ def upload_to_tiktok(video_path, description):
             if current_status == "FAILED":
                 print(f"❌ Помилка обробки сервером: {fail_reason}")
                 return False
-        
-        print("📱 Відкрийте TikTok на телефоні -> Вхідні (Inbox) -> Системні сповіщення.")
         return True
     else:
         print(f"❌ Помилка завантаження файлу: {upload_res.status_code} - {upload_res.text}")
@@ -380,9 +379,36 @@ def move_files_to_trash(service, file_list):
 
 # --- ГОЛОВНА ЛОГІКА ---
 def main():
-    print("🚀 Старт синхронізації та генерації контенту для TikTok...")
+    run_mode = os.environ.get('RUN_MODE', 'manual')
+    print(f"⚙️ Запуск у режимі: {run_mode.upper()}")
+    
     service = get_gdrive_service()
     
+    # 🎯 ЛОГІКА ПЕРЕВІРКИ ГРАФІКУ ДЛЯ КРОН-ТАЙМЕРУ
+    if run_mode == 'cron':
+        print("🔍 Підраховуємо загальну кількість файлів у папці...")
+        total_files = count_total_files(service)
+        
+        # Отримуємо поточну годину в Німеччині
+        berlin_hour = datetime.now(ZoneInfo("Europe/Berlin")).hour
+        print(f"📊 На Диску знайдено файлів: {total_files} | Поточна година в DE: {berlin_hour}:21")
+        
+        # Перевірка умов розкладу
+        allowed_hours = []
+        if total_files <= 1000:
+            allowed_hours = [11]
+        elif total_files <= 2000:
+            allowed_hours = [11, 17]
+        elif total_files <= 3000:
+            allowed_hours = [5, 11, 17]
+        else:
+            allowed_hours = [5, 11, 17, 23]
+            
+        if berlin_hour not in allowed_hours:
+            sys.exit(f"🛑 [ПРОПУСК ЗАПУСКУ] Для {total_files} файлів година {berlin_hour} не активна за графіком. Дозволені години: {allowed_hours}")
+        print("✅ Успішно! Умови графіку виконано. Переходимо до обробки медіа.")
+
+    # Отримуємо перші 50 файлів для поточної ітерації монтажу
     try:
         results = service.files().list(
             q=f"'{FOLDER_INPUT_ID}' in parents and trashed = false",
@@ -391,17 +417,15 @@ def main():
             pageSize=50
         ).execute()
     except Exception as e:
-        print(f"❌ Помилка отримання файлів з Google Диску: {e}")
-        return
+        sys.exit(f"❌ Помилка отримання файлів з Google Диску: {e}")
         
     gdrive_files = results.get('files', [])
     gdrive_files = [f for f in gdrive_files if f['id'] != FOLDER_TRASH_ID]
     
     if not gdrive_files:
-        print("Папка вхідних медіа порожня. Немає чого монтувати.")
-        return
+        sys.exit("❌ Папка вхідних медіа порожня. Немає чого монтувати.")
 
-    print(f"Знайдено файлів для обробки: {len(gdrive_files)}")
+    print(f"Знайдено файлів для поточної збірки: {len(gdrive_files)}")
     processed_items = []
     os.makedirs('downloaded', exist_ok=True)
     
@@ -505,8 +529,7 @@ def main():
         
         clips = process_media_group(items)
         if not clips:
-            print("Не вдалося створити кліпи для цієї групи.")
-            continue
+            sys.exit("❌ Не вдалося створити кліпи для цієї групи відео.")
             
         text_info = generate_ai_metadata(date, loc)
         trending_text, year, location = text_info
@@ -528,7 +551,7 @@ def main():
                     os.remove(item['local_path'])
             print("🏁 Обробку поточної групи успішно завершено.")
         else:
-            print("⚠ Очищення папок скасовано, оскільки публікація в TikTok зазнала невдачі.")
+            sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація в TikTok зазнала невдачі. Файли залишено в папці.")
         
         return
 
