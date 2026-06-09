@@ -527,7 +527,8 @@ def main():
         groups[key].append(item)
         
     for (date, loc), items in groups.items():
-        print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація: {loc}. Файлів: {len(items)}")
+        file_names = ", ".join([f"'{item['name']}'" for item in items])
+        print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація: {loc}. Файлів: {len(items)} | Склад: [{file_names}]")
         
         clips = process_media_group(items)
         if not clips:
