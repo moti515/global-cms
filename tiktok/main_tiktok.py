@@ -142,6 +142,7 @@ def main():
     for (date, loc), items in groups.items():
         print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація: {loc}. Всього файлів у групі: {len(items)}")
         
+        # Крок 1: Валідація та збір чистих метаданих тривалості
         valid_items = []
         for item in items:
             mime = item['mime']
@@ -150,7 +151,7 @@ def main():
                 try:
                     with VideoFileClip(local_path) as clip:
                         item['duration'] = clip.duration
-                    valid_items.append(item)
+                        valid_items.append(item)
                 except Exception as e:
                     print(f"⚠️ Відео '{item['name']}' пошкоджене: {e}. Пропускаємо.")
             elif 'image' in mime:
@@ -161,84 +162,134 @@ def main():
             print("☕ Немає валідних медіафайлів у цій групі.")
             continue
 
-        # --- КЕЙС 1: ОДИН ДОВГИЙ ФАЙЛ (> 40 секунд) ---
+        # Крок 2: Розумний відбір файлів під нові правила
+        selected_items = []
+        
+        # Перевірка: якщо в групі взагалі один файл і він довший за 40 сек
         if len(valid_items) == 1 and valid_items[0]['duration'] > MAX_DURATION:
-            single_item = valid_items[0]
-            total_dur = single_item['duration']
-            print(f"✂️ Виявлено один довгий файл ({total_dur:.1f} сек). Ріжемо на частини...")
+            selected_items = [valid_items[0]]
+        else:
+            # Набираємо файли конвеєром, поки не упремося в ліміт 40 секунд
+            accumulated_duration = 0
+            for item in valid_items:
+                # Якщо перший же файл у списку виявився гігантським (>40с)
+                if item['duration'] > MAX_DURATION and len(selected_items) == 0:
+                    selected_items = [item]
+                    break
+                
+                if accumulated_duration + item['duration'] <= MAX_DURATION:
+                    selected_items.append(item)
+                    accumulated_duration += item['duration']
+                else:
+                    # Наступний файл перевищить 40 секунд — зупиняємо відбір для цієї збірки
+                    break
+
+        print(f"📐 Результат відбору: {len(selected_items)} файлів готово до обробки.")
+
+        # --- РОЗПОДІЛ ЗА СЦЕНАРІЯМИ ПУБЛІКАЦІЇ ---
+
+        if len(selected_items) == 1:
+            single_item = selected_items[0]
             
-            start = 0
-            part_num = 1
-            all_parts_success = True
-            generated_files = []
-            chunk_length = 35.0
-            
-            while start < total_dur:
-                end = min(start + chunk_length, total_dur)
-                part_duration = end - start
-                print(f"📦 Обробка частини {part_num} ({start:.1f}s - {end:.1f}s)")
+            # СЦЕНАРІЙ А: Одне фото -> перетворюємо в 3 сек відео
+            if 'image' in single_item['mime']:
+                print(f"📸 Сценарій А: Поодиноке фото. Створюємо відео тривалістю {PHOTO_DURATION} сек.")
+                try:
+                    temp_img_path = os.path.join('downloaded', f"padded_{int(time.time())}_{os.path.basename(single_item['local_path'])}")
+                    prepare_padded_image(single_item['local_path'], temp_img_path, 1080, 1920)
+                    
+                    img_clip = ImageClip(temp_img_path).set_duration(PHOTO_DURATION)
+                    text_info = generate_ai_metadata(date, loc)
+                    
+                    final_file = compile_final_video([img_clip], text_info)
+                    tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
+                    
+                    if upload_to_tiktok(final_file, tiktok_description):
+                        move_files_to_trash(service, [single_item])
+                        if os.path.exists(temp_img_path): os.remove(temp_img_path)
+                        if os.path.exists(final_file): os.remove(final_file)
+                        if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
+                except Exception as e:
+                    print(f"❌ Помилка обробки поодинокого фото: {e}")
+                return
+
+            # СЦЕНАРІЙ Б: Одне коротке відео (< 3 сек) -> зациклюємо
+            elif 'video' in single_item['mime'] and single_item['duration'] < 3.0:
+                print(f"🔄 Сценарій Б: Коротуни ({single_item['duration']:.2f} сек). Зациклюємо понад 3 секунди...")
+                try:
+                    with VideoFileClip(single_item['local_path']) as clip:
+                        loops = int(np.ceil(3.0 / clip.duration))
+                        looped_clip = concatenate_videoclips([clip] * loops)
+                        smart_video = fit_video_with_background(looped_clip, 1080, 1920)
+                        
+                        text_info = generate_ai_metadata(date, loc)
+                        final_file = compile_final_video([smart_video], text_info)
+                        tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
+                        
+                        if upload_to_tiktok(final_file, tiktok_description):
+                            move_files_to_trash(service, [single_item])
+                            if os.path.exists(final_file): os.remove(final_file)
+                            if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
+                except Exception as e:
+                    print(f"❌ Помилка обробки короткого відео: {e}")
+                return
+
+            # СЦЕНАРІЙ В: Один великий файл (> 40 сек) -> ріжемо на РІВНІ частини
+            elif 'video' in single_item['mime'] and single_item['duration'] > MAX_DURATION:
+                total_dur = single_item['duration']
+                num_parts = int(np.ceil(total_dur / MAX_DURATION))
+                chunk_length = total_dur / num_parts
+                print(f"✂️ Сценарій В: Велике відео ({total_dur:.1f} сек). Ріжемо на {num_parts} рівних частин по {chunk_length:.1f} сек...")
+                
+                all_parts_success = True
+                generated_files = []
                 
                 try:
                     with VideoFileClip(single_item['local_path']) as full_video:
-                        trimmed = full_video.subclip(start, end)
-                        if part_duration < MIN_DURATION:
-                            loops = int(np.ceil(MIN_DURATION / part_duration))
-                            trimmed = concatenate_videoclips([trimmed] * loops)
-                        
-                        smart_video = fit_video_with_background(trimmed, 1080, 1920)
-                        text_info = generate_ai_metadata(date, loc)
-                        trending_text, year, location = text_info
-                        hash_tag = location.split(',')[0].strip().replace(" ", "")
-                        tiktok_description = f"{trending_text} (Частина {part_num}) 🌍 #travel #{hash_tag}"
-                        
-                        final_file = compile_final_video([smart_video], text_info)
-                        generated_files.append(final_file)
-                        
-                        upload_success = upload_to_tiktok(final_file, tiktok_description)
-                        if not upload_success:
-                            all_parts_success = False
-                            break
+                        for part_idx in range(num_parts):
+                            start = part_idx * chunk_length
+                            end = min(start + chunk_length, total_dur)
+                            part_num = part_idx + 1
+                            print(f"📦 Рендеринг частини {part_num}/{num_parts} ({start:.1f}s - {end:.1f}s)")
+                            
+                            trimmed = full_video.subclip(start, end)
+                            smart_video = fit_video_with_background(trimmed, 1080, 1920)
+                            
+                            text_info = generate_ai_metadata(date, loc)
+                            trending_text, year, location_name = text_info
+                            
+                            # Модифікуємо текст на відео, додаючи маркер частини
+                            modified_text_info = (f"{trending_text} (Ч. {part_num})", year, location_name)
+                            final_file = compile_final_video([smart_video], modified_text_info)
+                            generated_files.append(final_file)
+                            
+                            # Опис для самого TikTok
+                            hash_tag = location_name.split(',')[0].strip().replace(" ", "")
+                            tiktok_description = f"{trending_text} (Частина {part_num}) 🌍 #travel #{hash_tag}"
+                            
+                            if not upload_to_tiktok(final_file, tiktok_description):
+                                all_parts_success = False
+                                break
                 except Exception as e:
-                    print(f"❌ Помилка обробки довгого відео на частині {part_num}: {e}")
+                    print(f"❌ Помилка нарізки довгого відео: {e}")
                     all_parts_success = False
-                    break
                 
-                start = end
-                part_num += 1
-                
-            if all_parts_success:
-                move_files_to_trash(service, [single_item])
-                for gf in generated_files:
-                    if os.path.exists(gf): os.remove(gf)
-                if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
-                print("🏁 Послідовну публікацію великого файлу завершено успішно.")
-            else:
-                sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація однієї з частин ролика зазнала невдачі.")
-            return
-
-        # --- КЕЙС 2 ТА 3: ЗВИЧАЙНА ГРУПА ---
-        selected_items = []
-        accumulated_duration = 0
-        
-        for item in valid_items:
-            if accumulated_duration + item['duration'] <= MAX_DURATION:
-                selected_items.append(item)
-                accumulated_duration += item['duration']
-            else:
-                if accumulated_duration >= MIN_DURATION:
-                    break
+                if all_parts_success:
+                    move_files_to_trash(service, [single_item])
+                    for gf in generated_files:
+                        if os.path.exists(gf): os.remove(gf)
+                    if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
+                    print("🏁 Серійну публікацію всіх частин завершено успішно!")
                 else:
-                    remaining_space = MAX_DURATION - accumulated_duration
-                    if remaining_space >= 4.0 and 'video' in item['mime']:
-                        item['crop_to_duration'] = remaining_space
-                        item['duration'] = remaining_space
-                        selected_items.append(item)
-                        accumulated_duration += remaining_space
-                    break
+                    sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація однієї з частин серіалу провалилася.")
+                return
 
-        print(f"📐 Розумний відбір: {len(selected_items)} файлів. Чиста тривалість збірки: {accumulated_duration:.1f} сек.")
-
+        # СЦЕНАРІЙ Г: Класична збірка (декілька файлів, сумарно <= 40 сек)
+        print("🎬 Сценарій Г: Монтаж стандартної групи медіафайлів.")
+        
+        # Захист: якщо файлів декілька, але разом вони коротші за 20 секунд — дублюємо їх по колу
         final_items_to_render = list(selected_items)
+        accumulated_duration = sum(i['duration'] for i in selected_items)
         if accumulated_duration < MIN_DURATION:
             while accumulated_duration < MIN_DURATION:
                 for item in selected_items:
@@ -257,15 +308,19 @@ def main():
             if 'video' in mime:
                 try:
                     full_video = VideoFileClip(local_path)
-                    dur = item.get('crop_to_duration', full_video.duration)
-                    start_time = max(0, full_video.duration / 2 - dur / 2)
-                    end_time = min(full_video.duration, start_time + dur)
-                    
-                    trimmed = full_video.subclip(start_time, end_time)
+                    # Якщо з якихось причин тривалість елемента була обмежена ззовні
+                    dur = item['duration']
+                    if dur < full_video.duration:
+                        start_time = max(0, full_video.duration / 2 - dur / 2)
+                        end_time = min(full_video.duration, start_time + dur)
+                        trimmed = full_video.subclip(start_time, end_time)
+                    else:
+                        trimmed = full_video
+                        
                     smart_video = fit_video_with_background(trimmed, 1080, 1920)
                     clips.append(smart_video)
                 except Exception as e:
-                    print(f"⚠️ Пропуск кліпу відео через помилку рендеру: {e}")
+                    print(f"⚠️ Помилка обробки кліпу в групі: {e}")
             elif 'image' in mime:
                 try:
                     temp_img_path = os.path.join('downloaded', f"padded_{int(time.time())}_{os.path.basename(local_path)}")
@@ -275,28 +330,26 @@ def main():
                     img_clip = ImageClip(temp_img_path).set_duration(PHOTO_DURATION)
                     clips.append(img_clip)
                 except Exception as e:
-                    print(f"⚠️ Не вдалося обробити фото {local_path}: {e}")
+                    print(f"⚠️ Помилка обробки фото в групі: {e}")
 
         if not clips:
-            sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося зібрати жодного кліпу для монтажу.")
+            sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося зібрати жодного кліпу для групового монтажу.")
 
         text_info = generate_ai_metadata(date, loc)
-        trending_text, year, location = text_info
-        hash_tag = location.split(',')[0].strip().replace(" ", "")
-        tiktok_description = f"{trending_text} 🌍 #travel #{hash_tag}"
+        tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
         
         final_file = compile_final_video(clips, text_info)
-        print(f"🎉 Фінальне відео зібрано: {final_file}")
         
-        upload_success = upload_to_tiktok(final_file, tiktok_description)
-        
-        if upload_success:
+        if upload_to_tiktok(final_file, tiktok_description):
             move_files_to_trash(service, selected_items)
             for tf in temp_images_to_clean:
                 if os.path.exists(tf): os.remove(tf)
             for si in selected_items:
                 if os.path.exists(si['local_path']): os.remove(si['local_path'])
             if os.path.exists(final_file): os.remove(final_file)
+            print("🏁 Груповий ролик успішно опубліковано.")
+        else:
+            sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Офіційний аплоадер TikTok відхилив групове відео.")
         return
 
 if __name__ == '__main__':
