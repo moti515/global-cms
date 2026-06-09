@@ -330,11 +330,12 @@ def upload_to_tiktok(video_path, description):
     
     print("Починаємо бінарне завантаження файлу...")
 
-    # 🎯 ОПТИМІЗАЦІЯ PUT ЗAПРОСУ (Прибрано конфліктний Content-Range для Single Chunk)
+    # 🎯 Повертаємо обов'язковий Content-Range для єдиного чанку
     with open(video_path, 'rb') as video_file:
         put_headers = {
             "Content-Type": "video/mp4",
-            "Content-Length": str(video_size)
+            "Content-Length": str(video_size),
+            "Content-Range": f"bytes 0-{video_size - 1}/{video_size}"
         }
         upload_res = requests.put(upload_url, headers=put_headers, data=video_file)
 
