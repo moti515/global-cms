@@ -6,6 +6,10 @@ on:
   # schedule:
   #   - cron: '0 12 * * *'
 
+# Переводимо екшени на Node 24, щоб прибрати попередження GitHub у логах
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   publish-video:
     runs-on: ubuntu-latest
@@ -17,7 +21,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.12' # Оновлено до 3.12, щоб уникнути попереджень від Google SDK
         cache: 'pip' # Кешує завантажені пакети для швидших наступних запусків
 
     - name: Install System Dependencies (FFmpeg & ImageMagick)
@@ -25,9 +29,9 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y ffmpeg imagemagick
         
-        # Надійне виправлення політик безпеки ImageMagick для роботи TextClip (шрифтів) у Linux
-        sudo sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@\*"/g' /etc/ImageMagick-6/policy.xml
-        sudo sed -i 's/domain="coder" rights="none" pattern="PDF"/domain="coder" rights="read|write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml
+        # Універсальне виправлення політик безпеки ImageMagick (працює для будь-якої версії v6/v7)
+        sudo sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@\*"/g' /etc/ImageMagick-*/policy.xml || true
+        sudo sed -i 's/domain="coder" rights="none" pattern="PDF"/domain="coder" rights="read|write" pattern="PDF"/' /etc/ImageMagick-*/policy.xml || true
 
     - name: Install Python Dependencies
       run: |
