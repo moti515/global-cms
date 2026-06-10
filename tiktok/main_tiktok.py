@@ -13,7 +13,8 @@ from drive_manager_tiktok import count_total_files, download_file, move_files_to
 from metadata_extractor_tiktok import get_intellectual_date, get_location_name
 from media_processor_tiktok import (
     gif_to_mp4, generate_ai_metadata, sanitize_video,
-    get_video_duration, process_video_item, process_image_item, fast_concat_videos
+    get_video_duration, process_video_item, process_image_item, fast_concat_videos,
+    add_background_music
 )
 from tiktok_uploader import upload_to_tiktok
 
@@ -22,6 +23,17 @@ register_heif_opener()
 def main():
     run_mode = os.environ.get('RUN_MODE', 'manual')
     print(f"⚙️ Запуск у режимі: {run_mode.upper()}")
+
+    def upload_with_music_wrapper(file_path, description):
+        """Додає музику до файлу (якщо це можливо) і викликає оригінальний аплоадер."""
+        temp_music_path = file_path.replace(".mp4", "_music_applied.mp4")
+        if add_background_music(file_path, temp_music_path):
+            if os.path.exists(temp_music_path):
+                os.replace(temp_music_path, file_path)
+                print("✅ Фонова музика успішно інтегрована в ролик!")
+        else:
+            print("⏩ Публікуємо відео з оригінальним звуком (без фонової музики).")
+        return upload_to_tiktok(file_path, description)
     
     service = get_gdrive_service()
     
@@ -198,7 +210,7 @@ def main():
             if 'image' in single_item['mime']:
                 print(f"📸 Сценарій А: Поодиноке фото. Створюємо відео тривалістю {PHOTO_DURATION} сек.")
                 if process_image_item(single_item['local_path'], final_file, text_info, duration=PHOTO_DURATION):
-                    if upload_to_tiktok(final_file, tiktok_description):
+                    if upload_with_music_wrapper(final_file, tiktok_description):
                         move_files_to_trash(service, [single_item])
                         if os.path.exists(final_file): os.remove(final_file)
                         if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
@@ -212,7 +224,7 @@ def main():
                 total_t = single_item['duration'] * (loops + 1)
                 
                 if process_video_item(single_item['local_path'], final_file, text_info, loops=loops, t=total_t):
-                    if upload_to_tiktok(final_file, tiktok_description):
+                    if upload_with_music_wrapper(final_file, tiktok_description):
                         move_files_to_trash(service, [single_item])
                         if os.path.exists(final_file): os.remove(final_file)
                         if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
@@ -248,7 +260,7 @@ def main():
                         hash_tag = location_name.split(',')[0].strip().replace(" ", "")
                         part_description = f"{trending_text} (Частина {part_num}) 🌍 #travel #{hash_tag}"
                         
-                        if not upload_to_tiktok(part_output, part_description):
+                        if not upload_with_music_wrapper(part_output, part_description):
                             all_parts_success = False
                             break
                     else:
@@ -310,7 +322,7 @@ def main():
         fast_concat_videos(temp_clips, final_file)
         
         if os.path.exists(final_file):
-            if upload_to_tiktok(final_file, tiktok_description):
+            if upload_with_music_wrapper(final_file, tiktok_description):
                 move_files_to_trash(service, selected_items)
                 for tc in temp_clips:
                     if os.path.exists(tc): os.remove(tc)
