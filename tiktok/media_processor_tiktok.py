@@ -121,13 +121,15 @@ def generate_ai_metadata(file_path, date_str, location_geo):
 
     target_image_path = temp_frame if is_video else file_path
 
-    # Промпт заточений під сучасні тренди travel/aesthetic відео
+    # Промпт змінено: додано жорстку заборону на дублювання метаданих
     prompt = (
         "Ти професійний тревел-блогер, креативний копірайтер та експерт з вірусного контенту в TikTok та Reels.\n"
         "Подивись на це зображення. Напиши ОДИН ультра-сучасний, атмосферний або естетичний підпис "
         "(максимум 1 коротке речення або сильна фраза), який чітко передає вайб і суть того, що на екрані.\n"
         "Уникай банальщини на кшталт 'Ласкаво просимо', 'Подивіться на це'. Зроби підпис живим, емоційним чи інтригуючим.\n"
-        f"Контекст події: Локація - {location}, Рік - {year}.\n"
+        f"Контекст для атмосфери (НЕ згадуй ці слова і цифри у тексті прямо): Локація - {location}, Рік - {year}.\n"
+        "КРИТИЧНА ЗАБОРОНА: Ні в якому разі НЕ пиши у самому підписі назву локації чи рік. Вони вже є на екрані! "
+        "Використовуй ці дані лише для розуміння контексту події.\n"
         "Напиши текст виключно УКРАЇНСЬКОЮ мовою. КРИТИЧНО: НЕ використовуй емодзі, смайли, лапки чи хештеги.\n"
         "Видай ЛИШЕ фінальний текст підпису і більше нічого."
     )
@@ -164,7 +166,6 @@ def generate_ai_metadata(file_path, date_str, location_geo):
         except Exception as e:
             print(f"⚠️ Помилка ШІ аналізу медіафайлу: {e}")
     
-    # Вичищаємо тимчасовий кадр, якщо він створювався
     if temp_frame and os.path.exists(temp_frame):
         os.remove(temp_frame)
 
@@ -301,9 +302,9 @@ def fast_concat_videos(video_paths, final_output_path):
     if os.path.exists(list_path): os.remove(list_path)
 
 def add_background_music(input_path, output_path):
-    """Накладає випадкову фонову музику."""
+    """Накладає випадкову фонову музику із покращеним криптографічним рандомом."""
     if not MUSIC_FALLBACK_PATH or not os.path.exists(MUSIC_FALLBACK_PATH):
-        print("⚠️ Фонова музика не знайдено.")
+        print("⚠️ Фонова музика не знайдена.")
         return False
 
     music_file = MUSIC_FALLBACK_PATH
@@ -312,8 +313,12 @@ def add_background_music(input_path, output_path):
                   if f.lower().endswith(('.mp3', '.wav', '.m4a', '.aac'))]
         if not tracks:
             return False
-        music_file = random.choice(tracks)
-        print(f"🎵 Фоновий трек: {os.path.basename(music_file)}")
+        
+        # Сортуємо для стабільності структури списку в різних сесіях ОС
+        tracks.sort()
+        # Використовуємо системний рандом для кращого розподілу в хмарі GitHub
+        music_file = random.SystemRandom().choice(tracks)
+        print(f"🎵 Фоновий трек (обрано рандомно): {os.path.basename(music_file)}")
 
     cmd = [
         'ffmpeg', '-y',
