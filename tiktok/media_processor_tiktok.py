@@ -209,3 +209,49 @@ def fast_concat_videos(video_paths, final_output_path):
     
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(list_path): os.remove(list_path)
+
+def add_background_music(input_path, output_path):
+    """
+    Накладає випадкову фонову музику на готове відео.
+    Якщо MUSIC_FALLBACK_PATH — це папка, вибирає випадковий трек з неї.
+    Відеопотік НЕ перекодовується (-c:v copy), міксується лише аудіо.
+    """
+    if not MUSIC_FALLBACK_PATH or not os.path.exists(MUSIC_FALLBACK_PATH):
+        print("⚠️ Фонова музика не налаштована або шлях не існує. Пропускаємо.")
+        return False
+
+    music_file = MUSIC_FALLBACK_PATH
+    # Якщо в конфігу вказано папку, беремо випадковий трек
+    if os.path.isdir(MUSIC_FALLBACK_PATH):
+        tracks = [os.path.join(MUSIC_FALLBACK_PATH, f) for f in os.listdir(MUSIC_FALLBACK_PATH)
+                  if f.lower().endswith(('.mp3', '.wav', '.m4a', '.aac'))]
+        if not tracks:
+            print(f"⚠️ У папці {MUSIC_FALLBACK_PATH} не знайдено аудіофайлів.")
+            return False
+        music_file = random.choice(tracks)
+        print(f"🎵 Обрано випадковий фоновий трек: {os.path.basename(music_file)}")
+    else:
+        print(f"🎵 Використовуємо фіксований фоновий трек: {os.path.basename(music_file)}")
+
+    print(f"🎛️ [FFmpeg] Міксуємо аудіодорожки (оригінал 100% + фон 15%)...")
+    
+    # Фільтр amix:
+    # [0:a]volume=1.0 - залишає рідний звук (або вашу згенеровану тишу) на повну гучність
+    # [1:a]volume=0.15 - приглушує фонову музику до 15% (робить її ненав'язливою)
+    # duration=first - обрізає музику точно по тривалості відеоролика
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', input_path,
+        '-stream_loop', '-1', '-i', music_file, # Зациклюємо музику, якщо відео довше за трек
+        '-filter_complex', '[0:a]volume=1.0[orig];[1:a]volume=0.15[bg];[orig][bg]amix=inputs=2:duration=first:dropout_transition=0',
+        '-c:v', 'copy',      # Відео копіюється без втрати якості та часу
+        '-c:a', 'aac', '-b:a', '128k',
+        output_path
+    ]
+    
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return res.returncode == 0
+    except Exception as e:
+        print(f"⚠️ Помилка під час накладання музики через FFmpeg: {e}")
+        return False
