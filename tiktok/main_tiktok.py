@@ -242,7 +242,7 @@ def main():
             # СЦЕНАРІЙ В: Один великий файл (> 40 сек) -> ріжемо на РІВНІ частини
             elif 'video' in single_item['mime'] and single_item['duration'] > MAX_DURATION:
                 total_dur = single_item['duration']
-                num_parts = int(np.ceil(total_dur / MAX_DURATION))
+                num_parts = int(math.ceil(total_dur / MAX_DURATION))
                 chunk_length = total_dur / num_parts
                 print(f"✂️ Сценарій В: Велике відео ({total_dur:.1f} сек). Ріжемо на {num_parts} частин по {chunk_length:.1f} сек...")
                 
