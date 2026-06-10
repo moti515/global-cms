@@ -3,6 +3,7 @@ import sys
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import numpy as np  # Додано для коректної роботи np.ceil у сценаріях
 from PIL import Image
 from pillow_heif import register_heif_opener
 
@@ -197,37 +198,44 @@ def main():
                     break
 
         print(f"📐 Результат відбору: {len(selected_items)} файлів готово до обробки.")
-        text_info = generate_ai_metadata(date, loc)
-        tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
         final_file = f"ready_tiktok_{int(time.time())}.mp4"
 
         # --- РОЗПОДІЛ ЗА СЦЕНАРІЯМИ ПУБЛІКАЦІЇ ---
 
         if len(selected_items) == 1:
             single_item = selected_items[0]
+            current_file_path = single_item['local_path']
             
             # СЦЕНАРІЙ А: Одне фото -> перетворюємо в 3 сек відео
             if 'image' in single_item['mime']:
                 print(f"📸 Сценарій А: Поодиноке фото. Створюємо відео тривалістю {PHOTO_DURATION} сек.")
-                if process_image_item(single_item['local_path'], final_file, text_info, duration=PHOTO_DURATION):
+                
+                # 1. Генеруємо ШІ підпис конкретно для цього фото
+                text_info = generate_ai_metadata(current_file_path, date, loc)
+                tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
+                
+                if process_image_item(current_file_path, final_file, text_info, duration=PHOTO_DURATION):
                     if upload_with_music_wrapper(final_file, tiktok_description):
                         move_files_to_trash(service, [single_item])
                         if os.path.exists(final_file): os.remove(final_file)
-                        if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
+                        if os.path.exists(current_file_path): os.remove(current_file_path)
                 return
 
             # СЦЕНАРІЙ Б: Одне коротке відео (< 3 сек) -> зациклюємо
             elif 'video' in single_item['mime'] and single_item['duration'] < 3.0:
                 print(f"🔄 Сценарій Б: Коротуни ({single_item['duration']:.2f} сек). Зациклюємо через stream_loop...")
                 loops = int(sorted([1, np.ceil(3.0 / single_item['duration']) - 1, 10])[1])
-                # Вираховуємо точний ліміт часу для фільтра
                 total_t = single_item['duration'] * (loops + 1)
                 
-                if process_video_item(single_item['local_path'], final_file, text_info, loops=loops, t=total_t):
+                # 1. Генеруємо ШІ підпис конкретно для цього короткого відео
+                text_info = generate_ai_metadata(current_file_path, date, loc)
+                tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
+                
+                if process_video_item(current_file_path, final_file, text_info, loops=loops, t=total_t):
                     if upload_with_music_wrapper(final_file, tiktok_description):
                         move_files_to_trash(service, [single_item])
                         if os.path.exists(final_file): os.remove(final_file)
-                        if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
+                        if os.path.exists(current_file_path): os.remove(current_file_path)
                 return
 
             # СЦЕНАРІЙ В: Один великий файл (> 40 сек) -> ріжемо на РІВНІ частини
@@ -240,6 +248,8 @@ def main():
                 all_parts_success = True
                 generated_files = []
                 
+                # 1. Генеруємо базовий ШІ підпис для всього довгого відео один раз
+                text_info = generate_ai_metadata(current_file_path, date, loc)
                 trending_text, year, location_name = text_info
                 
                 for part_idx in range(num_parts):
@@ -251,7 +261,7 @@ def main():
                     modified_text_info = (f"{trending_text} (Ч. {part_num})", year, location_name)
                     
                     success = process_video_item(
-                        single_item['local_path'], part_output, modified_text_info, 
+                        current_file_path, part_output, modified_text_info, 
                         ss=start, t=chunk_length
                     )
                     
@@ -271,7 +281,7 @@ def main():
                     move_files_to_trash(service, [single_item])
                     for gf in generated_files:
                         if os.path.exists(gf): os.remove(gf)
-                    if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
+                    if os.path.exists(current_file_path): os.remove(current_file_path)
                     print("🏁 Серійну публікацію всіх частин завершено успішно!")
                 else:
                     sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація однієї з частин серіалу провалилася.")
@@ -292,25 +302,31 @@ def main():
 
         temp_clips = []
         
+        # Для загального опису самого поста в TikTok беремо ШІ-аналіз першого файлу збірки
+        main_text_info = generate_ai_metadata(selected_items[0]['local_path'], date, loc)
+        tiktok_description = f"{main_text_info[0]} 🌍 #travel #{main_text_info[2].split(',')[0].strip().replace(' ', '')}"
+
         for idx, item in enumerate(final_items_to_render):
-            local_path = item['local_path']
+            current_file_path = item['local_path']
             mime = item['mime']
             part_out = os.path.join('downloaded', f"processed_part_{idx}_{int(time.time())}.mp4")
             success = False
             
+            # 1. Генеруємо індивідуальні ШІ титри для кожного окремого фрагмента у збірці
+            item_text_info = generate_ai_metadata(current_file_path, date, loc)
+            
             if 'video' in mime:
                 dur = item['duration']
-                total_d = get_video_duration(local_path)
+                total_d = get_video_duration(current_file_path)
                 ss_param, t_param = None, None
                 
-                # Якщо кліп потребує часткового обрізання всередині конвеєра дублювання
                 if dur < total_d:
                     ss_param = max(0, total_d / 2 - dur / 2)
                     t_param = dur
                     
-                success = process_video_item(local_path, part_out, text_info, ss=ss_param, t=t_param)
+                success = process_video_item(current_file_path, part_out, item_text_info, ss=ss_param, t=t_param)
             elif 'image' in mime:
-                success = process_image_item(local_path, part_out, text_info, duration=PHOTO_DURATION)
+                success = process_image_item(current_file_path, part_out, item_text_info, duration=PHOTO_DURATION)
                 
             if success and os.path.exists(part_out):
                 temp_clips.append(part_out)
