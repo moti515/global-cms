@@ -187,7 +187,7 @@ def get_ffmpeg_filters(text_info, target_w=1080, target_h=1920):
         vf += f",drawtext=fontfile={font_path}:text='{clean_title}':x=(w-text_w)/2:y=250:fontsize=46:fontcolor=white:borderw=5:bordercolor=black:enable='lt(t,3)':fix_bounds=1"
         
         # 2. Метадата: знизу зліва (x=70, y=1600 - безпечна зона TikTok), світло-жовтий, чорний контур, показується ЗАВЖДИ
-        vf += f",drawtext=fontfile={font_path}:text='{clean_meta}':x=70:y=1600:fontsize=36:fontcolor=lightyellow:borderw=4:bordercolor=black:fix_bounds=1"
+        vf += f",drawtext=fontfile={font_path}:text='{clean_meta}':x=70:y=1600:fontsize=36:fontcolor=yellow:borderw=4:bordercolor=black:fix_bounds=1"
         
     return vf
 
