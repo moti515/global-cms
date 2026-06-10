@@ -9,6 +9,35 @@ from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, Aud
 from moviepy.audio.AudioClip import AudioArrayClip
 from config_tiktok import FINAL_FPS, MUSIC_FALLBACK_PATH
 
+def sanitize_video(input_path):
+    """
+    Перезбирає відео за допомогою FFmpeg, щоб виправити пошкоджені індекси,
+    проблеми з першим кадром та кодеками.
+    """
+    temp_path = input_path.replace(".mp4", "_sanitized.mp4")
+    print(f"🔧 [FFmpeg] Лікування файлу: {os.path.basename(input_path)}...")
+    
+    # Команда перекодовує відео в максимально сумісний h264 з постійним фреймрейтом
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', input_path,
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        temp_path
+    ]
+    
+    try:
+        # Приглушуємо вивід ffmpeg, щоб не спамити в консоль
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        if os.path.exists(temp_path):
+            os.replace(temp_path, input_path) # Замінюємо оригінал вилікуваним файлом
+            print(f"✅ Файл успішно відновлено.")
+            return True
+    except Exception as e:
+        print(f"⚠️ Не вдалося вилікувати відео через FFmpeg: {e}")
+        if os.path.exists(temp_path): os.remove(temp_path)
+    return False
+
 def fit_video_with_background(clip, target_w=1080, target_h=1920):
     target_ar = target_w / target_h
     clip_ar = clip.w / clip.h
