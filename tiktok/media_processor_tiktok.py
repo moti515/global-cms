@@ -134,7 +134,7 @@ def generate_ai_metadata(file_path, date_str, location_geo):
         "Видай ЛИШЕ фінальний текст підпису і більше нічого."
     )
 
-    models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash"]
+    models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
     trending_text = "Краса в простих деталях" # дефолт
 
     if target_image_path and os.path.exists(target_image_path):
