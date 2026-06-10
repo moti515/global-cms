@@ -44,6 +44,7 @@ jobs:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         CLIENT_KEY_TIKTOK: ${{ secrets.CLIENT_KEY_TIKTOK }}
         CLIENT_SECRET_TIKTOK: ${{ secrets.CLIENT_SECRET_TIKTOK }}
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         RUN_MODE: ${{ env.RUN_MODE }}
       run: |
         cd tiktok
