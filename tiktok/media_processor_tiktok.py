@@ -45,7 +45,7 @@ def extract_frame_from_video(video_path, output_image_path):
 def sanitize_video(input_path):
     """
     Перезбирає відео за допомогою FFmpeg, щоб виправити пошкоджені індекси,
-    проблеми з першим кадром та кодеками.
+    проблими з першим кадром та кодеками.
     """
     temp_path = input_path.replace(".mp4", "_sanitized.mp4")
     print(f"🔧 [FFmpeg] Лікування файлу: {os.path.basename(input_path)}...")   
@@ -186,8 +186,8 @@ def get_ffmpeg_filters(text_info, target_w=1080, target_h=1920):
     
     if os.path.exists(font_path):
         # 1. Головний підпис (ШІ):
-        # Автоматично нарізаємо текст на шматки по ~32 символи, щоб він не тулився до правого краю.
-        # Завдяки x=70 текст вирівнюється по лівому краю точно так само, як і нижня метадата.
+        # Автоматично нарізаємо текст на шматки по ~32 символи.
+        # Змінено на x=(w-text_w)/2 для ідеального центрування кожного рядка.
         lines = textwrap.wrap(clean_title, width=32)
         
         start_y = 250      # Стартова позиція першого рядка по висоті
@@ -195,14 +195,14 @@ def get_ffmpeg_filters(text_info, target_w=1080, target_h=1920):
         
         for i, line in enumerate(lines):
             current_y = start_y + (i * line_height)
-            # ЗБІЛЬШЕНО ЧАС: замініть 'lt(t,6)' на більшу цифру, якщо 6 секунд замало (було 3)
+            # Текст показується 6 секунд
             vf += (
                 f",drawtext=fontfile={font_path}:text='{line}':"
-                f"x=70:y={current_y}:fontsize=46:fontcolor=white:"
+                f"x=(w-text_w)/2:y={current_y}:fontsize=46:fontcolor=white:"
                 f"borderw=5:bordercolor=black:enable='lt(t,6)':fix_bounds=1"
             )
         
-        # 2. Метадата: знизу зліва (x=70, y=1600 - безпечна зона TikTok), світло-жовтий, показується ЗАВЖДИ
+        # 2. Метадата: знизу зліва (x=70, y=1600), світло-жовтий, показується ЗАВЖДИ
         vf += f",drawtext=fontfile={font_path}:text='{clean_meta}':x=70:y=1600:fontsize=36:fontcolor=yellow:borderw=4:bordercolor=black:fix_bounds=1"
         
     return vf
@@ -244,12 +244,11 @@ def process_video_item(input_path, output_path, text_info, target_w=1080, target
     res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return res.returncode == 0
 
-def process_image_item(input_path, output_path, text_info, duration=3.0, target_w=1080, target_h=1920):
-    """ОДИН ПРОХІД ОБРОБКИ ФОТО (Тепер рендеринг тексту теж через FFmpeg!)"""
+def process_image_item(input_path, output_path, text_info, duration=4.0, target_w=1080, target_h=1920):
+    """ОДИН ПРОХІД ОБРОБКИ ФОТО (Тривалість збільшено за дефолтом до 4.0 секунд)"""
     temp_jpg = output_path + "_pure_canvas.jpg"
     
     try:
-        # Pillow тепер тільки пропорційно масштабує картинку на чорне полотно (без тексту)
         with Image.open(input_path) as img:
             img = ImageOps.exif_transpose(img)
             
@@ -265,10 +264,8 @@ def process_image_item(input_path, output_path, text_info, duration=3.0, target_
             canvas.paste(img, offset)
             canvas.save(temp_jpg, 'JPEG', quality=95)
             
-        # Отримуємо ідентичні фільтри тексту
         vf_filters = get_ffmpeg_filters(text_info, target_w, target_h)
             
-        # Створюємо відео з фото та накладаємо титри через FFmpeg (динаміка зникнення працюватиме ідеально)
         cmd = [
             'ffmpeg', '-y', '-loop', '1', '-i', temp_jpg,
             '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
@@ -282,7 +279,7 @@ def process_image_item(input_path, output_path, text_info, duration=3.0, target_
         if os.path.exists(temp_jpg): os.remove(temp_jpg)
         return True
     except Exception as e:
-        print(f"⚠️ Помилка обробки фото {input_path}: {e}")
+        print(f"⚠️ Помилка обробки photo {input_path}: {e}")
         if os.path.exists(temp_jpg): os.remove(temp_jpg)
         return False
 
@@ -302,7 +299,7 @@ def fast_concat_videos(video_paths, final_output_path):
     if os.path.exists(list_path): os.remove(list_path)
 
 def add_background_music(input_path, output_path):
-    """Накладає випадкову фонову музику із покращеним криптографічним рандомом."""
+    """Накладає випадкову фонову музику. Виправлено згасання аудіо в кінці ролика."""
     if not MUSIC_FALLBACK_PATH or not os.path.exists(MUSIC_FALLBACK_PATH):
         print("⚠️ Фонова музика не знайдена.")
         return False
@@ -314,19 +311,19 @@ def add_background_music(input_path, output_path):
         if not tracks:
             return False
         
-        # Сортуємо для стабільності структури списку в різних сесіях ОС
         tracks.sort()
-        # Використовуємо системний рандом для кращого розподілу в хмарі GitHub
         music_file = random.SystemRandom().choice(tracks)
         print(f"🎵 Фоновий трек (обрано рандомно): {os.path.basename(music_file)}")
 
+    # Змінено: duration=longest + прапорець -shortest гарантують гру без пауз до кінця відео
     cmd = [
         'ffmpeg', '-y',
         '-i', input_path,
         '-stream_loop', '-1', '-i', music_file,
-        '-filter_complex', '[0:a]volume=1.0[orig];[1:a]volume=0.15[bg];[orig][bg]amix=inputs=2:duration=first:dropout_transition=0',
+        '-filter_complex', '[0:a]volume=1.0[orig];[1:a]volume=0.15[bg];[orig][bg]amix=inputs=2:duration=longest:dropout_transition=0',
         '-c:v', 'copy',
         '-c:a', 'aac', '-b:a', '128k',
+        '-shortest',
         output_path
     ]
     try:
