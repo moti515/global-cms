@@ -107,7 +107,7 @@ def generate_ai_metadata(file_path, date_str, location_geo):
     
     if not gemini_key:
         print("⚠️ GEMINI_API_KEY не знайдено. Працює дефолтна метадата.")
-        return "Естетика моменту ✨🌿", year, location
+        return "Естетика моменту", year, location
 
     # Визначаємо, з чим маємо справу, та готуємо картинку для ШІ
     temp_frame = None
