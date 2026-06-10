@@ -15,7 +15,7 @@ from drive_manager_tiktok import count_total_files, download_file, move_files_to
 from metadata_extractor_tiktok import get_intellectual_date, get_location_name
 from media_processor_tiktok import (
     gif_to_mp4, prepare_padded_image, fit_video_with_background,
-    generate_ai_metadata, compile_final_video
+    generate_ai_metadata, compile_final_video, sanitize_video
 )
 from tiktok_uploader import upload_to_tiktok
 
@@ -118,7 +118,7 @@ def main():
             local_path = jpg_path
             mime_type = 'image/jpeg'
 
-        # ✅ зміщено ліворуч, додає абсолютно всі файли після перевірок
+        # ✅ Зміщено ліворуч, додає абсолютно всі файли після перевірок
         processed_items.append({
             'id': f['id'],
             'name': f['name'],
@@ -127,6 +127,7 @@ def main():
             'date': file_date,
             'location': location
         })
+
     # --- ГРУПУВАННЯ ТА МОНТАЖ ---
     groups = {}
     for item in processed_items:
@@ -153,7 +154,20 @@ def main():
                         item['duration'] = clip.duration
                         valid_items.append(item)
                 except Exception as e:
-                    print(f"⚠️ Відео '{item['name']}' пошкоджене: {e}. Пропускаємо.")
+                    print(f"⚠️ Спроба відкрити '{item['name']}' викликала помилку: {e}.")
+                    # 🚀 Запускаємо лікування файлу FFmpeg-ом
+                    if sanitize_video(local_path):
+                        try:
+                            # Пробуємо відкрити файл знову після лікування
+                            with VideoFileClip(local_path) as clip:
+                                item['duration'] = clip.duration
+                                valid_items.append(item)
+                                print(f"✅ Файл '{item['name']}' успішно інтегровано після лікування.")
+                                continue
+                        except Exception as second_err:
+                            print(f"❌ Навіть після лікування файл не читається: {second_err}")
+                    
+                    print(f"⏩ Пропускаємо пошкоджений файл '{item['name']}'.")
             elif 'image' in mime:
                 item['duration'] = PHOTO_DURATION
                 valid_items.append(item)
