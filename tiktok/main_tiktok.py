@@ -1,211 +1,329 @@
 import os
 import sys
 import time
-import random
-import subprocess
-from PIL import Image, ImageOps, ImageDraw, ImageFont
-from config_tiktok import FINAL_FPS, MUSIC_FALLBACK_PATH
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from PIL import Image
+from pillow_heif import register_heif_opener
 
-def get_video_duration(input_path):
-    """Отримує тривалість відео за допомогою ffprobe."""
-    cmd = [
-        'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-        '-of', 'default=noprint_wrappers=1:nokey=1', input_path
-    ]
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    try:
-        return float(res.stdout.strip())
-    except ValueError:
-        return 0.0
+# Імпорт власних модулів
+from config_tiktok import FOLDER_INPUT_ID, FOLDER_TRASH_ID, VALID_EXTENSIONS
+from auth_tiktok import get_gdrive_service
+from drive_manager_tiktok import count_total_files, download_file, move_files_to_trash
+from metadata_extractor_tiktok import get_intellectual_date, get_location_name
+from media_processor_tiktok import (
+    gif_to_mp4, generate_ai_metadata, sanitize_video,
+    get_video_duration, process_video_item, process_image_item, fast_concat_videos
+)
+from tiktok_uploader import upload_to_tiktok
 
-def has_audio_stream(input_path):
-    """Перевіряє, чи має відео аудіодорожку."""
-    cmd = [
-        'ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries', 
-        'stream=codec_type', '-of', 'default=noprint_wrappers=1:nokey=1', input_path
-    ]
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    return bool(res.stdout.strip())
+register_heif_opener()
 
-def sanitize_video(input_path):
-    """
-    Перезбирає відео за допомогою FFmpeg, щоб виправити пошкоджені індекси,
-    проблеми з першим кадром та кодеками.
-    """
-    temp_path = input_path.replace(".mp4", "_sanitized.mp4")
-    print(f"🔧 [FFmpeg] Лікування файлу: {os.path.basename(input_path)}...")
+def main():
+    run_mode = os.environ.get('RUN_MODE', 'manual')
+    print(f"⚙️ Запуск у режимі: {run_mode.upper()}")
     
-    cmd = [
-        'ffmpeg', '-y',
-        '-i', input_path,
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac',
-        temp_path
-    ]
+    service = get_gdrive_service()
     
-    try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        if os.path.exists(temp_path):
-            os.replace(temp_path, input_path)
-            print(f"✅ Файл успішно відновлено.")
-            return True
-    except Exception as e:
-        print(f"⚠️ Не вдалося вилікувати відео через FFmpeg: {e}")
-        if os.path.exists(temp_path): os.remove(temp_path)
-    return False
-
-def gif_to_mp4(input_path, output_path):
-    print(f"🎞️ Конвертуємо GIF {input_path} в MP4 відео...")
-    cmd = [
-        'ffmpeg', '-y', '-i', input_path,
-        '-movflags', 'faststart', '-pix_fmt', 'yuv420p',
-        '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920',
-        output_path
-    ]
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if res.returncode != 0:
-        raise RuntimeError(f"FFmpeg Error: {res.stderr}")
-
-def generate_ai_metadata(date_str, location_geo):
-    year = date_str.split('.')[-1] if '.' in date_str else "2026"
-    generic_phrases = [
-        "Магія природи, яка заліковує душу ✨",
-        "Там, де час зупиняється... 🌿",
-        "Краса в простих деталях ⛰️",
-        "Естетика цього світу зашкалює 😍",
-        "Моменти, які залишаються назавжди"
-    ]
-    location_phrases = [
-        f"Місце, куди хочеться повертатися: {location_geo} ✨",
-        f"Атмосфера цього дня: {location_geo} 🌍",
-        f"Відкриваючи неймовірні куточки: {location_geo} 🌿",
-        f"Подорож, що надихає | {location_geo} 🧭",
-        f"Спогади з серця: {location_geo}"
-    ]
-    if location_geo and location_geo != "Невідоме місце":
-        trending_text = random.choice(location_phrases)
-        location = location_geo
-    else:
-        trending_text = random.choice(generic_phrases)
-        location = "Магія природи"
-    return trending_text, year, location
-
-def process_video_item(input_path, output_path, text_info, target_w=1080, target_h=1920, ss=None, t=None, loops=0):
-    """
-    ОДИН ПРОХІД: Лікує відео, масштабує з падінгом під 1080x1920, 
-    накладає текст через FFmpeg drawtext, підтримує обрізання та зациклення.
-    Гарантує наявність аудіопотоку для подальшого швидкого склеювання.
-    """
-    trending_text, year, location = text_info
-    clean_title = trending_text.replace("'", "").replace(":", "\\:")
-    clean_meta = f"{location} | {year}".replace("'", "").replace(":", "\\:")
-    
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    
-    # Базовий фільтр геометрії
-    vf_filters = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=black"
-    
-    if os.path.exists(font_path):
-        vf_filters += f",drawtext=fontfile={font_path}:text='{clean_title}':x=(w-text_w)/2:y=400:fontsize=44:fontcolor=white:box=1:boxcolor=black@0.4:boxborderw=15:fix_bounds=1"
-        vf_filters += f",drawtext=fontfile={font_path}:text='{clean_meta}':x=(w-text_w)/2:y=1500:fontsize=36:fontcolor=yellow:box=1:boxcolor=black@0.4:boxborderw=10:fix_bounds=1"
-
-    cmd = ['ffmpeg', '-y']
-    
-    # Якщо потрібно зациклити вхідний потік
-    if loops > 0:
-        cmd.extend(['-stream_loop', str(loops)])
+    if run_mode == 'cron':
+        print("🔍 Підраховуємо загальну кількість файлів у папці...")
+        total_files = count_total_files(service)
         
-    cmd.extend(['-i', input_path])
-    
-    # Додаємо генератор тиші, якщо у відео немає власного звуку
-    has_audio = has_audio_stream(input_path)
-    if not has_audio:
-        cmd.extend(['-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100'])
+        berlin_hour = datetime.now(ZoneInfo("Europe/Berlin")).hour
+        print(f"📊 На Диску знайдено файлів: {total_files} | Поточна година в DE: {berlin_hour}")
         
-    # Параметри обрізання за часом (якщо передані)
-    if ss is not None:
-        cmd.extend(['-ss', str(ss)])
-    if t is not None:
-        cmd.extend(['-t', str(t)])
-        
-    cmd.extend([
-        '-vf', vf_filters,
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
-        '-r', str(FINAL_FPS),
-        '-b:v', '3000k', '-maxrate', '4500k', '-bufsize', '9000k',
-    ])
-    
-    # Налаштування аудіокодеків
-    if has_audio:
-        cmd.extend(['-c:a', 'aac', '-b:a', '128k'])
-    else:
-        cmd.extend(['-c:a', 'aac', '-b:a', '128k', '-shortest'])
-        
-    cmd.append(output_path)
-    
-    print(f"🎬 Оптимізація та лікування відео: {os.path.basename(input_path)}")
-    res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return res.returncode == 0
-
-def process_image_item(input_path, output_path, text_info, duration=3.0, target_w=1080, target_h=1920):
-    """
-    Оптимізує фото через Pillow, накладає текст і через FFmpeg створює MP4 ролик.
-    Додає тиху аудіодорожку, щоб файл мав ідентичну структуру з іншими відео.
-    """
-    trending_text, year, location = text_info
-    temp_jpg = output_path + "_temp.jpg"
-    
-    try:
-        with Image.open(input_path) as img:
-            img = ImageOps.exif_transpose(img)
-            img.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
-            canvas = Image.new('RGB', (target_w, target_h), (15, 15, 15))
-            offset = ((target_w - img.width) // 2, (target_h - img.height) // 2)
-            canvas.paste(img, offset)
+        allowed_hours = []
+        if total_files <= 1000:
+            allowed_hours = [11]
+        elif total_files <= 2000:
+            allowed_hours = [11, 17]
+        elif total_files <= 3000:
+            allowed_hours = [5, 11, 17]
+        else:
+            allowed_hours = [5, 11, 17, 23]
             
-            draw = ImageDraw.Draw(canvas)
+        if berlin_hour not in allowed_hours:
+            print(f"☕ [ШТАТНИЙ ПРОПУСК] Для {total_files} файлів година {berlin_hour} не передбачена графіком.")
+            sys.exit(0)
+            
+        print("✅ Успішно! Умови графіку виконано. Переходимо до відбору та обробки медіа.")
+
+    try:
+        results = service.files().list(
+            q=f"'{FOLDER_INPUT_ID}' in parents and trashed = false",
+            fields="nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size)",
+            orderBy="createdTime",
+            pageSize=50
+        ).execute()
+    except Exception as e:
+        sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка отримання файлів з Google Диску: {e}")
+        
+    gdrive_files = results.get('files', [])
+    gdrive_files = [f for f in gdrive_files if f['id'] != FOLDER_TRASH_ID]
+    
+    if not gdrive_files:
+        print("☕ [ШТАТНИЙ ПРОПУСК] Папка вхідних медіа порожня.")
+        sys.exit(0)
+
+    print(f"Знайдено файлів для поточної збірки: {len(gdrive_files)}")
+    processed_items = []
+    os.makedirs('downloaded', exist_ok=True)
+    
+    for f in gdrive_files:
+        mime_type = f.get('mimeType', '')
+        lower_name = f['name'].lower()
+        
+        is_valid_media = mime_type.startswith(('image/', 'video/')) or lower_name.endswith(VALID_EXTENSIONS)
+        if not is_valid_media:
+            continue
+            
+        local_path = os.path.join('downloaded', f['name'])
+        print(f"Завантаження {f['name']}...")
+        
+        download_file(service, f['id'], f['name'], local_path)
+
+        now = datetime.now()
+        final_dt, lat, lon = get_intellectual_date(local_path, f['name'], f, now)
+        file_date = final_dt.strftime('%d.%m.%Y')
+        
+        location = "Невідоме місце"
+        if lat and lon:
+            time.sleep(1)  
+            location = get_location_name(lat, lon) or "Невідоме місце"
+            
+        # Конвертація GIF
+        if mime_type == 'image/gif' or lower_name.endswith('.gif'):
+            mp4_path = os.path.join('downloaded', f['name'].rsplit('.', 1)[0] + '_gif.mp4')
             try:
-                font_main = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 44)
-                font_meta = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
-            except IOError:
-                font_main = font_meta = ImageFont.load_default()
+                gif_to_mp4(local_path, mp4_path)
+            except Exception as e:
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося конвертувати GIF у MP4. Деталі: {e}")
+            
+            if os.path.exists(local_path): os.remove(local_path)
+            local_path = mp4_path
+            mime_type = 'video/mp4'
                 
-            draw.text((target_w//2, 400), trending_text, font=font_main, fill=(255, 255, 255), anchor="mm")
-            draw.text((target_w//2, 1500), f"{location} | {year}", font=font_meta, fill=(255, 255, 0), anchor="mm")
+        # Конвертація HEIC / HEIF
+        elif mime_type in ['image/heic', 'image/heif'] or lower_name.endswith(('.heic', '.heif')):
+            jpg_path = os.path.join('downloaded', f['name'].rsplit('.', 1)[0] + '.jpg')
+            try:
+                with Image.open(local_path) as img:
+                    img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
+            except Exception as e:
+                sys.exit(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося розкодувати iPhone-формат HEIC/HEIF. Деталі: {e}")
             
-            canvas.save(temp_jpg, 'JPEG', quality=95)
+            if os.path.exists(local_path): os.remove(local_path)
+            local_path = jpg_path
+            mime_type = 'image/jpeg'
             
-        # Створення відео з фото + додавання тихого аудіо для сумісності з concat
-        cmd = [
-            'ffmpeg', '-y', '-loop', '1', '-i', temp_jpg,
-            '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-            '-c:v', 'libx264', '-t', str(duration),
-            '-pix_fmt', 'yuv420p', '-r', str(FINAL_FPS),
-            '-b:v', '2500k', '-c:a', 'aac', '-b:a', '128k', '-shortest',
-            output_path
-        ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.exists(temp_jpg): os.remove(temp_jpg)
-        return True
-    except Exception as e:
-        print(f"⚠️ Помилка обробки фото {input_path}: {e}")
-        if os.path.exists(temp_jpg): os.remove(temp_jpg)
-        return False
+        if 'video' in mime_type:
+            sanitize_video(local_path)
 
-def fast_concat_videos(video_paths, final_output_path):
-    """
-    Миттєво склеює вже оптимізовані відео між собою без перекодування відеопотоку!
-    """
-    list_path = "concat_list.txt"
-    with open(list_path, "w", encoding="utf-8") as f:
-        for p in video_paths:
-            f.write(f"file '{os.path.abspath(p)}'\n")
+        processed_items.append({
+            'id': f['id'],
+            'name': f['name'],
+            'mime': mime_type,
+            'local_path': local_path,
+            'date': file_date,
+            'location': location
+        })
+
+    # --- ГРУПУВАННЯ ТА МОНТАЖ ---
+    groups = {}
+    for item in processed_items:
+        key = (item['date'], item['location'])
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(item)
+        
+    MIN_DURATION = 20
+    MAX_DURATION = 40
+    PHOTO_DURATION = 3.0
+
+    for (date, loc), items in groups.items():
+        print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація: {loc}. Всього файлів у групі: {len(items)}")
+        
+        # Крок 1: Валідація та збір чистих метаданих тривалості через ffprobe
+        valid_items = []
+        for item in items:
+            mime = item['mime']
+            local_path = item['local_path']
+            if 'video' in mime:
+                duration = get_video_duration(local_path)
+                if duration > 0:
+                    item['duration'] = duration
+                    valid_items.append(item)
+                else:
+                    print(f"⚠️ Спроба відкрити через ffprobe '{item['name']}' провалилася. Лікуємо...")
+                    if sanitize_video(local_path):
+                        duration = get_video_duration(local_path)
+                        if duration > 0:
+                            item['duration'] = duration
+                            valid_items.append(item)
+                            print(f"✅ Файл '{item['name']}' успішно інтегровано після лікування.")
+                            continue
+                    print(f"⏩ Пропускаємо пошкоджений файл '{item['name']}'.")
+            elif 'image' in mime:
+                item['duration'] = PHOTO_DURATION
+                valid_items.append(item)
+
+        if not valid_items:
+            print("☕ Немає валідних медіафайлів у цій групі.")
+            continue
+
+        # Крок 2: Розумний відбір файлів під ліміт 40 секунд
+        selected_items = []
+        if len(valid_items) == 1 and valid_items[0]['duration'] > MAX_DURATION:
+            selected_items = [valid_items[0]]
+        else:
+            accumulated_duration = 0
+            for item in valid_items:
+                if item['duration'] > MAX_DURATION and len(selected_items) == 0:
+                    selected_items = [item]
+                    break
+                if accumulated_duration + item['duration'] <= MAX_DURATION:
+                    selected_items.append(item)
+                    accumulated_duration += item['duration']
+                else:
+                    break
+
+        print(f"📐 Результат відбору: {len(selected_items)} файлів готово до обробки.")
+        text_info = generate_ai_metadata(date, loc)
+        tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
+        final_file = f"ready_tiktok_{int(time.time())}.mp4"
+
+        # --- РОЗПОДІЛ ЗА СЦЕНАРІЯМИ ПУБЛІКАЦІЇ ---
+
+        if len(selected_items) == 1:
+            single_item = selected_items[0]
             
-    cmd = [
-        'ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path,
-        '-c', 'copy',
-        final_output_path
-    ]
-    
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if os.path.exists(list_path): os.remove(list_path)
+            # СЦЕНАРІЙ А: Одне фото -> перетворюємо в 3 сек відео
+            if 'image' in single_item['mime']:
+                print(f"📸 Сценарій А: Поодиноке фото. Створюємо відео тривалістю {PHOTO_DURATION} сек.")
+                if process_image_item(single_item['local_path'], final_file, text_info, duration=PHOTO_DURATION):
+                    if upload_to_tiktok(final_file, tiktok_description):
+                        move_files_to_trash(service, [single_item])
+                        if os.path.exists(final_file): os.remove(final_file)
+                        if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
+                return
+
+            # СЦЕНАРІЙ Б: Одне коротке відео (< 3 сек) -> зациклюємо
+            elif 'video' in single_item['mime'] and single_item['duration'] < 3.0:
+                print(f"🔄 Сценарій Б: Коротуни ({single_item['duration']:.2f} сек). Зациклюємо через stream_loop...")
+                loops = int(sorted([1, np.ceil(3.0 / single_item['duration']) - 1, 10])[1])
+                # Вираховуємо точний ліміт часу для фільтра
+                total_t = single_item['duration'] * (loops + 1)
+                
+                if process_video_item(single_item['local_path'], final_file, text_info, loops=loops, t=total_t):
+                    if upload_to_tiktok(final_file, tiktok_description):
+                        move_files_to_trash(service, [single_item])
+                        if os.path.exists(final_file): os.remove(final_file)
+                        if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
+                return
+
+            # СЦЕНАРІЙ В: Один великий файл (> 40 сек) -> ріжемо на РІВНІ частини
+            elif 'video' in single_item['mime'] and single_item['duration'] > MAX_DURATION:
+                total_dur = single_item['duration']
+                num_parts = int(np.ceil(total_dur / MAX_DURATION))
+                chunk_length = total_dur / num_parts
+                print(f"✂️ Сценарій В: Велике відео ({total_dur:.1f} сек). Ріжемо на {num_parts} частин по {chunk_length:.1f} сек...")
+                
+                all_parts_success = True
+                generated_files = []
+                
+                trending_text, year, location_name = text_info
+                
+                for part_idx in range(num_parts):
+                    start = part_idx * chunk_length
+                    part_num = part_idx + 1
+                    part_output = f"ready_tiktok_part_{part_num}_{int(time.time())}.mp4"
+                    
+                    print(f"📦 Рендеринг частини {part_num}/{num_parts} ({start:.1f}s - {start+chunk_length:.1f}s)")
+                    modified_text_info = (f"{trending_text} (Ч. {part_num})", year, location_name)
+                    
+                    success = process_video_item(
+                        single_item['local_path'], part_output, modified_text_info, 
+                        ss=start, t=chunk_length
+                    )
+                    
+                    if success and os.path.exists(part_output):
+                        generated_files.append(part_output)
+                        hash_tag = location_name.split(',')[0].strip().replace(" ", "")
+                        part_description = f"{trending_text} (Частина {part_num}) 🌍 #travel #{hash_tag}"
+                        
+                        if not upload_to_tiktok(part_output, part_description):
+                            all_parts_success = False
+                            break
+                    else:
+                        all_parts_success = False
+                        break
+                
+                if all_parts_success:
+                    move_files_to_trash(service, [single_item])
+                    for gf in generated_files:
+                        if os.path.exists(gf): os.remove(gf)
+                    if os.path.exists(single_item['local_path']): os.remove(single_item['local_path'])
+                    print("🏁 Серійну публікацію всіх частин завершено успішно!")
+                else:
+                    sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація однієї з частин серіалу провалилася.")
+                return
+
+        # СЦЕНАРІЙ Г: Класична збірка (декілька файлів, сумарно <= 40 сек)
+        print("🎬 Сценарій Г: Монтаж стандартної групи медіафайлів.")
+        
+        final_items_to_render = list(selected_items)
+        accumulated_duration = sum(i['duration'] for i in selected_items)
+        if accumulated_duration < MIN_DURATION:
+            while accumulated_duration < MIN_DURATION:
+                for item in selected_items:
+                    final_items_to_render.append(item)
+                    accumulated_duration += item['duration']
+                    if accumulated_duration >= MIN_DURATION:
+                        break
+
+        temp_clips = []
+        
+        for idx, item in enumerate(final_items_to_render):
+            local_path = item['local_path']
+            mime = item['mime']
+            part_out = os.path.join('downloaded', f"processed_part_{idx}_{int(time.time())}.mp4")
+            success = False
+            
+            if 'video' in mime:
+                dur = item['duration']
+                total_d = get_video_duration(local_path)
+                ss_param, t_param = None, None
+                
+                # Якщо кліп потребує часткового обрізання всередині конвеєра дублювання
+                if dur < total_d:
+                    ss_param = max(0, total_d / 2 - dur / 2)
+                    t_param = dur
+                    
+                success = process_video_item(local_path, part_out, text_info, ss=ss_param, t=t_param)
+            elif 'image' in mime:
+                success = process_image_item(local_path, part_out, text_info, duration=PHOTO_DURATION)
+                
+            if success and os.path.exists(part_out):
+                temp_clips.append(part_out)
+
+        if not temp_clips:
+            sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося підготувати жодного фрагмента для збірки.")
+
+        # Миттєве склеювання без рендерингу
+        fast_concat_videos(temp_clips, final_file)
+        
+        if os.path.exists(final_file):
+            if upload_to_tiktok(final_file, tiktok_description):
+                move_files_to_trash(service, selected_items)
+                for tc in temp_clips:
+                    if os.path.exists(tc): os.remove(tc)
+                for si in selected_items:
+                    if os.path.exists(si['local_path']): os.remove(si['local_path'])
+                if os.path.exists(final_file): os.remove(final_file)
+                print("🏁 Груповий ролик успішно опубліковано через швидкий конкатенатор.")
+            else:
+                sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Офіційний аплоадер TikTok відхилив груве відео.")
+        return
+
+if __name__ == '__main__':
+    main()
