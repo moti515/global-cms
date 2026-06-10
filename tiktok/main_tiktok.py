@@ -115,9 +115,6 @@ def main():
             if os.path.exists(local_path): os.remove(local_path)
             local_path = jpg_path
             mime_type = 'image/jpeg'
-            
-        if 'video' in mime_type:
-            sanitize_video(local_path)
 
         processed_items.append({
             'id': f['id'],
