@@ -4,7 +4,6 @@ import time
 import math
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import numpy as np  # Додано для коректної роботи np.ceil у сценаріях
 from PIL import Image
 from pillow_heif import register_heif_opener
 
@@ -147,14 +146,15 @@ def main():
             groups[key] = []
         groups[key].append(item)
         
-    MIN_DURATION = 20
-    MAX_DURATION = 40
-    PHOTO_DURATION = 3.0
+    # Оновлені константи під твої ліміти й вимоги
+    MIN_DURATION = 4      # Мінімальна тривалість роликів (Варіанти 1, 2, 3)
+    MAX_DURATION = 40     # Максимальна тривалість роликів (Варіанти 4, 5)
+    PHOTO_DURATION = 4.0  # Кожне фото тепер строго 4 секунди
 
     for (date, loc), items in groups.items():
         print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація: {loc}. Всього файлів у групі: {len(items)}")
         
-        # Крок 1: Валідація та збір чистих метаданих тривалості через ffprobe
+        # Крок 1: Валідація та збір метаданих тривалості (Враховуємо фото як 4 сек)
         valid_items = []
         for item in items:
             mime = item['mime']
@@ -175,23 +175,25 @@ def main():
                             continue
                     print(f"⏩ Пропускаємо пошкоджений файл '{item['name']}'.")
             elif 'image' in mime:
-                item['duration'] = PHOTO_DURATION
+                item['duration'] = PHOTO_DURATION  # Варіант 3: Кожне фото рахується як 4 сек
                 valid_items.append(item)
 
         if not valid_items:
             print("☕ Немає валідних медіафайлів у цій групі.")
             continue
 
-        # Крок 2: Розумний відбір файлів під ліміт 40 секунд
+        # Крок 2: Обмеження групи та розумний відбір файлів під ліміт 40 секунд
         selected_items = []
         if len(valid_items) == 1 and valid_items[0]['duration'] > MAX_DURATION:
             selected_items = [valid_items[0]]
         else:
             accumulated_duration = 0
             for item in valid_items:
+                # Якщо перший файл у черзі вже більше 40 сек
                 if item['duration'] > MAX_DURATION and len(selected_items) == 0:
                     selected_items = [item]
                     break
+                # ВАРІАНТ 4: Обмежуємо групу, щоб сумарна тривалість вихідного ролика була менше 40 секунд
                 if accumulated_duration + item['duration'] <= MAX_DURATION:
                     selected_items.append(item)
                     accumulated_duration += item['duration']
@@ -207,11 +209,10 @@ def main():
             single_item = selected_items[0]
             current_file_path = single_item['local_path']
             
-            # СЦЕНАРІЙ А: Одне фото -> перетворюємо в 3 сек відео
+            # ВАРІАНТ 1: В відібраній групі 1 фото -> відеоролик тривалістю 4 сек
             if 'image' in single_item['mime']:
-                print(f"📸 Сценарій А: Поодиноке фото. Створюємо відео тривалістю {PHOTO_DURATION} сек.")
+                print(f"📸 Варіант 1: Поодиноке фото. Створюємо відео тривалістю {PHOTO_DURATION} сек.")
                 
-                # 1. Генеруємо ШІ підпис конкретно для цього фото
                 text_info = generate_ai_metadata(current_file_path, date, loc)
                 tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
                 
@@ -222,13 +223,12 @@ def main():
                         if os.path.exists(current_file_path): os.remove(current_file_path)
                 return
 
-            # СЦЕНАРІЙ Б: Одне коротке відео (< 3 сек) -> зациклюємо
-            elif 'video' in single_item['mime'] and single_item['duration'] < 3.0:
-                print(f"🔄 Сценарій Б: Коротуни ({single_item['duration']:.2f} сек). Зациклюємо через stream_loop...")
-                loops = int(sorted([1, math.ceil(3.0 / single_item['duration']) - 1, 10])[1])
+            # ВАРІАНТ 2: В групі одне відео (чи гіфка) < 4 сек -> зациклюємо до мінімальної тривалості
+            elif 'video' in single_item['mime'] and single_item['duration'] < MIN_DURATION:
+                print(f"🔄 Варіант 2: Коротке відео ({single_item['duration']:.2f} сек). Зациклюємо до >= {MIN_DURATION} сек...")
+                loops = int(sorted([1, math.ceil(MIN_DURATION / single_item['duration']) - 1, 10])[1])
                 total_t = single_item['duration'] * (loops + 1)
                 
-                # 1. Генеруємо ШІ підпис конкретно для цього короткого відео
                 text_info = generate_ai_metadata(current_file_path, date, loc)
                 tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
                 
@@ -239,17 +239,16 @@ def main():
                         if os.path.exists(current_file_path): os.remove(current_file_path)
                 return
 
-            # СЦЕНАРІЙ В: Один великий файл (> 40 сек) -> ріжемо на РІВНІ частини
+            # ВАРІАНТ 5: Один відеофайл тривалістю більше 40 секунд -> нарізаємо на рівні частини (ч.1, ч.2...)
             elif 'video' in single_item['mime'] and single_item['duration'] > MAX_DURATION:
                 total_dur = single_item['duration']
                 num_parts = int(math.ceil(total_dur / MAX_DURATION))
                 chunk_length = total_dur / num_parts
-                print(f"✂️ Сценарій В: Велике відео ({total_dur:.1f} сек). Ріжемо на {num_parts} частин по {chunk_length:.1f} сек...")
+                print(f"✂️ Варіант 5: Велике відео ({total_dur:.1f} сек). Нарізаємо на {num_parts} рівних частин по {chunk_length:.1f} сек...")
                 
                 all_parts_success = True
                 generated_files = []
                 
-                # 1. Генеруємо базовий ШІ підпис для всього довгого відео один раз
                 text_info = generate_ai_metadata(current_file_path, date, loc)
                 trending_text, year, location_name = text_info
                 
@@ -288,11 +287,26 @@ def main():
                     sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація однієї з частин серіалу провалилася.")
                 return
 
-        # СЦЕНАРІЙ Г: Класична збірка (декілька файлів, сумарно <= 40 сек)
-        print("🎬 Сценарій Г: Монтаж стандартної групи медіафайлів.")
+            # Одиночне стандартне відео від 4 до 40 секунд (Обробка без склеювання)
+            elif 'video' in single_item['mime'] and MIN_DURATION <= single_item['duration'] <= MAX_DURATION:
+                print(f"🎥 Поодиноке стандартне відео ({single_item['duration']:.2f} сек). Обробка...")
+                text_info = generate_ai_metadata(current_file_path, date, loc)
+                tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
+                
+                if process_video_item(current_file_path, final_file, text_info):
+                    if upload_with_music_wrapper(final_file, tiktok_description):
+                        move_files_to_trash(service, [single_item])
+                        if os.path.exists(final_file): os.remove(final_file)
+                        if os.path.exists(current_file_path): os.remove(current_file_path)
+                return
+
+        # ВАРІАНТ 3 та 4: В групі багато файлів (загальна тривалість < 40 секунд)
+        print("🎬 Варіанти 3/4: Монтаж стандартної групи медіафайлів.")
         
         final_items_to_render = list(selected_items)
         accumulated_duration = sum(i['duration'] for i in selected_items)
+        
+        # Безпековий механізм: якщо раптом сума кількох відео все одно менша за 4 сек, циклічно дублюємо фрагменти
         if accumulated_duration < MIN_DURATION:
             while accumulated_duration < MIN_DURATION:
                 for item in selected_items:
@@ -302,8 +316,6 @@ def main():
                         break
 
         temp_clips = []
-        
-        # Для загального опису самого поста в TikTok беремо ШІ-аналіз першого файлу збірки
         main_text_info = generate_ai_metadata(selected_items[0]['local_path'], date, loc)
         tiktok_description = f"{main_text_info[0]} 🌍 #travel #{main_text_info[2].split(',')[0].strip().replace(' ', '')}"
 
@@ -313,7 +325,6 @@ def main():
             part_out = os.path.join('downloaded', f"processed_part_{idx}_{int(time.time())}.mp4")
             success = False
             
-            # 1. Генеруємо індивідуальні ШІ титри для кожного окремого фрагмента у збірці
             item_text_info = generate_ai_metadata(current_file_path, date, loc)
             
             if 'video' in mime:
@@ -327,6 +338,7 @@ def main():
                     
                 success = process_video_item(current_file_path, part_out, item_text_info, ss=ss_param, t=t_param)
             elif 'image' in mime:
+                # Передаємо наше оновлене значення PHOTO_DURATION (4.0 сек)
                 success = process_image_item(current_file_path, part_out, item_text_info, duration=PHOTO_DURATION)
                 
             if success and os.path.exists(part_out):
@@ -335,11 +347,12 @@ def main():
         if not temp_clips:
             sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося підготувати жодного фрагмента для збірки.")
 
-        # Миттєве склеювання без рендерингу
+        # Миттєве склеювання
         fast_concat_videos(temp_clips, final_file)
         
         if os.path.exists(final_file):
             if upload_with_music_wrapper(final_file, tiktok_description):
+                # Очищення: переносимо в кошик лише ті файли, які реально увійшли в ролик
                 move_files_to_trash(service, selected_items)
                 for tc in temp_clips:
                     if os.path.exists(tc): os.remove(tc)
@@ -348,7 +361,7 @@ def main():
                 if os.path.exists(final_file): os.remove(final_file)
                 print("🏁 Груповий ролик успішно опубліковано через швидкий конкатенатор.")
             else:
-                sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Офіційний аплоадер TikTok відхилив груве відео.")
+                sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Офіційний аплоадер TikTok відхилив групове відео.")
         return
 
 if __name__ == '__main__':
