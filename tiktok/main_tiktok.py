@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import math
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import numpy as np  # Додано для коректної роботи np.ceil у сценаріях
@@ -224,7 +225,7 @@ def main():
             # СЦЕНАРІЙ Б: Одне коротке відео (< 3 сек) -> зациклюємо
             elif 'video' in single_item['mime'] and single_item['duration'] < 3.0:
                 print(f"🔄 Сценарій Б: Коротуни ({single_item['duration']:.2f} сек). Зациклюємо через stream_loop...")
-                loops = int(sorted([1, np.ceil(3.0 / single_item['duration']) - 1, 10])[1])
+                loops = int(sorted([1, math.ceil(3.0 / single_item['duration']) - 1, 10])[1])
                 total_t = single_item['duration'] * (loops + 1)
                 
                 # 1. Генеруємо ШІ підпис конкретно для цього короткого відео
