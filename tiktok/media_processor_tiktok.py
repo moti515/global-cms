@@ -41,6 +41,60 @@ def extract_frame_from_video(video_path, output_image_path):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return os.path.exists(output_image_path)
 
+def sanitize_video(input_path):
+    """
+    Перезбирає відео за допомогою FFmpeg, щоб виправити пошкоджені індекси,
+    проблеми з першим кадром та кодеками.
+    """
+    temp_path = input_path.replace(".mp4", "_sanitized.mp4")
+    print(f"🔧 [FFmpeg] Лікування файлу: {os.path.basename(input_path)}...")   
+
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', input_path,
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        temp_path
+    ]    
+
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        if os.path.exists(temp_path):
+            os.replace(temp_path, input_path)
+            print(f"✅ Файл успішно відновлено.")
+            return True
+
+    except Exception as e:
+        print(f"⚠️ Не вдалося вилікувати відео через FFmpeg: {e}")
+        if os.path.exists(temp_path): os.remove(temp_path)
+    return False
+
+def gif_to_mp4(gif_path, mp4_path):
+    """
+    Конвертує GIF-файл у формат MP4 за допомогою FFmpeg.
+    Додано фільтр scale, щоб ширина та висота ділилися на 2 (вимога кодека H.264).
+    """
+    if not os.path.exists(gif_path):
+        print(f"❌ Помилка: GIF файл не знайдено: {gif_path}")
+        return False
+        
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', gif_path,
+        '-movflags', 'faststart',
+        '-pix_fmt', 'yuv420p',
+        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        mp4_path
+    ]
+    
+    try:
+        # Запускаємо FFmpeg в тихійному режимі
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Помилка FFmpeg під час конвертації GIF {gif_path}: {e}")
+        return False
+
 # 🧠 ШІ ГЕНЕРАЦІЯ СУЧАСНОГО ОПИСУ ДЛЯ TIKTOK
 def generate_ai_metadata(file_path, date_str, location_geo):
     """
