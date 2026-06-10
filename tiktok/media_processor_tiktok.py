@@ -151,6 +151,7 @@ def process_image_item(input_path, output_path, text_info, duration=3.0, target_
     """
     Оптимізує фото через Pillow, накладає текст і через FFmpeg створює MP4 ролик.
     Додає тиху аудіодорожку, щоб файл мав ідентичну структуру з іншими відео.
+    Гарантує пропорційне вписування (LETTERBOX/PILLARBOX) без полів по всьому периметру.
     """
     trending_text, year, location = text_info
     temp_jpg = output_path + "_temp.jpg"
@@ -158,7 +159,18 @@ def process_image_item(input_path, output_path, text_info, duration=3.0, target_
     try:
         with Image.open(input_path) as img:
             img = ImageOps.exif_transpose(img)
-            img.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
+            
+            # --- РОЗУМНЕ МАСШТАБУВАННЯ (заміна img.thumbnail) ---
+            img_w, img_h = img.size
+            # Знаходимо коефіцієнт масштабування (щоб повністю вписати картинку в рамки)
+            scale = min(target_w / img_w, target_h / img_h)
+            new_w = int(img_w * scale)
+            new_h = int(img_h * scale)
+            
+            # Тепер фото точно масштабується (вгору або вниз) з повним збереженням пропорцій
+            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            # ----------------------------------------------------
+            
             canvas = Image.new('RGB', (target_w, target_h), (15, 15, 15))
             offset = ((target_w - img.width) // 2, (target_h - img.height) // 2)
             canvas.paste(img, offset)
