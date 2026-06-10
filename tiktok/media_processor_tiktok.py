@@ -4,6 +4,7 @@ import time
 import random
 import base64
 import subprocess
+import textwrap
 from datetime import datetime
 import requests
 from PIL import Image, ImageOps
@@ -183,10 +184,24 @@ def get_ffmpeg_filters(text_info, target_w=1080, target_h=1920):
     vf = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=black"
     
     if os.path.exists(font_path):
-        # 1. Головний підпис: по центру вгорі (y=250), білий, чорний контур (borderw=5), зникає через 3 секунди (enable='lt(t,3)')
-        vf += f",drawtext=fontfile={font_path}:text='{clean_title}':x=(w-text_w)/2:y=250:fontsize=46:fontcolor=white:borderw=5:bordercolor=black:enable='lt(t,3)':fix_bounds=1"
+        # 1. Головний підпис (ШІ):
+        # Автоматично нарізаємо текст на шматки по ~32 символи, щоб він не тулився до правого краю.
+        # Завдяки x=70 текст вирівнюється по лівому краю точно так само, як і нижня метадата.
+        lines = textwrap.wrap(clean_title, width=32)
         
-        # 2. Метадата: знизу зліва (x=70, y=1600 - безпечна зона TikTok), світло-жовтий, чорний контур, показується ЗАВЖДИ
+        start_y = 250      # Стартова позиція першого рядка по висоті
+        line_height = 60   # Відступ між рядками
+        
+        for i, line in enumerate(lines):
+            current_y = start_y + (i * line_height)
+            # ЗБІЛЬШЕНО ЧАС: замініть 'lt(t,6)' на більшу цифру, якщо 6 секунд замало (було 3)
+            vf += (
+                f",drawtext=fontfile={font_path}:text='{line}':"
+                f"x=70:y={current_y}:fontsize=46:fontcolor=white:"
+                f"borderw=5:bordercolor=black:enable='lt(t,6)':fix_bounds=1"
+            )
+        
+        # 2. Метадата: знизу зліва (x=70, y=1600 - безпечна зона TikTok), світло-жовтий, показується ЗАВЖДИ
         vf += f",drawtext=fontfile={font_path}:text='{clean_meta}':x=70:y=1600:fontsize=36:fontcolor=yellow:borderw=4:bordercolor=black:fix_bounds=1"
         
     return vf
