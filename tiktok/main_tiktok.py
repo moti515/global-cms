@@ -117,6 +117,10 @@ def main():
             if os.path.exists(local_path): os.remove(local_path)
             local_path = jpg_path
             mime_type = 'image/jpeg'
+            
+        # 🚀 ПРЕВЕНТИВНЕ ЛІКУВАННЯ: Перекодовуємо абсолютно всі відео через FFmpeg одразу після скачування
+        if 'video' in mime_type:
+            sanitize_video(local_path)
 
         # ✅ Зміщено ліворуч, додає абсолютно всі файли після перевірок
         processed_items.append({
