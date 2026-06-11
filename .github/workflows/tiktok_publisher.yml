@@ -2,13 +2,10 @@ name: TikTok Automated Publisher
 
 on:
   workflow_dispatch: # Дозволяє запускати вручну з інтерфейсу GitHub (Режим Тестування)
-  repository_dispatch:
-    types: [cron_trigger] # Дозволяє запускати зовнішнім кроном (cron-job.org)
-
+  
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-  # Автоматично вираховуємо режим: якщо запуск через репозиторій (крон) — ставимо 'cron', інакше 'manual'
-  RUN_MODE: ${{ github.event_name == 'repository_dispatch' && 'cron' || 'manual' }}
+  RUN_MODE: 'cron'
 
 jobs:
   publish-video:
