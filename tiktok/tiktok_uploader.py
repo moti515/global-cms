@@ -19,7 +19,7 @@ def upload_to_tiktok(video_path, description):
         chunk_size = DEFAULT_CHUNK_SIZE
         total_chunk_count = video_size // chunk_size
 
-    init_url = "https://open.tiktokapis.com/v2/post/publish/video/init/"
+    init_url = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json; charset=UTF-8"
