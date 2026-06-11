@@ -27,7 +27,7 @@ def upload_to_tiktok(video_path, description):
     
     body = {
         "post_info": {
-            "title": description if description else "Мій тест #travel #vlog",
+            "title": description if description else "#travel #Spaß",
             "privacy_level": "SELF_ONLY",  
             "disable_duet": True,
             "disable_comment": True,
