@@ -296,35 +296,80 @@ def delete_from_imagekit(file_id: str):
     try: requests.delete(f"https://api.imagekit.io/v1/files/{file_id}", auth=(imagekit_key, ''), timeout=15)
     except: pass
 
-# --- БЛОК АНАЛІЗУ МЕТАДАНИХ ---
+# =====================================================================
+# 🧠 ІНТЕЛЕКТУАЛЬНИЙ БЛОК АНАЛІЗУ МЕТАДАНИХ ТА ГЕОЛОКАЦІЇ (TIKTOK ENGINE)
+# =====================================================================
+
+def extract_date_from_filename(filename):
+    """Шукає дату у форматі YYYY-MM-DD або Unix Timestamp в імені файлу."""
+    match = re.search(r'\b(20[0-2]\d)[-._]?(0[1-9]|1[0-2])[-._]?([0-2]\d|3[01])\b', filename)
+    if match:
+        year, month, day = match.groups()
+        try: 
+            return datetime(int(year), int(month), int(day))
+        except ValueError: 
+            pass
+            
+    match_ts = re.search(r'\b(1[4-7]\d{8,11})\b', filename)
+    if match_ts:
+        ts = int(match_ts.group(1))
+        if len(match_ts.group(1)) > 10: 
+            ts = ts / 1000
+        try: 
+            return datetime.fromtimestamp(ts)
+        except: 
+            pass
+    return None
+
 def get_exif_data(image_path):
+    """Витягує дату зйомки та GPS координати з фотографій (включаючи суб-блоки IFD)."""
     date_str, lat, lon = None, None, None
     try:
         with Image.open(image_path) as img:
-            exif = img._getexif()
-            if not exif: return date_str, lat, lon
-            geotagging = {}
-            for tag, value in exif.items():
-                decoded = TAGS.get(tag, tag)
-                if decoded == 'DateTimeOriginal': date_str = value
-                if decoded == 'GPSInfo':
-                    for t in value:
-                        sub_decoded = GPSTAGS.get(t, t)
-                        geotagging[sub_decoded] = value[t]
-            if 'GPSLatitude' in geotagging and 'GPSLongitude' in geotagging:
-                def _to_degrees(value):
-                    return float(value[0]) + (float(value[1]) / 60.0) + (float(value[2]) / 3600.0)
-                lat = _to_degrees(geotagging['GPSLatitude'])
-                lon = _to_degrees(geotagging['GPSLongitude'])
-                if geotagging.get('GPSLatitudeRef') == 'S': lat = -lat
-                if geotagging.get('GPSLongitudeRef') == 'W': lon = -lon
-    except: pass
+            exif = img.getexif()
+            if not exif:
+                return date_str, lat, lon
+            
+            # Шукаємо DateTimeOriginal у правильному суб-блоці EXIF (ID: 34665)
+            exif_ifd = exif.get_ifd(34665)
+            if exif_ifd:
+                for tag, value in exif_ifd.items():
+                    if TAGS.get(tag) == 'DateTimeOriginal':
+                        date_str = value
+                        break
+            
+            # Резервний пошук в основних тегах
+            if not date_str:
+                for tag, value in exif.items():
+                    if TAGS.get(tag) == 'DateTimeOriginal':
+                        date_str = value
+                        break
+
+            # GPS інформація (ID: 34853)
+            gps_ifd = exif.get_ifd(34853)
+            if gps_ifd:
+                geotagging = {}
+                for t, value in gps_ifd.items():
+                    sub_decoded = GPSTAGS.get(t, t)
+                    geotagging[sub_decoded] = value
+                
+                if 'GPSLatitude' in geotagging and 'GPSLongitude' in geotagging:
+                    def _to_degrees(value):
+                        return float(value[0]) + (float(value[1]) / 60.0) + (float(value[2]) / 3600.0)
+                    
+                    lat = _to_degrees(geotagging['GPSLatitude'])
+                    lon = _to_degrees(geotagging['GPSLongitude'])
+                    if geotagging.get('GPSLatitudeRef') == 'S': lat = -lat
+                    if geotagging.get('GPSLongitudeRef') == 'W': lon = -lon
+    except Exception as e:
+        print(f"⚠️ Попередження EXIF для {image_path}: {e}")
     return date_str, lat, lon
 
 def get_video_metadata(video_path):
+    """Зчитує метадані відеофайлу за допомогою ffprobe."""
     date_str, lat, lon = None, None, None
     try:
-        cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', video_path]
+        cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', video_path]
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode == 0:
             data = json.loads(result.stdout)
@@ -334,33 +379,83 @@ def get_video_metadata(video_path):
                 try:
                     dt = datetime.strptime(creation_time[:19], '%Y-%m-%dT%H:%M:%S')
                     date_str = dt.strftime('%Y:%m:%d %H:%M:%S')
-                except: pass
+                except: 
+                    pass
+            
             loc_str = tags.get('location') or tags.get('location-eng')
             if loc_str:
                 match = re.match(r'([+-]\d+\.\d+)([+-]\d+\.\d+)', loc_str)
                 if match:
-                    lat = float(match.group(1))
-                    lon = float(match.group(2))
-    except: pass
+                    lat, lon = float(match.group(1)), float(match.group(2))
+    except Exception as e:
+        print(f"⚠️ Попередження відео-метаданих для {video_path}: {e}")
     return date_str, lat, lon
 
-def get_location_name(lat, lon):
-    if lat is None or lon is None: return None
+def get_location_data(lat, lon):
+    """
+    Повертає локалізацію українською мовою.
+    Результат: кортеж (КрасиваНазваДляВідео, НазваМістаДляГрупування)
+    """
+    if lat is None or lon is None: 
+        return "", ""
     try:
-        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=10&accept-language=uk"
-        headers = {'User-Agent': 'FurnitureCMS_Bot_2026'}
+        # Додано параметр accept-language=uk для збереження українських назв у сторіз
+        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15&accept-language=uk"
+        headers = {'User-Agent': 'FurnitureStories_MetadataBot_2026'}
         res = requests.get(url, headers=headers, timeout=10).json()
         address = res.get('address', {})
-        city = address.get('city') or address.get('town') or address.get('village') or address.get('county')
+        
+        # 1. Точне та цікаве місце (виробництво, шоурум, парк, локальний об'єкт)
+        exact_place = (
+            address.get('tourism') or 
+            address.get('amenity') or 
+            address.get('historic') or
+            address.get('suburb') or 
+            address.get('city') or 
+            address.get('town') or 
+            address.get('village')
+        )
         country = address.get('country')
-        return f"{city}, {country}" if city and country else country
-    except: return None
+        display_location = f"{exact_place}, {country}" if exact_place and country else country
+        
+        # 2. Стабільне місто/регіон для можливої кластеризації або сортування
+        group_place = address.get('city') or address.get('town') or address.get('village') or address.get('county')
+        group_location = f"{group_place}, {country}" if group_place and country else country
+        
+        return display_location, group_location
+    except Exception as e:
+        print(f"⚠️ Помилка геокодування OSM: {e}")
+    return "", ""
 
-# --- ІНТЕЛЕКТУАЛЬНИЙ БЛОК ВАЛІДАЦІЇ ДАТИ ---
-def extract_intellectual_date(f, meta_date):
-    final_dt = None
-    now = datetime.now()
+def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
+    """
+    Каскадний пошук реальної дати створення медіафайлу.
+    Пріоритет: Назва файлу -> EXIF/FFmpeg -> Дані Google Drive -> Поточний час.
+    """
+    if now_time is None:
+        now_time = datetime.now()
 
+    # 1️⃣ Спроба розпізнати дату з імені файлу
+    fn_date = extract_date_from_filename(filename)
+    if fn_date:
+        print(f"🎯 Дату успішно розпізнано з назви файлу '{filename}': {fn_date.strftime('%d.%m.%Y')}")
+        # Але координати все одно спробуємо дістати з метаданих нижче
+    
+    meta_date, lat, lon = None, None, None
+    mime_type = gdrive_file.get('mimeType', '')
+    lower_name = filename.lower()
+    
+    # 2️⃣ Збір метаданих залежно від типу контенту
+    if mime_type.startswith('image/') or lower_name.endswith(('.heic', '.heif', '.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff')):
+        meta_date, lat, lon = get_exif_data(local_path)
+    elif mime_type.startswith('video/') or lower_name.endswith(('.mp4', '.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg')):
+        meta_date, lat, lon = get_video_metadata(local_path)
+
+    # Якщо дату взяли з імені файлу, повертаємо її разом зі знайденими координатами
+    if fn_date:
+        return fn_date, lat, lon
+
+    # 3️⃣ Якщо в імені дати не було, валідуємо дату з метаданих файлу
     if meta_date:
         for date_format in ('%Y:%m:%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S'):
             try:
@@ -368,39 +463,24 @@ def extract_intellectual_date(f, meta_date):
                 clean_fmt = date_format.replace('T', ' ')
                 dt_parsed = datetime.strptime(clean_meta, clean_fmt)
                 
-                if dt_parsed.year >= 2010 and dt_parsed <= now:
-                    final_dt = dt_parsed
-                    break
-            except:
+                if 2010 <= dt_parsed.year <= now_time.year:
+                    return dt_parsed, lat, lon
+            except ValueError:
                 continue
-        
-        if not final_dt:
-            print(f"⚠️ Метадані файлу {f.get('name')} містять нелогічну дату: {meta_date}. Шукаємо заміну на Диску.")
+        print(f"⚠️ Метадані файлу містять нелогічну дату: {meta_date}. Шукаємо заміну в системі Google Drive.")
 
-    if not final_dt:
-        try:
-            created_raw = f.get('createdTime')
-            modified_raw = f.get('modifiedTime')
-            
-            dt_created = datetime.strptime(created_raw[:19], '%Y-%m-%dT%H:%M:%S') if created_raw else None
-            dt_modified = datetime.strptime(modified_raw[:19], '%Y-%m-%dT%H:%M:%S') if modified_raw else None
-            
-            valid_gdrive_dates = [
-                d for d in [dt_created, dt_modified] 
-                if d and d.year >= 2010 and d <= now
-            ]
-            
-            if valid_gdrive_dates:
-                final_dt = min(valid_gdrive_dates)
-            else:
-                print(f"⚠️ Дати на Диску для {f.get('name')} за межами логіки (2010-сьогодні).")
-        except Exception as e:
-            print(f"⚠️ Помилка зчитування дат з Диску для {f.get('name')}: {e}")
+    # 4️⃣ Фолбек: Дані про створення/модифікацію об'єкта в хмарі Google Drive
+    try:
+        dt_created = datetime.strptime(gdrive_file['createdTime'][:19], '%Y-%m-%dT%H:%M:%S')
+        dt_modified = datetime.strptime(gdrive_file['modifiedTime'][:19], '%Y-%m-%dT%H:%M:%S')
+        earliest_gdrive = min(dt_created, dt_modified)
+        if 2010 <= earliest_gdrive.year <= now_time.year:
+            return earliest_gdrive, lat, lon
+    except Exception as e:
+        print(f"⚠️ Помилка зчитування системних дат Google Drive: {e}")
 
-    if not final_dt:
-        final_dt = now
-
-    return final_dt
+    # 5️⃣ Крайній випадок: повертаємо дефолтний теперішній час
+    return now_time, lat, lon
 
 # 🧠 ШІ ГЕНЕРАЦІЯ ЛАКОНІЧНОГО ОПИСУ ДЛЯ КОНКРЕТНОЇ СТОРІС
 def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc):
@@ -527,31 +607,25 @@ def main():
                 print(f"❌ Не вдалося завантажити {f_name} для аналізу: {e}")
                 continue
             
-            # Конвертація HEIC для зчитування EXIF, якщо необхідно
-            check_path = local_path
-            temp_jpg_created = False
-            if lower_name.endswith(('.heic', '.heif')):
-                jpg_path = os.path.join('temp_mebli', f_name.rsplit('.', 1)[0] + '_meta.jpg')
-                try:
-                    with Image.open(local_path) as img:
-                        img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
-                    check_path = jpg_path
-                    temp_jpg_created = True
-                except: pass
+            # --- 🆕 ІНТЕГРАЦІЯ НОВИХ МЕТОДІВ ---
+            try:
+                # f — це і є наш item_gdrive_data з Google API
+                final_date, lat, lon = get_intellectual_date(local_path, f_name, f)
+                
+                # Якщо final_date повертає об'єкт datetime, перетворюємо в рядок.
+                # Якщо вона вже повертає рядок 'дд.мм.рррр', то цей рядок можна прибрати:
+                if hasattr(final_date, 'strftime'):
+                    date_str = final_date.strftime('%d.%m.%Y')
+                else:
+                    date_str = str(final_date)
 
-            is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
-            if is_video:
-                meta_date, lat, lon = get_video_metadata(local_path)
-            else:
-                meta_date, lat, lon = get_exif_data(check_path)
-            
-            if temp_jpg_created and os.path.exists(jpg_path):
-                os.remove(jpg_path)
+                display_location, group_location = get_location_data(lat, lon)
+            except Exception as e:
+                print(f"⚠️ Помилка автоматичного визначення дати/локації для {f_name}: {e}")
+                date_str = "01.01.2026"  # або якийсь безпечний фолбек
+                display_location, group_location = "", ""
+            # -----------------------------------
 
-            loc_name = get_location_name(lat, lon) or ""
-            dt_obj = extract_intellectual_date(f, meta_date)
-            date_str = dt_obj.strftime('%d.%m.%Y')
-            
             detected_company = "Загальне"
             for key in COMPANIES_DB.keys():
                 if key in lower_name:
@@ -564,7 +638,8 @@ def main():
                 "local_path": local_path,
                 "category": detected_company,
                 "date": date_str,
-                "location": loc_name,
+                "location": display_location,      # Красива назва для підпису на Сторіс
+                "group_location": group_location,  # Використаємо для точного групування пачок
                 "mode": "hot_folder",
                 "counter_cell": None
             })
@@ -572,12 +647,13 @@ def main():
         if hot_group_items:
             groups = {}
             for item in hot_group_items:
-                g_key = (item["date"], item["location"])
+                # 💡 Групуємо саме за груповою локацією (щоб сусідні координати зливалися в один пул)
+                g_key = (item["date"], item["group_location"])
                 groups.setdefault(g_key, []).append(item)
             
             first_key = list(groups.keys())[0]
             selected_queue = groups[first_key][:4]
-            print(f"📂 [Гаряча Папка] Сформовано чергу: Дата={first_key[0]}, Локація={first_key[1]}. Елементів: {len(selected_queue)}")
+            print(f"📂 [Гаряча Папка] Сформовано чергу: Дата={first_key[0]}, Локація для групування={first_key[1]}. Елементів: {len(selected_queue)}")
             
             # Видаляємо локальні копії файлів, які не потрапили у поточну пачку публікації
             selected_ids = {x["id"] for x in selected_queue}
