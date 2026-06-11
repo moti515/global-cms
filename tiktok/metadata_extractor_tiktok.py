@@ -31,26 +31,35 @@ def get_exif_data(image_path):
     date_str, lat, lon = None, None, None
     try:
         with Image.open(image_path) as img:
-            exif = img._getexif()
+            # Використовуємо сучасний getexif() замість приватного _getexif()
+            exif = img.getexif()
             if not exif:
                 return date_str, lat, lon
-            geotagging = {}
+            
+            # DateTimeOriginal зазвичай лежить в основних тегах (id: 36867)
+            # або шукаємо його перебором
             for tag, value in exif.items():
                 decoded = TAGS.get(tag, tag)
                 if decoded == 'DateTimeOriginal':
                     date_str = value
-                if decoded == 'GPSInfo':
-                    for t in value:
-                        sub_decoded = GPSTAGS.get(t, t)
-                        geotagging[sub_decoded] = value[t]
-            
-            if 'GPSLatitude' in geotagging and 'GPSLongitude' in geotagging:
-                def _to_degrees(value):
-                    return float(value[0]) + (float(value[1]) / 60.0) + (float(value[2]) / 3600.0)
-                lat = _to_degrees(geotagging['GPSLatitude'])
-                lon = _to_degrees(geotagging['GPSLongitude'])
-                if geotagging.get('GPSLatitudeRef') == 'S': lat = -lat
-                if geotagging.get('GPSLongitudeRef') == 'W': lon = -lon
+
+            # GPS інформація в getexif() лежить у вкладеному IFD блоці (id: 34853)
+            gps_ifd = exif.get_ifd(34853)
+            if gps_ifd:
+                geotagging = {}
+                for t, value in gps_ifd.items():
+                    sub_decoded = GPSTAGS.get(t, t)
+                    geotagging[sub_decoded] = value
+                
+                if 'GPSLatitude' in geotagging and 'GPSLongitude' in geotagging:
+                    def _to_degrees(value):
+                        # Pillow може повертати IFDRational, перетворюємо на float
+                        return float(value[0]) + (float(value[1]) / 60.0) + (float(value[2]) / 3600.0)
+                    
+                    lat = _to_degrees(geotagging['GPSLatitude'])
+                    lon = _to_degrees(geotagging['GPSLongitude'])
+                    if geotagging.get('GPSLatitudeRef') == 'S': lat = -lat
+                    if geotagging.get('GPSLongitudeRef') == 'W': lon = -lon
     except Exception as e:
         print(f"⚠️ Попередження EXIF для {image_path}: {e}")
     return date_str, lat, lon
@@ -82,13 +91,31 @@ def get_video_metadata(video_path):
 def get_location_name(lat, lon):
     if lat is None or lon is None: return None
     try:
-        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=10&accept-language=uk"
+        # zoom=15 для точнішого мікрорайону/пам'ятки
+        # Прибрали accept-language, щоб OSM повертав назву оригінальною мовою країни
+        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15"
         headers = {'User-Agent': 'TikTokAutomation_Bot_2026'}
+        
         res = requests.get(url, headers=headers, timeout=10).json()
         address = res.get('address', {})
-        city = address.get('city') or address.get('town') or address.get('village') or address.get('county')
+        
+        # Шукаємо назву від конкретного об'єкта до загального міста
+        place = (
+            address.get('tourism') or 
+            address.get('amenity') or 
+            address.get('historic') or
+            address.get('suburb') or 
+            address.get('city') or 
+            address.get('town') or 
+            address.get('village')
+        )
+        
         country = address.get('country')
-        return f"{city}, {country}" if city and country else country
+        
+        if place and country:
+            return f"{place}, {country}"
+        elif country:
+            return country
     except Exception as e:
         print(f"⚠️ Помилка геокодування OSM: {e}")
     return None
