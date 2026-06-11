@@ -1,11 +1,19 @@
 name: TikTok Automated Publisher
 
 on:
-  workflow_dispatch: # Дозволяє запускати вручну з інтерфейсу GitHub (Режим Тестування)
-  
+  workflow_dispatch: # Запуск повністю передано в руки зовнішніх API-запитів або ручного натискання
+    inputs:
+      run_mode:
+        description: 'Режим запуску (manual - швидкий тест, cron - штатний розклад)'
+        required: true
+        default: 'manual' # При натисканні кнопки на GitHub запуститься як ТЕСТ
+        type: choice
+        options:
+          - manual
+          - cron
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-  RUN_MODE: 'cron'
 
 jobs:
   publish-video:
@@ -42,7 +50,8 @@ jobs:
         CLIENT_KEY_TIKTOK: ${{ secrets.CLIENT_KEY_TIKTOK }}
         CLIENT_SECRET_TIKTOK: ${{ secrets.CLIENT_SECRET_TIKTOK }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        RUN_MODE: ${{ env.RUN_MODE }}
+        # Прокидаємо вибраний input у системну змінну для Python
+        RUN_MODE: ${{ github.event.inputs.run_mode }}
       run: |
         cd tiktok
         python main_tiktok.py
