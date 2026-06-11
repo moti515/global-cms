@@ -1,5 +1,4 @@
 import re
-import time
 import json
 import subprocess
 import requests
@@ -11,39 +10,41 @@ def extract_date_from_filename(filename):
     match = re.search(r'\b(20[0-2]\d)[-._]?(0[1-9]|1[0-2])[-._]?([0-2]\d|3[01])\b', filename)
     if match:
         year, month, day = match.groups()
-        try:
-            return datetime(int(year), int(month), int(day))
-        except ValueError:
-            pass
+        try: return datetime(int(year), int(month), int(day))
+        except ValueError: pass
             
     match_ts = re.search(r'\b(1[4-7]\d{8,11})\b', filename)
     if match_ts:
         ts = int(match_ts.group(1))
-        if len(match_ts.group(1)) > 10:  
-            ts = ts / 1000
-        try:
-            return datetime.fromtimestamp(ts)
-        except:
-            pass
+        if len(match_ts.group(1)) > 10: ts = ts / 1000
+        try: return datetime.fromtimestamp(ts)
+        except: pass
     return None
 
 def get_exif_data(image_path):
     date_str, lat, lon = None, None, None
     try:
         with Image.open(image_path) as img:
-            # Використовуємо сучасний getexif() замість приватного _getexif()
             exif = img.getexif()
             if not exif:
                 return date_str, lat, lon
             
-            # DateTimeOriginal зазвичай лежить в основних тегах (id: 36867)
-            # або шукаємо його перебором
-            for tag, value in exif.items():
-                decoded = TAGS.get(tag, tag)
-                if decoded == 'DateTimeOriginal':
-                    date_str = value
+            # РІШЕННЯ ДАТИ: Шукаємо DateTimeOriginal у правильному суб-блоці EXIF (ID: 34665)
+            exif_ifd = exif.get_ifd(34665)
+            if exif_ifd:
+                for tag, value in exif_ifd.items():
+                    if TAGS.get(tag) == 'DateTimeOriginal':
+                        date_str = value
+                        break
+            
+            # Резервний пошук в основних тегах
+            if not date_str:
+                for tag, value in exif.items():
+                    if TAGS.get(tag) == 'DateTimeOriginal':
+                        date_str = value
+                        break
 
-            # GPS інформація в getexif() лежить у вкладеному IFD блоці (id: 34853)
+            # GPS інформація (ID: 34853)
             gps_ifd = exif.get_ifd(34853)
             if gps_ifd:
                 geotagging = {}
@@ -53,7 +54,6 @@ def get_exif_data(image_path):
                 
                 if 'GPSLatitude' in geotagging and 'GPSLongitude' in geotagging:
                     def _to_degrees(value):
-                        # Pillow може повертати IFDRational, перетворюємо на float
                         return float(value[0]) + (float(value[1]) / 60.0) + (float(value[2]) / 3600.0)
                     
                     lat = _to_degrees(geotagging['GPSLatitude'])
@@ -77,8 +77,8 @@ def get_video_metadata(video_path):
                 try:
                     dt = datetime.strptime(creation_time[:19], '%Y-%m-%dT%H:%M:%S')
                     date_str = dt.strftime('%Y:%m:%d %H:%M:%S')
-                except:
-                    pass
+                except: pass
+            
             loc_str = tags.get('location') or tags.get('location-eng')
             if loc_str:
                 match = re.match(r'([+-]\d+\.\d+)([+-]\d+\.\d+)', loc_str)
@@ -88,19 +88,18 @@ def get_video_metadata(video_path):
         print(f"⚠️ Попередження відео-метаданих для {video_path}: {e}")
     return date_str, lat, lon
 
-def get_location_name(lat, lon):
-    if lat is None or lon is None: return None
+def get_location_data(lat, lon):
+    """Повертає кортеж: (КрасиваНазваДляВідео, НазваМістаДляГрупування)"""
+    if lat is None or lon is None: 
+        return "Невідоме місце", "Невідоме місце"
     try:
-        # zoom=15 для точнішого мікрорайону/пам'ятки
-        # Прибрали accept-language, щоб OSM повертав назву оригінальною мовою країни
         url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15"
         headers = {'User-Agent': 'TikTokAutomation_Bot_2026'}
-        
         res = requests.get(url, headers=headers, timeout=10).json()
         address = res.get('address', {})
         
-        # Шукаємо назву від конкретного об'єкта до загального міста
-        place = (
+        # 1. Красиве точне місце для написів та ШІ
+        exact_place = (
             address.get('tourism') or 
             address.get('amenity') or 
             address.get('historic') or
@@ -109,16 +108,17 @@ def get_location_name(lat, lon):
             address.get('town') or 
             address.get('village')
         )
-        
         country = address.get('country')
+        display_location = f"{exact_place}, {country}" if exact_place and country else country
         
-        if place and country:
-            return f"{place}, {country}"
-        elif country:
-            return country
+        # 2. Стабільне місто/село для об'єднання у групи
+        group_place = address.get('city') or address.get('town') or address.get('village') or address.get('county')
+        group_location = f"{group_place}, {country}" if group_place and country else country
+        
+        return display_location, group_location
     except Exception as e:
         print(f"⚠️ Помилка геокодування OSM: {e}")
-    return None
+    return "", ""
 
 def get_intellectual_date(local_path, filename, gdrive_file, now_time):
     fn_date = extract_date_from_filename(filename)
