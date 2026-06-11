@@ -104,7 +104,7 @@ def generate_ai_metadata(file_path, date_str, location_geo):
     """
     gemini_key = os.environ.get("GEMINI_API_KEY")
     year = date_str.split('.')[-1] if date_str and '.' in date_str else "2026"
-    location = location_geo if (location_geo and location_geo != "Невідоме місце") else "Магія природи"
+    location = location_geo if (location_geo and location_geo != "Невідоме місце") else ""
     
     if not gemini_key:
         print("⚠️ GEMINI_API_KEY не знайдено. Працює дефолтна метадата.")
