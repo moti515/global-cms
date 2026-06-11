@@ -11,7 +11,7 @@ from pillow_heif import register_heif_opener
 from config_tiktok import FOLDER_INPUT_ID, FOLDER_TRASH_ID, VALID_EXTENSIONS
 from auth_tiktok import get_gdrive_service
 from drive_manager_tiktok import count_total_files, download_file, move_files_to_trash
-from metadata_extractor_tiktok import get_intellectual_date, get_location_name
+from metadata_extractor_tiktok import get_intellectual_date, get_location_data
 from media_processor_tiktok import (
     gif_to_mp4, generate_ai_metadata, sanitize_video,
     get_video_duration, process_video_item, process_image_item, fast_concat_videos,
@@ -99,10 +99,11 @@ def main():
         final_dt, lat, lon = get_intellectual_date(local_path, f['name'], f, now)
         file_date = final_dt.strftime('%d.%m.%Y')
         
-        location = "Невідоме місце"
+        # Ініціалізуємо порожніми рядками, щоб уникнути дублювання груп, якщо OSM недоступний
+        display_loc, group_loc = "", ""
         if lat and lon:
-            time.sleep(1)  
-            location = get_location_name(lat, lon) or "Невідоме місце"
+            time.sleep(1)  # Захист від блокування лімітів OSM
+            display_loc, group_loc = get_location_data(lat, lon)
             
         # Конвертація GIF
         if mime_type == 'image/gif' or lower_name.endswith('.gif'):
@@ -135,24 +136,26 @@ def main():
             'mime': mime_type,
             'local_path': local_path,
             'date': file_date,
-            'location': location
+            'display_location': display_loc,  # Точна назва для ШІ та титрів
+            'group_location': group_loc        # Назва для об'єднання в одну папку/ролик
         })
 
     # --- ГРУПУВАННЯ ТА МОНТАЖ ---
     groups = {}
     for item in processed_items:
-        key = (item['date'], item['location'])
+        # Тепер групуємо за елементом 'group_location'
+        key = (item['date'], item['group_location'])
         if key not in groups:
             groups[key] = []
         groups[key].append(item)
         
-    # Оновлені константи під твої ліміти й вимоги
+    # Константи під ліміти
     MIN_DURATION = 4      # Мінімальна тривалість роликів (Варіанти 1, 2, 3)
     MAX_DURATION = 40     # Максимальна тривалість роликів (Варіанти 4, 5)
     PHOTO_DURATION = 4.0  # Кожне фото тепер строго 4 секунди
 
     for (date, loc), items in groups.items():
-        print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація: {loc}. Всього файлів у групі: {len(items)}")
+        print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація групування: {loc or 'Невідомо'}. Всього файлів: {len(items)}")
         
         # Крок 1: Валідація та збір метаданих тривалості (Враховуємо фото як 4 сек)
         valid_items = []
@@ -209,12 +212,17 @@ def main():
             single_item = selected_items[0]
             current_file_path = single_item['local_path']
             
-            # ВАРІАНТ 1: В відібраній групі 1 фото -> відеоролик тривалістю 4 сек
+            # ВАРІАНТ 1: В відібраній групі 1 фото
             if 'image' in single_item['mime']:
                 print(f"📸 Варіант 1: Поодиноке фото. Створюємо відео тривалістю {PHOTO_DURATION} сек.")
                 
-                text_info = generate_ai_metadata(current_file_path, date, loc)
-                tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
+                # Передаємо точну display_location замість застарілого loc
+                text_info = generate_ai_metadata(current_file_path, date, single_item['display_location'])
+                
+                # Безпечне створення опису та хештегу
+                raw_loc = text_info[2].split(',')[0].strip().replace(' ', '') if text_info[2] else ""
+                loc_hashtag = f" #{raw_loc}" if raw_loc else ""
+                tiktok_description = f"{text_info[0]} 🌍 #travel{loc_hashtag}"
                 
                 if process_image_item(current_file_path, final_file, text_info, duration=PHOTO_DURATION):
                     if upload_with_music_wrapper(final_file, tiktok_description):
@@ -223,14 +231,18 @@ def main():
                         if os.path.exists(current_file_path): os.remove(current_file_path)
                 return
 
-            # ВАРІАНТ 2: В групі одне відео (чи гіфка) < 4 сек -> зациклюємо до мінімальної тривалості
+            # ВАРІАНТ 2: В групі одне відео < 4 сек
             elif 'video' in single_item['mime'] and single_item['duration'] < MIN_DURATION:
-                print(f"🔄 Варіант 2: Коротке відео ({single_item['duration']:.2f} сек). Зациклюємо до >= {MIN_DURATION} сек...")
+                print(f"🔄 Варіант 2: Коротке відео ({single_item['duration']:.2f} сек). Зациклюємо...")
                 loops = int(sorted([1, math.ceil(MIN_DURATION / single_item['duration']) - 1, 10])[1])
                 total_t = single_item['duration'] * (loops + 1)
                 
-                text_info = generate_ai_metadata(current_file_path, date, loc)
-                tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
+                # Передаємо точну display_location
+                text_info = generate_ai_metadata(current_file_path, date, single_item['display_location'])
+                
+                raw_loc = text_info[2].split(',')[0].strip().replace(' ', '') if text_info[2] else ""
+                loc_hashtag = f" #{raw_loc}" if raw_loc else ""
+                tiktok_description = f"{text_info[0]} 🌍 #travel{loc_hashtag}"
                 
                 if process_video_item(current_file_path, final_file, text_info, loops=loops, t=total_t):
                     if upload_with_music_wrapper(final_file, tiktok_description):
@@ -239,17 +251,18 @@ def main():
                         if os.path.exists(current_file_path): os.remove(current_file_path)
                 return
 
-            # ВАРІАНТ 5: Один відеофайл тривалістю більше 40 секунд -> нарізаємо на рівні частини (ч.1, ч.2...)
+            # ВАРІАНТ 5: Один відеофайл тривалістю більше 40 секунд
             elif 'video' in single_item['mime'] and single_item['duration'] > MAX_DURATION:
                 total_dur = single_item['duration']
                 num_parts = int(math.ceil(total_dur / MAX_DURATION))
                 chunk_length = total_dur / num_parts
-                print(f"✂️ Варіант 5: Велике відео ({total_dur:.1f} сек). Нарізаємо на {num_parts} рівних частин по {chunk_length:.1f} сек...")
+                print(f"✂️ Варіант 5: Велике відео ({total_dur:.1f} сек). Нарізаємо на {num_parts} частин...")
                 
                 all_parts_success = True
                 generated_files = []
                 
-                text_info = generate_ai_metadata(current_file_path, date, loc)
+                # Передаємо точну display_location
+                text_info = generate_ai_metadata(current_file_path, date, single_item['display_location'])
                 trending_text, year, location_name = text_info
                 
                 for part_idx in range(num_parts):
@@ -267,8 +280,9 @@ def main():
                     
                     if success and os.path.exists(part_output):
                         generated_files.append(part_output)
-                        hash_tag = location_name.split(',')[0].strip().replace(" ", "")
-                        part_description = f"{trending_text} (Частина {part_num}) 🌍 #travel #{hash_tag}"
+                        raw_loc = location_name.split(',')[0].strip().replace(" ", "") if location_name else ""
+                        loc_hashtag = f" #{raw_loc}" if raw_loc else ""
+                        part_description = f"{trending_text} (Частина {part_num}) 🌍 #travel{loc_hashtag}"
                         
                         if not upload_with_music_wrapper(part_output, part_description):
                             all_parts_success = False
@@ -287,11 +301,16 @@ def main():
                     sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація однієї з частин серіалу провалилася.")
                 return
 
-            # Одиночне стандартне відео від 4 до 40 секунд (Обробка без склеювання)
+            # Одиночне стандартне відео від 4 до 40 секунд
             elif 'video' in single_item['mime'] and MIN_DURATION <= single_item['duration'] <= MAX_DURATION:
                 print(f"🎥 Поодиноке стандартне відео ({single_item['duration']:.2f} сек). Обробка...")
-                text_info = generate_ai_metadata(current_file_path, date, loc)
-                tiktok_description = f"{text_info[0]} 🌍 #travel #{text_info[2].split(',')[0].strip().replace(' ', '')}"
+                
+                # Передаємо точну display_location
+                text_info = generate_ai_metadata(current_file_path, date, single_item['display_location'])
+                
+                raw_loc = text_info[2].split(',')[0].strip().replace(' ', '') if text_info[2] else ""
+                loc_hashtag = f" #{raw_loc}" if raw_loc else ""
+                tiktok_description = f"{text_info[0]} 🌍 #travel{loc_hashtag}"
                 
                 if process_video_item(current_file_path, final_file, text_info):
                     if upload_with_music_wrapper(final_file, tiktok_description):
@@ -300,13 +319,12 @@ def main():
                         if os.path.exists(current_file_path): os.remove(current_file_path)
                 return
 
-        # ВАРІАНТ 3 та 4: В групі багато файлів (загальна тривалість < 40 секунд)
+        # ВАРІАНТ 3 та 4: В групі багато файлів (монтаж склеюванням)
         print("🎬 Варіанти 3/4: Монтаж стандартної групи медіафайлів.")
         
         final_items_to_render = list(selected_items)
         accumulated_duration = sum(i['duration'] for i in selected_items)
         
-        # Безпековий механізм: якщо раптом сума кількох відео все одно менша за 4 сек, циклічно дублюємо фрагменти
         if accumulated_duration < MIN_DURATION:
             while accumulated_duration < MIN_DURATION:
                 for item in selected_items:
@@ -316,8 +334,13 @@ def main():
                         break
 
         temp_clips = []
-        main_text_info = generate_ai_metadata(selected_items[0]['local_path'], date, loc)
-        tiktok_description = f"{main_text_info[0]} 🌍 #travel #{main_text_info[2].split(',')[0].strip().replace(' ', '')}"
+        
+        # Для загального опису беремо display_location першого елемента збірки
+        main_text_info = generate_ai_metadata(selected_items[0]['local_path'], date, selected_items[0]['display_location'])
+        
+        raw_loc = main_text_info[2].split(',')[0].strip().replace(' ', '') if main_text_info[2] else ""
+        loc_hashtag = f" #{raw_loc}" if raw_loc else ""
+        tiktok_description = f"{main_text_info[0]} 🌍 #travel{loc_hashtag}"
 
         for idx, item in enumerate(final_items_to_render):
             current_file_path = item['local_path']
@@ -325,7 +348,8 @@ def main():
             part_out = os.path.join('downloaded', f"processed_part_{idx}_{int(time.time())}.mp4")
             success = False
             
-            item_text_info = generate_ai_metadata(current_file_path, date, loc)
+            # Кожен окремий фрагмент підписуємо його власною точною локацією display_location
+            item_text_info = generate_ai_metadata(current_file_path, date, item['display_location'])
             
             if 'video' in mime:
                 dur = item['duration']
@@ -338,7 +362,6 @@ def main():
                     
                 success = process_video_item(current_file_path, part_out, item_text_info, ss=ss_param, t=t_param)
             elif 'image' in mime:
-                # Передаємо наше оновлене значення PHOTO_DURATION (4.0 сек)
                 success = process_image_item(current_file_path, part_out, item_text_info, duration=PHOTO_DURATION)
                 
             if success and os.path.exists(part_out):
@@ -347,12 +370,11 @@ def main():
         if not temp_clips:
             sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося підготувати жодного фрагмента для збірки.")
 
-        # Миттєве склеювання
+        # Швидке склеювання
         fast_concat_videos(temp_clips, final_file)
         
         if os.path.exists(final_file):
             if upload_with_music_wrapper(final_file, tiktok_description):
-                # Очищення: переносимо в кошик лише ті файли, які реально увійшли в ролик
                 move_files_to_trash(service, selected_items)
                 for tc in temp_clips:
                     if os.path.exists(tc): os.remove(tc)
