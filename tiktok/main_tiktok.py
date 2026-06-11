@@ -229,6 +229,8 @@ def main():
                         move_files_to_trash(service, [single_item])
                         if os.path.exists(final_file): os.remove(final_file)
                         if os.path.exists(current_file_path): os.remove(current_file_path)
+                    else:
+                        sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: TikTok відхилив публікацію фото-відео.")
                 return
 
             # ВАРІАНТ 2: В групі одне відео < 4 сек
@@ -249,6 +251,8 @@ def main():
                         move_files_to_trash(service, [single_item])
                         if os.path.exists(final_file): os.remove(final_file)
                         if os.path.exists(current_file_path): os.remove(current_file_path)
+                    else:
+                        sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: TikTok відхилив публікацію короткого відео.")
                 return
 
             # ВАРІАНТ 5: Один відеофайл тривалістю більше 40 секунд
@@ -317,8 +321,9 @@ def main():
                         move_files_to_trash(service, [single_item])
                         if os.path.exists(final_file): os.remove(final_file)
                         if os.path.exists(current_file_path): os.remove(current_file_path)
+                    else:
+                        sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: TikTok відхилив публікацію стандартного відео.")
                 return
-
         # ВАРІАНТ 3 та 4: В групі багато файлів (монтаж склеюванням)
         print("🎬 Варіанти 3/4: Монтаж стандартної групи медіафайлів.")
         
