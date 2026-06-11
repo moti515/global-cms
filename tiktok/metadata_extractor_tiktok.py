@@ -91,7 +91,7 @@ def get_video_metadata(video_path):
 def get_location_data(lat, lon):
     """Повертає кортеж: (КрасиваНазваДляВідео, НазваМістаДляГрупування)"""
     if lat is None or lon is None: 
-        return "Невідоме місце", "Невідоме місце"
+        return "", ""
     try:
         url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15"
         headers = {'User-Agent': 'TikTokAutomation_Bot_2026'}
