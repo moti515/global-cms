@@ -630,7 +630,7 @@ def main():
     current_tab = forced_tab if forced_tab else TAB_NAME
     
     if mode != "ig_story":
-        print(f"❌ Цей скрипт сконструйовано виключно під 'ig_story'. Передано: {mode}")
+        print(f"❌ Цей скрипт сконструйовано виключно под 'ig_story'. Передано: {mode}")
         sys.exit(1)
 
     drive, sheets = get_services()
@@ -870,7 +870,7 @@ def main():
         story_caption_text = generate_story_caption([ai_media_snapshot], item["category"], item["date"], lang_idx, item["location"])
         print(f"💬 Текст для Сторіс: \"{story_caption_text}\"")
 
-        # --- 🆕 Інтеграція змінних для нанесення метаданих на фото/відео
+        # --- Інтеграція змінних для нанесення метаданих на фото/відео
         try:
             year_variable = item["date"].split(".")[2] if item["date"] and len(item["date"].split(".")) == 3 else str(datetime.now().year)
         except Exception:
@@ -887,11 +887,12 @@ def main():
                 overlay_text_on_image(optimized_path, story_caption_text, year=year_variable, location=location_variable)
                 media_parts_to_upload = [optimized_path]
         except Exception as e:
-            print(f"❌ Помилка рендерингу/опитимізації медіа файлу {f_name}: {e}")
+            print(f"❌ Помилка рендерингу/оптимізації медіа файлу {f_name}: {e}")
             has_global_failures = True
             continue
 
         item_published_successfully = False
+        all_parts_successful = True  # 🆕 Прапорець для контролю ВСІХ фрагментів одного файлу
 
         # Послідовна публікація кожного фрагмента в Meta API
         for sub_idx, active_path in enumerate(media_parts_to_upload):
@@ -906,6 +907,7 @@ def main():
             if not pub_url:
                 print(f"⚠️ Не вдалося отримати публічне посилання для фрагмента {active_path}.")
                 has_global_failures = True
+                all_parts_successful = False  # 🆕 Фрагмент зафейлився
                 continue
 
             print(f"📡 Надсилання сторіз в Meta API...")
@@ -933,25 +935,34 @@ def main():
                         
                         if "id" in publish_res:
                             print(f"✅ Фрагмент [{sub_idx + 1}/{len(media_parts_to_upload)}] успішно опубліковано! ID: {publish_res['id']}")
-                            item_published_successfully = True
                             success_published_any = True
                         else:
                             print(f"❌ Помилка публікації сторіз в Meta API: {publish_res}")
                             has_global_failures = True
+                            all_parts_successful = False  # 🆕 Помилка публікації
                     else:
                         print(f"❌ Контейнер медіафайлу не перейшов у стан готовності.")
                         has_global_failures = True
+                        all_parts_successful = False  # 🆕 Таймаут контейнера
                 else:
                     print(f"❌ Помилка створення контейнера сторіз: {res}")
                     has_global_failures = True
+                    all_parts_successful = False  # 🆕 Помилка створення
             except Exception as e:
-                print(f"❌ Крітічний збій під час запиту до Meta API: {e}")
+                print(f"❌ Критичний збій під час запиту до Meta API: {e}")
                 has_global_failures = True
+                all_parts_successful = False  # 🆕 Ексепшн мережі/API
 
             if ik_id: 
                 delete_from_imagekit(ik_id)
 
-        # Оновлюємо статус/лічильники лише у разі успіху
+        # 🆕 Визначаємо успіх файлу ТІЛЬКИ якщо всі його фрагменти завантажилися без збоїв
+        if all_parts_successful and media_parts_to_upload:
+            item_published_successfully = True
+        else:
+            print(f"⚠️ Файл [{f_name}] опубліковано не повністю або зі збоями. Він залишається в робочій черзі.")
+
+        # Оновлюємо статус/лічильники лише у разі ПОВНОГО успіху
         if item_published_successfully:
             if item["mode"] == "sheet":
                 new_val = item["counter_val"] + 1
@@ -976,9 +987,6 @@ def main():
                     print(f"🗑️ Файл [{f_name}] успішно переміщено до кошика на Google Диску.")
                 except Exception as e:
                     print(f"⚠️ Не вдалося перемістити файл {f_name} до кошика: {e}")
-        else:
-            # Якщо файл був у черзі, але не опублікувався — фіксуємо збій елемента черги
-            has_global_failures = True
 
     if success_published_any:
         try:
