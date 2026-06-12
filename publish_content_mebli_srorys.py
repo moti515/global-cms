@@ -6,11 +6,12 @@ import base64
 import requests
 import subprocess
 import re
+import textwrap
 from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageOps
 from PIL.ExifTags import TAGS, GPSTAGS
 from pillow_heif import register_heif_opener
 
@@ -81,17 +82,19 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
     except Exception as e:
         print(f"❌ Не вдалося записати помилку на службовий аркуш: {e}")
 
-# 📐 ОПТИМІЗАЦІЯ ФОТО ПІД СТОРІЗ (1080x1920)
+# 📐 ОПТИМІЗАЦІЯ ФОТО ПІД СТОРІЗ (1080x1920) З УРАХУВАННЯМ ОРІЄНТАЦІЇ КАНАЛУ
 def optimize_image_story(final_upload_path, orig_name):
-    print("📐 Режим Сторіс: вписуємо зображення у формат 1080x1920, щоб уникнути кропу...")
+    print("📐 Режим Сторіс (Фото): вписуємо зображення у формат 1080x1920...")
     story_path = os.path.join('temp_mebli', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
     try:
         with Image.open(final_upload_path) as img:
+            # Автоматично виправляємо орієнтацію фото на основі EXIF метаданих (як у TikTok модулі)
+            img = ImageOps.exif_transpose(img)
             img = img.convert('RGB')
             orig_w, orig_h = img.size
             
             target_w, target_h = 1080, 1920
-            canvas = Image.new('RGB', (target_w, target_h), (20, 20, 20))
+            canvas = Image.new('RGB', (target_w, target_h), (20, 20, 20)) # Темно-сірий преміальний фон
             
             scale = min(target_w / orig_w, target_h / orig_h)
             new_w = int(orig_w * scale)
@@ -121,30 +124,56 @@ def get_video_duration(video_path):
     return 0.0
 
 # 📐 ОПТИМІЗАЦІЯ ВІДЕО ПІД СТОРІЗ (1080x1920) + НАКЛАДАННЯ ТЕКСТУ ЧЕРЕЗ FFMPEG
-def optimize_video_story(local_path, f_name, text):
-    print("🎬 Оптимізація Відео: підганяємо під ліміти Instagram (1080x1920, стиснення, спліт)...")
+def optimize_video_story(local_path, f_name, text, year=None, location=None):
+    print("🎬 Оптимізація Відео: підганяємо під ліміти Instagram (1080x1920, стиснення, новий макет)...")
     processed_files = []
     
     duration = get_video_duration(local_path)
     if duration == 0:
         print("⚠️ Тривалість 0 або помилка аналізу. Спробуємо обробити як один файл.")
-        duration = 59.0 # Фолбек
+        duration = 59.0
         
     base_name = f_name.rsplit('.', 1)[0]
     
-    # Фільтр масштабування та падінгу
+    # 1. Базовий фільтр масштабування та падінгу в 1080x1920
     vf_filters = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black"
     
-    # Додавання тексту, якщо є
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    if os.path.exists(font_path) and text:
-        clean_text = text.replace("'", "").replace(":", "\\:")
-        vf_filters += f",drawtext=fontfile={font_path}:text='{clean_text}':x=(w-text_w)/2:y=1550:fontsize=34:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=20"
+    if os.path.exists(font_path):
+        # 2. Накладання головного опису ШІ (Зверху посередині)
+        if text:
+            clean_text = text.replace("'", "").replace(":", "\\:").replace(",", "\\,")
+            # Автоматичне розбиття на рядки за допомогою textwrap (до 30 символів у рядку)
+            lines = textwrap.wrap(clean_text, width=30)
+            
+            start_y = 200
+            line_height = 55
+            for i, line in enumerate(lines):
+                current_y = start_y + (i * line_height)
+                vf_filters += (
+                    f",drawtext=fontfile={font_path}:text='{line}':"
+                    f"x=(w-text_w)/2:y={current_y}:fontsize=42:fontcolor=white:"
+                    f"borderw=5:bordercolor=black:fix_bounds=1"
+                )
+        
+        # 3. Накладання метаданих (Знизу ліворуч)
+        meta_parts = []
+        if location and location != "Невідоме місце":
+            meta_parts.append(location)
+        if year:
+            meta_parts.append(str(year))
+            
+        if meta_parts:
+            clean_meta = " | ".join(meta_parts).replace("'", "").replace(":", "\\:").replace(",", "\\,")
+            vf_filters += (
+                f",drawtext=fontfile={font_path}:text='{clean_meta}':"
+                f"x=70:y=1650:fontsize=34:fontcolor=0xFFE664:"  # Жовтий колір у форматі FFmpeg (Hex)
+                f"borderw=4:bordercolor=black:fix_bounds=1"
+            )
 
     # Шаблон для вихідних файлів (на випадок нарізання)
     output_template = os.path.join('temp_mebli', f'story_padded_{base_name}_part_%03d.mp4')
     
-    # Базові аргументи FFmpeg для стиснення та затискання бітрейту (щоб файл не важив багато)
     cmd = [
         'ffmpeg', '-y', '-i', local_path,
         '-vf', vf_filters,
@@ -152,14 +181,14 @@ def optimize_video_story(local_path, f_name, text):
         '-profile:v', 'main', 
         '-level:v', '4.0', 
         '-pix_fmt', 'yuv420p',
-        '-b:v', '3000k',         # Цільовий бітрейт відео (3 Mbps — ідеальна якість для IG)
-        '-maxrate', '4500k',     # Максимальний піковий бітрейт
-        '-bufsize', '9000k',     # Буфер для стабілізації бітрейту
+        '-b:v', '3000k',         # Цільовий стабільний бітрейт для Instagram
+        '-maxrate', '4500k', 
+        '-bufsize', '9000k', 
         '-c:a', 'aac', 
-        '-b:a', '128k'           # Оптимальний звук
+        '-b:a', '128k'
     ]
     
-    # Якщо відео довше за 60 секунд, вмикаємо сегментацію
+    # Якщо відео довше за 60 секунд, нарізаємо сегментами
     if duration > 60.0:
         print(f"✂️ Відео триває {duration:.1f} сек. Нарізаємо на частини по 60 секунд...")
         cmd += [
@@ -169,18 +198,14 @@ def optimize_video_story(local_path, f_name, text):
             output_template
         ]
     else:
-        # Для коротких відео просто зберігаємо один файл
         single_output = os.path.join('temp_mebli', f'story_padded_{base_name}.mp4')
         cmd.append(single_output)
 
     try:
         res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if res.returncode == 0:
-            # Збираємо список створених файлів
             if duration > 60.0:
-                # Шукаємо відкомпільовані сегменти в папці
                 dir_content = os.listdir('temp_mebli')
-                # Фільтруємо файли, що відповідають шаблону поточної сторіз
                 part_files = sorted([
                     os.path.join('temp_mebli', f) for f in dir_content 
                     if f.startswith(f'story_padded_{base_name}_part_') and f.endswith('.mp4')
@@ -193,61 +218,84 @@ def optimize_video_story(local_path, f_name, text):
                     
             return processed_files
     except Exception as e:
-        print(f"⚠️ Помилка під час рендерингу/нарізання відео через FFmpeg: {e}")
+        print(f"⚠️ Помилка під час рендерингу відео через FFmpeg: {e}")
         
-    return [local_path] # Якщо все зламалося, повертаємо оригінал
+    return [local_path]
 
-# ✍️ ГАРМОНІЙНЕ НАКЛАДАННЯ ТЕКСТУ НА ЗОБРАЖЕННЯ (PILLOW)
-def overlay_text_on_image(image_path, text):
+# ✍️ ГАРМОНІЙНЕ НАКЛАДАННЯ ТЕКСТУ НА ЗОБРАЖЕННЯ (PILLOW) — НОВИЙ МАКЕТ
+def overlay_text_on_image(image_path, text, year=None, location=None):
     try:
+        # Очищення тексту від непідтримуваних символів
         text = "".join(c for c in text if ord(c) < 128 or (0x0400 <= ord(c) <= 0x04FF) or c in "—–«»’'\".,!?-() ")
+        
         with Image.open(image_path) as img:
             img = img.convert('RGBA')
             draw = ImageDraw.Draw(img)
             
-            font_size = 38
+            font_size_main = 40
+            font_size_meta = 34
+            font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            
             try:
-                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+                font_main = ImageFont.truetype(font_path, font_size_main)
+                font_meta = ImageFont.truetype(font_path, font_size_meta)
             except IOError:
-                font = ImageFont.load_default()
+                font_main = ImageFont.load_default()
+                font_meta = ImageFont.load_default()
             
-            words = text.split()
-            lines = []
-            current_line = []
-            for word in words:
-                current_line.append(word)
-                if draw.textlength(" ".join(current_line), font=font) > 900:
-                    current_line.pop()
+            # 1️⃣ ГОЛОВНИЙ ОПИС (Зверху по середині з переносом рядків)
+            if text:
+                words = text.split()
+                lines = []
+                current_line = []
+                for word in words:
+                    current_line.append(word)
+                    # Обмежуємо ширину тексту, щоб залишалися поля по боках (макс. 920 пікселів)
+                    if draw.textlength(" ".join(current_line), font=font_main) > 920:
+                        current_line.pop()
+                        lines.append(" ".join(current_line))
+                        current_line = [word]
+                if current_line:
                     lines.append(" ".join(current_line))
-                    current_line = [word]
-            if current_line:
-                lines.append(" ".join(current_line))
+                
+                start_y = 200      # Позиція першого рядка зверху
+                line_height = 55   # Інтервал між рядками
+                
+                for i, line in enumerate(lines):
+                    bbox = draw.textbbox((0, 0), line, font=font_main)
+                    text_w = bbox[2] - bbox[0]
+                    current_x = (1080 - text_w) // 2
+                    current_y = start_y + (i * line_height)
+                    
+                    # Малюємо темний контур (outline) для гарної читаємості на світлих меблях
+                    for dx, dy in [(-2,-2), (-2,2), (2,-2), (2,2), (-1,0), (1,0), (0,-1), (0,1)]:
+                        draw.text((current_x + dx, current_y + dy), line, font=font_main, fill=(0, 0, 0, 240))
+                    # Основний білий текст
+                    draw.text((current_x, current_y), line, font=font_main, fill=(255, 255, 255))
             
-            clean_text = "\n".join(lines)
-            
-            bbox = draw.multiline_textbbox((0, 0), clean_text, font=font)
-            text_w = bbox[2] - bbox[0]
-            text_h = bbox[3] - bbox[1]
-            
-            rect_x1 = (1080 - text_w) // 2 - 25
-            rect_y1 = 1550 - 20
-            rect_x2 = (1080 + text_w) // 2 + 25
-            rect_y2 = rect_y1 + text_h + 40
-            
-            overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-            overlay_draw = ImageDraw.Draw(overlay)
-            overlay_draw.rectangle([rect_x1, rect_y1, rect_x2, rect_y2], fill=(0, 0, 0, 160))
-            
-            img = Image.alpha_composite(img, overlay)
-            draw = ImageDraw.Draw(img)
-            
-            draw.multiline_text(((1080 - text_w) // 2, rect_y1 + 20), clean_text, font=font, fill=(255, 255, 255), align="center")
+            # 2️⃣ МЕТАДАНІ (Знизу ліворуч: Локація | Рік)
+            meta_parts = []
+            if location and location != "Невідоме місце":
+                meta_parts.append(location)
+            if year:
+                meta_parts.append(str(year))
+                
+            if meta_parts:
+                meta_text = " | ".join(meta_parts)
+                meta_x = 70
+                meta_y = 1650  # Безпечна зона знизу сторіс
+                
+                # Малюємо темний контур для метаданих
+                for dx, dy in [(-2,-2), (-2,2), (2,-2), (2,2), (-1,0), (1,0), (0,-1), (0,1)]:
+                    draw.text((meta_x + dx, meta_y + dy), meta_text, font=font_meta, fill=(0, 0, 0, 240))
+                # Текст метаданих — стильний м'який жовтий колір (як у TikTok)
+                draw.text((meta_x, meta_y), meta_text, font=font_meta, fill=(255, 240, 100))
             
             final_img = img.convert('RGB')
             final_img.save(image_path, 'JPEG', quality=95)
-            print(f"🎨 Текст успішно нанесено на зображення сторіс.")
+            print("🎨 Текст та метадані успішно нанесено на фото сторіс за новим макетом.")
     except Exception as e:
-        print(f"⚠️ Помилка графічного накладання тексту: {e}")
+        print(f"⚠️ Помилка графічного накладання тексту на фото: {e}")
 
 def get_google_drive_direct_url(file_id, local_file_path=None):
     if local_file_path and os.path.exists(local_file_path):
@@ -607,13 +655,8 @@ def main():
                 print(f"❌ Не вдалося завантажити {f_name} для аналізу: {e}")
                 continue
             
-            # --- 🆕 ІНТЕГРАЦІЯ НОВИХ МЕТОДІВ ---
             try:
-                # f — це і є наш item_gdrive_data з Google API
                 final_date, lat, lon = get_intellectual_date(local_path, f_name, f)
-                
-                # Якщо final_date повертає об'єкт datetime, перетворюємо в рядок.
-                # Якщо вона вже повертає рядок 'дд.мм.рррр', то цей рядок можна прибрати:
                 if hasattr(final_date, 'strftime'):
                     date_str = final_date.strftime('%d.%m.%Y')
                 else:
@@ -622,9 +665,8 @@ def main():
                 display_location, group_location = get_location_data(lat, lon)
             except Exception as e:
                 print(f"⚠️ Помилка автоматичного визначення дати/локації для {f_name}: {e}")
-                date_str = "01.01.2026"  # або якийсь безпечний фолбек
+                date_str = "01.01.2026"  
                 display_location, group_location = "", ""
-            # -----------------------------------
 
             detected_company = "Загальне"
             for key in COMPANIES_DB.keys():
@@ -638,8 +680,8 @@ def main():
                 "local_path": local_path,
                 "category": detected_company,
                 "date": date_str,
-                "location": display_location,      # Красива назва для підпису на Сторіс
-                "group_location": group_location,  # Використаємо для точного групування пачок
+                "location": display_location,      
+                "group_location": group_location,  
                 "mode": "hot_folder",
                 "counter_cell": None
             })
@@ -647,7 +689,6 @@ def main():
         if hot_group_items:
             groups = {}
             for item in hot_group_items:
-                # 💡 Групуємо саме за груповою локацією (щоб сусідні координати зливалися в один пул)
                 g_key = (item["date"], item["group_location"])
                 groups.setdefault(g_key, []).append(item)
             
@@ -655,7 +696,6 @@ def main():
             selected_queue = groups[first_key][:4]
             print(f"📂 [Гаряча Папка] Сформовано чергу: Дата={first_key[0]}, Локація для групування={first_key[1]}. Елементів: {len(selected_queue)}")
             
-            # Видаляємо локальні копії файлів, які не потрапили у поточну пачку публікації
             selected_ids = {x["id"] for x in selected_queue}
             for item in hot_group_items:
                 if item["id"] not in selected_ids and os.path.exists(item["local_path"]):
@@ -793,14 +833,25 @@ def main():
         story_caption_text = generate_story_caption([ai_media_snapshot], item["category"], item["date"], lang_idx, item["location"])
         print(f"💬 Текст для Сторіс: \"{story_caption_text}\"")
 
+        # --- 🆕 ІНТЕГРАЦІЯ ЗМІННИХ ДЛЯ ФУНКЦІЙ НАКЛАДАННЯ ТЕКСТУ ---
+        try:
+            year_variable = item["date"].split(".")[2] if item["date"] and len(item["date"].split(".")) == 3 else str(datetime.now().year)
+        except Exception:
+            year_variable = str(datetime.now().year)
+            
+        location_variable = item["location"]
+
         # Підготовка масиву медіафайлів для публікації
         media_parts_to_upload = []
         if is_video:
-            media_parts_to_upload = optimize_video_story(final_path, f_name, story_caption_text)
+            # Для відео передаємо нові аргументи в optimize_video_story
+            media_parts_to_upload = optimize_video_story(final_path, f_name, story_caption_text, year=year_variable, location=location_variable)
         else:
+            # Для зображень оптимізуємо та передаємо змінні в overlay_text_on_image
             optimized_path = optimize_image_story(final_path, f_name)
-            overlay_text_on_image(optimized_path, story_caption_text)
+            overlay_text_on_image(optimized_path, story_caption_text, year=year_variable, location=location_variable)
             media_parts_to_upload = [optimized_path]
+        # ---------------------------------------------------------
 
         item_published_successfully = False
 
