@@ -623,7 +623,7 @@ def wait_for_meta_container(container_id, access_token):
 def main():
     if len(sys.argv) < 3:
         print("💡 Запуск: python script.py ig_story <tab_name>")
-        return
+        sys.exit(1)  # Неправильний запуск — це теж помилка воркфлоу
 
     mode = sys.argv[1].lower()
     forced_tab = sys.argv[2]
@@ -631,12 +631,13 @@ def main():
     
     if mode != "ig_story":
         print(f"❌ Цей скрипт сконструйовано виключно під 'ig_story'. Передано: {mode}")
-        return
+        sys.exit(1)
 
     drive, sheets = get_services()
     os.makedirs('temp_mebli', exist_ok=True)
     
     selected_queue = []
+    has_global_failures = False  # 🚩 Головний індикатор помилок для GitHub Actions
     
     # 1️⃣ ЕТАП ПРІОРИТЕТУ: Перевірка наявності файлів у гарячій папці
     print(f"🔍 Перевірка наявності файлів у гарячій папці [{HOT_FOLDER_ID}]...")
@@ -652,6 +653,7 @@ def main():
     except Exception as e:
         print(f"❌ ПОМИЛКА під час отримання списку файлів з Google Диску: {e}")
         hot_files = []
+        has_global_failures = True
 
     if hot_files:
         print(f"🔥 У гарячій папці виявлено {len(hot_files)} файлів. Активуємо пріоритетну чергу!")
@@ -675,9 +677,11 @@ def main():
                     while not done: _, done = downloader.next_chunk()
             except Exception as e:
                 print(f"❌ Не вдалося завантажити {f_name} для аналізу: {e}")
+                has_global_failures = True
                 continue
             
             try:
+                # Виклик оновленої функції (з лімітом від 2000 року і без Timestamp)
                 final_date, lat, lon = get_intellectual_date(local_path, f_name, f)
                 if hasattr(final_date, 'strftime'):
                     date_str = final_date.strftime('%d.%m.%Y')
@@ -726,10 +730,15 @@ def main():
     # 2️⃣ ЕТАП ФОЛБЕКУ: Якщо гаряча папка порожня, беремо дані з таблиці (Карусель)
     if not selected_queue:
         print(f"📊 [Режим: РЕЄСТР ТАБЛИЦІ] Гаряча папка порожня. Аналізуємо реєстр '{current_tab}'...")
-        res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{current_tab}'!A2:H").execute()
-        rows = res.get('values', [])
+        try:
+            res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{current_tab}'!A2:H").execute()
+            rows = res.get('values', [])
+        except Exception as e:
+            print(f"❌ Помилка доступу до Google Sheets: {e}")
+            sys.exit(1)
+
         if not rows:
-            print("ℹ️ Реєстр порожній.")
+            print("ℹ️ Реєстр порожній. Публікувати нічого.")
             return
 
         col_idx = 4
@@ -746,7 +755,7 @@ def main():
                 except ValueError: continue
 
         if not valid_rows:
-            print("ℹ️ Немає доступних рядків.")
+            print("ℹ️ Немає доступних рядків для публікації.")
             return
 
         min_counter = min(item["counter"] for item in valid_rows)
@@ -826,6 +835,7 @@ def main():
                     while not done: _, done = downloader.next_chunk()
             except Exception as e:
                 print(f"❌ Не вдалося завантажити {f_name}: {e}")
+                has_global_failures = True
                 continue
         else:
             local_path = item["local_path"]
@@ -836,10 +846,15 @@ def main():
         
         if lower_name.endswith(('.heic', '.heif')):
             jpg_path = os.path.join('temp_mebli', f_name.rsplit('.', 1)[0] + '.jpg')
-            with Image.open(local_path) as img:
-                img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
-            final_path = jpg_path
-            local_files_to_clean.append(jpg_path)
+            try:
+                with Image.open(local_path) as img:
+                    img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
+                final_path = jpg_path
+                local_files_to_clean.append(jpg_path)
+            except Exception as e:
+                print(f"❌ Помилка конвертації HEIC для {f_name}: {e}")
+                has_global_failures = True
+                continue
 
         local_files_to_clean.append(local_path)
 
@@ -855,7 +870,7 @@ def main():
         story_caption_text = generate_story_caption([ai_media_snapshot], item["category"], item["date"], lang_idx, item["location"])
         print(f"💬 Текст для Сторіс: \"{story_caption_text}\"")
 
-        # --- 🆕 ІНТЕГРАЦІЯ ЗМІННИХ ДЛЯ ФУНКЦІЙ НАКЛАДАННЯ ТЕКСТУ ---
+        # --- 🆕 Інтеграція змінних для нанесення метаданих на фото/відео
         try:
             year_variable = item["date"].split(".")[2] if item["date"] and len(item["date"].split(".")) == 3 else str(datetime.now().year)
         except Exception:
@@ -863,21 +878,22 @@ def main():
             
         location_variable = item["location"]
 
-        # Підготовка масиву медіафайлів для публікації
         media_parts_to_upload = []
-        if is_video:
-            # Для відео передаємо нові аргументи в optimize_video_story
-            media_parts_to_upload = optimize_video_story(final_path, f_name, story_caption_text, year=year_variable, location=location_variable)
-        else:
-            # Для зображень оптимізуємо та передаємо змінні в overlay_text_on_image
-            optimized_path = optimize_image_story(final_path, f_name)
-            overlay_text_on_image(optimized_path, story_caption_text, year=year_variable, location=location_variable)
-            media_parts_to_upload = [optimized_path]
-        # ---------------------------------------------------------
+        try:
+            if is_video:
+                media_parts_to_upload = optimize_video_story(final_path, f_name, story_caption_text, year=year_variable, location=location_variable)
+            else:
+                optimized_path = optimize_image_story(final_path, f_name)
+                overlay_text_on_image(optimized_path, story_caption_text, year=year_variable, location=location_variable)
+                media_parts_to_upload = [optimized_path]
+        except Exception as e:
+            print(f"❌ Помилка рендерингу/опитимізації медіа файлу {f_name}: {e}")
+            has_global_failures = True
+            continue
 
         item_published_successfully = False
 
-        # Послідовна публікація кожного фрагмента
+        # Послідовна публікація кожного фрагмента в Meta API
         for sub_idx, active_path in enumerate(media_parts_to_upload):
             if len(media_parts_to_upload) > 1:
                 print(f"📦 Обробка фрагмента [{sub_idx + 1}/{len(media_parts_to_upload)}] для файлу {f_name}...")
@@ -889,45 +905,53 @@ def main():
             
             if not pub_url:
                 print(f"⚠️ Не вдалося отримати публічне посилання для фрагмента {active_path}.")
+                has_global_failures = True
                 continue
 
             print(f"📡 Надсилання сторіз в Meta API...")
             param_type = "video_url" if is_video else "image_url"
             payload = {
                 "media_type": "STORIES",
-                param_type: pub_url,
+                "param_type": pub_url,
                 "access_token": META_ACCESS_TOKEN
             }
             
-            # 1. Створення контейнера
-            res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=payload).json()
-            
-            if res and "id" in res:
-                creation_id = res["id"]
-                # 2. Очікування готовності контейнера в Meta
-                is_ready = wait_for_meta_container(creation_id, META_ACCESS_TOKEN)
+            try:
+                # 1. Створення контейнера
+                res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=payload).json()
                 
-                if is_ready:
-                    # 3. Фінальна публікація
-                    publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
-                        "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
-                    }).json()
+                if res and "id" in res:
+                    creation_id = res["id"]
+                    # 2. Очікування готовності
+                    is_ready = wait_for_meta_container(creation_id, META_ACCESS_TOKEN)
                     
-                    if "id" in publish_res:
-                        print(f"✅ Фрагмент [{sub_idx + 1}/{len(media_parts_to_upload)}] успішно опубліковано! ID: {publish_res['id']}")
-                        item_published_successfully = True
-                        success_published_any = True
+                    if is_ready:
+                        # 3. Фінальна публікація
+                        publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
+                            "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
+                        }).json()
+                        
+                        if "id" in publish_res:
+                            print(f"✅ Фрагмент [{sub_idx + 1}/{len(media_parts_to_upload)}] успішно опубліковано! ID: {publish_res['id']}")
+                            item_published_successfully = True
+                            success_published_any = True
+                        else:
+                            print(f"❌ Помилка публікації сторіз в Meta API: {publish_res}")
+                            has_global_failures = True
                     else:
-                        print(f"❌ Помилка публікації сторіз в Meta API: {publish_res}")
+                        print(f"❌ Контейнер медіафайлу не перейшов у стан готовності.")
+                        has_global_failures = True
                 else:
-                    print(f"❌ Контейнер медіафайлу не перейшов у стан готовності.")
-            else:
-                print(f"❌ Помилка створення контейнера сторіз: {res}")
+                    print(f"❌ Помилка створення контейнера сторіз: {res}")
+                    has_global_failures = True
+            except Exception as e:
+                print(f"❌ Крітічний збій під час запиту до Meta API: {e}")
+                has_global_failures = True
 
             if ik_id: 
                 delete_from_imagekit(ik_id)
 
-        # Оновлюємо статус/лічильники лише якщо бодай один фрагмент файлу успішно опубліковано
+        # Оновлюємо статус/лічильники лише у разі успіху
         if item_published_successfully:
             if item["mode"] == "sheet":
                 new_val = item["counter_val"] + 1
@@ -952,6 +976,9 @@ def main():
                     print(f"🗑️ Файл [{f_name}] успішно переміщено до кошика на Google Диску.")
                 except Exception as e:
                     print(f"⚠️ Не вдалося перемістити файл {f_name} до кошика: {e}")
+        else:
+            # Якщо файл був у черзі, але не опублікувався — фіксуємо збій елемента черги
+            has_global_failures = True
 
     if success_published_any:
         try:
@@ -968,6 +995,13 @@ def main():
             try: os.remove(f)
             except: pass
     print("🧹 Тимчасові локальні файли успішно очищені.")
+
+    # 🚨 Фінальний акорд для GitHub Actions
+    if has_global_failures:
+        print("\n💥 [Система] Скрипт виконав частину роботи, але зафіксовано помилки публікації контенту.")
+        sys.exit(1)  # Завершуємо з помилкою — GitHub пофарбує запуск у червоний
+    else:
+        print("\n🚀 [Система] Зовнішній запуск API успішний! Всі обрані файли опубліковані без помилок.")
 
 if __name__ == "__main__":
     main()
