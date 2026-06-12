@@ -352,22 +352,18 @@ def extract_date_from_filename(filename):
     """
     Каскадний пошук дати в імені файлу.
     Підтримує: YYYY-MM-DD, YYYYMMDD, DD-MM-YYYY, DDMMYYYY з будь-якими роздільниками.
-    Максимальний дозволений рік визначається автоматично (поточний рік системи).
     """
-    # 📅 Отримуємо поточний рік динамічно
     current_year = datetime.now().year
     min_year = 2000  # Нижній ліміт для архіву меблів
     
     name_part = filename.rsplit('.', 1)[0]
 
     # 1️⃣ Формат РРРР-ММ-ДД або РРРРММДД (наприклад: "20090515", "2026_01_12")
-    # Шукає будь-які 4 цифри для року, валідація — нижче в коді
     match_yyyy_mm_dd = re.search(r'\b(\d{4})[-._]?(0[1-9]|1[0-2])[-._]?([0-2]\d|3[01])', name_part)
     if match_yyyy_mm_dd:
         year, month, day = match_yyyy_mm_dd.groups()
         try: 
             dt = datetime(int(year), int(month), int(day))
-            # Динамічна перевірка адекватності року
             if min_year <= dt.year <= current_year:
                 print(f"🎯 Дату успішно розпізнано за шаблоном [РРРР-ММ-ДД]: {dt.strftime('%d.%m.%Y')}")
                 return dt
@@ -380,28 +376,13 @@ def extract_date_from_filename(filename):
         day, month, year = match_dd_mm_yyyy.groups()
         try: 
             dt = datetime(int(year), int(month), int(day))
-            # Динамічна перевірка адекватності року
             if min_year <= dt.year <= current_year:
                 print(f"🎯 Дату успішно розпізнано за шаблоном [ДД-ММ-РРРР]: {dt.strftime('%d.%m.%Y')}")
                 return dt
         except ValueError: 
             pass
             
-    # 3️⃣ Фолбек: Перевірка на Unix Timestamp
-    match_ts = re.search(r'\b(1[4-7]\d{8,11})\b', name_part)
-    if match_ts:
-        ts = int(match_ts.group(1))
-        if len(match_ts.group(1)) > 10: 
-            ts = ts / 1000
-        try: 
-            dt = datetime.fromtimestamp(ts)
-            # Перевіряємо за тим самим динамічним лімітом
-            if min_year <= dt.year <= current_year: 
-                print(f"🎯 Дату розпізнано з Timestamp: {dt.strftime('%d.%m.%Y')}")
-                return dt
-        except: 
-            pass
-            
+    # Блок Unix Timestamp видалено за недоцільністю та для уникнення хибних спрацьовувань.
     return None
 
 def get_exif_data(image_path):
@@ -518,27 +499,28 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
     if now_time is None:
         now_time = datetime.now()
 
+    min_year = 2000  # Базовий рік початку цифрового архіву
+
     # 1️⃣ Спроба розпізнати дату з імені файлу
     fn_date = extract_date_from_filename(filename)
     if fn_date:
         print(f"🎯 Дату успішно розпізнано з назви файлу '{filename}': {fn_date.strftime('%d.%m.%Y')}")
-        # Але координати все одно спробуємо дістати з метаданих нижче
     
     meta_date, lat, lon = None, None, None
     mime_type = gdrive_file.get('mimeType', '')
     lower_name = filename.lower()
     
-    # 2️⃣ Збір метаданих залежно від типу контенту
+    # 2️⃣ Збір метаданих залежно від типу контенту (EXIF)
     if mime_type.startswith('image/') or lower_name.endswith(('.heic', '.heif', '.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff')):
         meta_date, lat, lon = get_exif_data(local_path)
     elif mime_type.startswith('video/') or lower_name.endswith(('.mp4', '.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg')):
         meta_date, lat, lon = get_video_metadata(local_path)
 
-    # Якщо дату взяли з імені файлу, повертаємо її разом зі знайденими координатами
+    # Якщо дату взяли з імені файлу, повертаємо її (координати додаються, якщо знайшли в EXIF)
     if fn_date:
         return fn_date, lat, lon
 
-    # 3️⃣ Якщо в імені дати не було, валідуємо дату з метаданих файлу
+    # 3️⃣ Якщо в імені дати не було, валідуємо дату з EXIF метаданих самого файлу
     if meta_date:
         for date_format in ('%Y:%m:%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S'):
             try:
@@ -546,23 +528,28 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
                 clean_fmt = date_format.replace('T', ' ')
                 dt_parsed = datetime.strptime(clean_meta, clean_fmt)
                 
-                if 2000 <= dt_parsed.year <= now_time.year:
+                if min_year <= dt_parsed.year <= now_time.year:
                     return dt_parsed, lat, lon
             except ValueError:
                 continue
-        print(f"⚠️ Метадані файлу містять нелогічну дату: {meta_date}. Шукаємо заміну в системі Google Drive.")
+        print(f"⚠️ Метадані файлу містявть нелогічну дату: {meta_date}. Шукаємо заміну в системі Google Drive.")
 
     # 4️⃣ Фолбек: Дані про створення/модифікацію об'єкта в хмарі Google Drive
     try:
         dt_created = datetime.strptime(gdrive_file['createdTime'][:19], '%Y-%m-%dT%H:%M:%S')
         dt_modified = datetime.strptime(gdrive_file['modifiedTime'][:19], '%Y-%m-%dT%H:%M:%S')
+        
+        # Беремо найранішу дату. Для старих фото modifiedTime на Диску часто зберігає 
+        # оригінальну дату зміни файлу на комп'ютері ще до епохи хмар (як ваші "15 бер. 2002 р.")
         earliest_gdrive = min(dt_created, dt_modified)
-        if 2010 <= earliest_gdrive.year <= now_time.year:
+        
+        # Змінено ліміт з 2010 на min_year (2000), щоб коректно пропускати архіви 2002 року
+        if min_year <= earliest_gdrive.year <= now_time.year:
             return earliest_gdrive, lat, lon
     except Exception as e:
         print(f"⚠️ Помилка зчитування системних дат Google Drive: {e}")
 
-    # 5️⃣ Крайній випадок: повертаємо дефолтний теперішній час
+    # 5️⃣ Крайній випадок: якщо взагалі нічого не знайшли, повертаємо поточний час
     return now_time, lat, lon
 
 # 🧠 ШІ ГЕНЕРАЦІЯ ЛАКОНІЧНОГО ОПИСУ ДЛЯ КОНКРЕТНОЇ СТОРІС
