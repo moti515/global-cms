@@ -11,7 +11,7 @@ from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw, ImageOps, ImageFont
 from PIL.ExifTags import TAGS, GPSTAGS
 from pillow_heif import register_heif_opener
 
@@ -349,24 +349,59 @@ def delete_from_imagekit(file_id: str):
 # =====================================================================
 
 def extract_date_from_filename(filename):
-    """Шукає дату у форматі YYYY-MM-DD або Unix Timestamp в імені файлу."""
-    match = re.search(r'\b(20[0-2]\d)[-._]?(0[1-9]|1[0-2])[-._]?([0-2]\d|3[01])\b', filename)
-    if match:
-        year, month, day = match.groups()
+    """
+    Каскадний пошук дати в імені файлу.
+    Підтримує: YYYY-MM-DD, YYYYMMDD, DD-MM-YYYY, DDMMYYYY з будь-якими роздільниками.
+    Максимальний дозволений рік визначається автоматично (поточний рік системи).
+    """
+    # 📅 Отримуємо поточний рік динамічно
+    current_year = datetime.now().year
+    min_year = 2000  # Нижній ліміт для архіву меблів
+    
+    name_part = filename.rsplit('.', 1)[0]
+
+    # 1️⃣ Формат РРРР-ММ-ДД або РРРРММДД (наприклад: "20090515", "2026_01_12")
+    # Шукає будь-які 4 цифри для року, валідація — нижче в коді
+    match_yyyy_mm_dd = re.search(r'\b(\d{4})[-._]?(0[1-9]|1[0-2])[-._]?([0-2]\d|3[01])', name_part)
+    if match_yyyy_mm_dd:
+        year, month, day = match_yyyy_mm_dd.groups()
         try: 
-            return datetime(int(year), int(month), int(day))
+            dt = datetime(int(year), int(month), int(day))
+            # Динамічна перевірка адекватності року
+            if min_year <= dt.year <= current_year:
+                print(f"🎯 Дату успішно розпізнано за шаблоном [РРРР-ММ-ДД]: {dt.strftime('%d.%m.%Y')}")
+                return dt
+        except ValueError: 
+            pass
+
+    # 2️⃣ Формат ДД-ММ-РРРР або ДДММРРРР (наприклад: "14092011083", "15_05_2009")
+    match_dd_mm_yyyy = re.search(r'\b(0[1-9]|[12]\d|3[01])[-._]?(0[1-9]|1[0-2])[-._]?(\d{4})', name_part)
+    if match_dd_mm_yyyy:
+        day, month, year = match_dd_mm_yyyy.groups()
+        try: 
+            dt = datetime(int(year), int(month), int(day))
+            # Динамічна перевірка адекватності року
+            if min_year <= dt.year <= current_year:
+                print(f"🎯 Дату успішно розпізнано за шаблоном [ДД-ММ-РРРР]: {dt.strftime('%d.%m.%Y')}")
+                return dt
         except ValueError: 
             pass
             
-    match_ts = re.search(r'\b(1[4-7]\d{8,11})\b', filename)
+    # 3️⃣ Фолбек: Перевірка на Unix Timestamp
+    match_ts = re.search(r'\b(1[4-7]\d{8,11})\b', name_part)
     if match_ts:
         ts = int(match_ts.group(1))
         if len(match_ts.group(1)) > 10: 
             ts = ts / 1000
         try: 
-            return datetime.fromtimestamp(ts)
+            dt = datetime.fromtimestamp(ts)
+            # Перевіряємо за тим самим динамічним лімітом
+            if min_year <= dt.year <= current_year: 
+                print(f"🎯 Дату розпізнано з Timestamp: {dt.strftime('%d.%m.%Y')}")
+                return dt
         except: 
             pass
+            
     return None
 
 def get_exif_data(image_path):
@@ -511,7 +546,7 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
                 clean_fmt = date_format.replace('T', ' ')
                 dt_parsed = datetime.strptime(clean_meta, clean_fmt)
                 
-                if 2010 <= dt_parsed.year <= now_time.year:
+                if 2000 <= dt_parsed.year <= now_time.year:
                     return dt_parsed, lat, lon
             except ValueError:
                 continue
