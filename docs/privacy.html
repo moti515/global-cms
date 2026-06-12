@@ -1,11 +1,46 @@
 <!DOCTYPE html>
-<html lang="uk">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Privacy Policy</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - @PixelbeardTravel Automation</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #333; }
+        h1 { color: #111; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        h2 { color: #222; margin-top: 30px; }
+    </style>
 </head>
 <body>
-    <h1>Privacy Policy</h1>
-    <p>Our automation script only processes media files from the owner's Google Drive and posts them to the authorized TikTok account. We do not collect, store, or share any user data with third parties.</p>
+    <h1>Privacy Policy for @PixelbeardTravel Automation</h1>
+    <p><strong>Last Updated: June 2026</strong></p>
+    
+    <p>This Privacy Policy describes how <strong>@PixelbeardTravel Automation</strong> (the "Application") processes and protects data. The Application functions strictly as a self-hosted backend automation tool for personal use.</p>
+
+    <h2>1. Information We Access and Collect</h2>
+    <p>Our Application interacts with external APIs to automate content management under your direct control:</p>
+    <ul>
+        <li><strong>Google Drive API:</strong> Accesses specifically designated folders to retrieve your personal archival travel media files (photos and videos).</li>
+        <li><strong>TikTok API (user.info.basic):</strong> Accesses basic profile info (username, avatar) solely to confirm identity and successful account link.</li>
+    </ul>
+
+    <h2>2. Data Usage and Scopes</h2>
+    <p>We use the TikTok Content Posting API with the following scopes:</p>
+    <ul>
+        <li><strong>video.upload:</strong> To upload your travel videos directly to your creator account as a draft.</li>
+        <li><strong>video.publish:</strong> To automate the finalized publication process directly to your authorized TikTok profile feed on your schedule.</li>
+    </ul>
+
+    <h2>3. Data Storage and Security</h2>
+    <p><strong>We do not collect, store, or share your personal data, credentials, or video content on any third-party servers.</strong></p>
+    <ul>
+        <li>The script runs entirely as a headless process (e.g., via secure GitHub Actions CI/CD or local machine environment).</li>
+        <li>All authentication tokens, Client Keys, and Client Secrets are saved locally or secured within encrypted repository Secrets. No data is ever transmitted to us or any unauthorized party.</li>
+    </ul>
+
+    <h2>4. Third-Party Sharing</h2>
+    <p>We do not sell, trade, or otherwise transfer your data to outside parties. Your content transfers directly from your personal storage to your official TikTok account.</p>
+
+    <h2>5. Contact</h2>
+    <p>If you have questions about this privacy policy, you can manage your app permissions directly inside your TikTok Security Settings.</p>
 </body>
 </html>
