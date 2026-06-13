@@ -55,6 +55,7 @@ jobs:
         python << 'EOF'
         import os
         import subprocess
+        import sys
 
         # Отримуємо режим та назву вкладки
         mode = os.environ.get('FORCED_MODE', 'fb_post')
@@ -63,14 +64,24 @@ jobs:
         print(f"🚀 [Система] Зовнішній запуск API успішний!")
         print(f"📋 [Система] Режим: [{mode.upper()}], Аркуш: [{target_tab}]")
         
-        # Динамічний вибір скрипта залежно від режиму
+        # Динамічний вибір скрипта та робочої папки залежно від режиму
         if mode == 'ig_story':
+            # Шлях до папки зі сторіс
+            target_dir = os.path.join('global-cms', 'mebli_instagram_story')
             script_name = 'publish_content_mebli_srorys.py'
+            
+            print(f"📂 [Система] Зміна робочої директорії на: {target_dir}")
+            # Переходимо в папку скрипта, щоб Python бачив config_meb_insta_story.py тощо
+            os.chdir(target_dir)
         else:
+            # Для звичайних постів (якщо вони залишилися в коліні репозиторію)
             script_name = 'publish_content_mebli.py'
             
         print(f"🏃‍♂️ [Система] Запуск скрипта: {script_name}...")
         
         # Передаємо параметри у вибраний скрипт
-        subprocess.run(['python', script_name, mode, target_tab], check=True)
+        result = subprocess.run(['python', script_name, mode, target_tab])
+        
+        # Повертаємо код завершення скрипта (щоб таска падала, якщо в Python була помилка)
+        sys.exit(result.returncode)
         EOF
