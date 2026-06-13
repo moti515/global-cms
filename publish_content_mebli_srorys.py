@@ -778,7 +778,7 @@ def main():
     if not selected_queue:
         print(f"📊 [Режим: РЕЄСТР ТАБЛИЦІ] Гаряча папка порожня. Аналізуємо реєстр '{current_tab}'...")
         try:
-            res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{current_tab}'!A2:H").execute()
+            res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{current_tab}'!A2:I").execute()
             rows = res.get('values', [])
         except Exception as e:
             print(f"❌ Помилка доступу до Google Sheets: {e}")
@@ -820,13 +820,21 @@ def main():
         print(f"📂 Обрано групу з Таблиці: {category_name}. Елементів: {len(selected_group_items)}")
         
         for item in selected_group_items:
+            # 1. Витягуємо чисті дані рядка таблиці
+            data = item["data"]
+            
+            # 2. Твій рядок для визначення локації групування
+            group_location_json = data[8] if len(data) > 8 else (data[7] if len(data) > 7 else "")
+            
+            # 3. Наповнюємо чергу, використовуючи отримані змінні
             selected_queue.append({
-                "id": item["data"][0],
-                "name": item["data"][1],
+                "id": data[0],
+                "name": data[1],
                 "local_path": None,
                 "category": category_name,
                 "date": target_date,
                 "location": target_loc,
+                "group_location": group_location_json,  # 🔥 Додали сюди, щоб структура збігалася з hot_folder
                 "mode": "sheet",
                 "counter_cell": f"'{current_tab}'!{col_letter}{item['row_idx']}",
                 "counter_val": item["counter"]
@@ -923,7 +931,13 @@ def main():
         except Exception:
             year_variable = str(datetime.now().year)
             
-        location_variable = item["location"]
+        # Замість прямого: location_variable = item["location"]
+        # Робимо розпарсинг, щоб на фото/відео потрапив чистий текст потрібною мовою!
+        try:
+            loc_json = json.loads(item["location"])
+            location_variable = loc_json.get(str(lang_idx), loc_json.get("0", ""))
+        except:
+            location_variable = item["location"]
 
         media_parts_to_upload = []
         try:
