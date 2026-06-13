@@ -64,17 +64,22 @@ jobs:
         print(f"🚀 [Система] Зовнішній запуск API успішний!")
         print(f"📋 [Система] Режим: [{mode.upper()}], Аркуш: [{target_tab}]")
         
-        # Динамічний вибір скрипта та робочої папки залежно від режиму
+       # Динамічний вибір скрипта та робочої папки залежно від режиму
         if mode == 'ig_story':
-            # Шлях до папки зі сторіс
             target_dir = os.path.join('global-cms', 'mebli_instagram_story')
             script_name = 'publish_content_mebli_srorys.py'
             
+            # ДІАГНОСТИКА: Якщо папки немає, виведемо що є в коріння, щоб ви побачили помилку
+            if not os.path.exists(target_dir):
+                print(f"❌ [Помилка] Папку '{target_dir}' не знайдено в репозиторії!")
+                print(f"📂 Вміст поточного коріння репозиторію: {os.listdir('.')}")
+                # Спробуємо створити її, щоб скрипт зміг зайти всередину
+                os.makedirs(target_dir, exist_ok=True)
+                print(f"📁 Тимчасово створено порожню папку: {target_dir} (але вона може не містити скриптів!)")
+
             print(f"📂 [Система] Зміна робочої директорії на: {target_dir}")
-            # Переходимо в папку скрипта, щоб Python бачив config_meb_insta_story.py тощо
             os.chdir(target_dir)
         else:
-            # Для звичайних постів (якщо вони залишилися в коліні репозиторію)
             script_name = 'publish_content_mebli.py'
             
         print(f"🏃‍♂️ [Система] Запуск скрипта: {script_name}...")
