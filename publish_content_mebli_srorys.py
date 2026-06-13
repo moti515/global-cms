@@ -33,11 +33,12 @@ SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/a
 VALID_MEDIA_EXTENSIONS = ('.gif', '.heic', '.heif', '.jpeg', '.jpg', '.mp4', '.png', '.webp', '.mov', '.avi')
 DOCUMENT_EXTENSIONS = ('.pdf', '.doc', '.docx', '.djvu', '.txt', '.rtf', '.fb2', '.epub')
 
-# 🏢 ГЛОБАЛЬНА БАЗА ДАНИХ КОМПАНІЙ ТА КАТЕГОРІЙ
+# 🏢 СИНХРОНІЗОВАНА ГЛОБАЛЬНА БАЗА ДАНИХ КОМПАНЙ ТА КАТЕГОРІЙ
 COMPANIES_DB = {
     "goncharenko": {
         "names": {0: "Олександр Гончаренко", 1: "Oleksandr Goncharenko", 2: "Oleksandr Goncharenko"},
-        "links": ["📸 Instagram: instagr.am/goncharenko8721"]
+        "links": ["📸 Instagram: instagr.am/goncharenko8721"],
+        "ig_handle": "@goncharenko8721"
     },
     "gurov": {
         "names": {0: "Андрій Гуров", 1: "Andrii Gurov", 2: "Andrii Gurov"},
@@ -45,7 +46,8 @@ COMPANIES_DB = {
     },
     "solovey": {
         "names": {0: "Студія меблів «Соловей»", 1: "Solovey Furniture Studio", 2: "Möbelstudio Solovey"},
-        "links": ["📸 Instagram: instagr.am/mebelsolovei"]
+        "links": ["📸 Instagram: instagr.am/mebelsolovei"],
+        "ig_handle": "@mebelsolovei"
     },
     "furniture park": {
         "names": {0: "Меблевий парк", 1: "Furniture Park", 2: "Furniture Park"},
@@ -54,6 +56,11 @@ COMPANIES_DB = {
             "📸 Instagram: instagr.am/meblovo_ukraine",
             "📢 Telegram: t.me/Meblevyi_park",
             "📸 Instagram: instagr.am/renovaelite"
+        ],
+        "ig_handle": [
+            "@meblevyi_park",
+            "@meblovo_ukraine",
+            "@renovaelite"
         ]
     }
 }
@@ -88,7 +95,6 @@ def optimize_image_story(final_upload_path, orig_name):
     story_path = os.path.join('temp_mebli', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
     try:
         with Image.open(final_upload_path) as img:
-            # Автоматично виправляємо орієнтацію фото на основі EXIF метаданих (як у TikTok модулі)
             img = ImageOps.exif_transpose(img)
             img = img.convert('RGB')
             orig_w, orig_h = img.size
@@ -109,11 +115,10 @@ def optimize_image_story(final_upload_path, orig_name):
             
         return story_path
     except Exception as e:
-        print(f"⚠️ Не вдалося відформатувати фото під сторіз: {e}")
+        print(f"⚠️ Не вдалося відформатувати фото под сторіз: {e}")
         return final_upload_path
 
 def get_video_duration(video_path):
-    """Повертає тривалість відео в секундах."""
     cmd = ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nocues=1', video_path]
     try:
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -134,16 +139,14 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
         duration = 59.0
         
     base_name = f_name.rsplit('.', 1)[0]
-    
-    # 1. Базовий фільтр масштабування та падінгу в 1080x1920
     vf_filters = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black"
     
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     if os.path.exists(font_path):
-        # 2. Накладання головного опису ШІ (Зверху посередині)
         if text:
+            # Валідація кирилиці для FFmpeg (захист від кракозябр)
+            text = "".join(c for c in text if ord(c) < 128 or (0x0400 <= ord(c) <= 0x04FF) or c in "—–«»’'\".,!?-() ")
             clean_text = text.replace("'", "").replace(":", "\\:").replace(",", "\\,")
-            # Автоматичне розбиття на рядки за допомогою textwrap (до 30 символів у рядку)
             lines = textwrap.wrap(clean_text, width=30)
             
             start_y = 200
@@ -156,7 +159,6 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
                     f"borderw=5:bordercolor=black:fix_bounds=1"
                 )
         
-        # 3. Накладання метаданих (Знизу ліворуч)
         meta_parts = []
         if location and location != "Невідоме місце":
             meta_parts.append(location)
@@ -171,7 +173,6 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
                 f"borderw=4:bordercolor=black:fix_bounds=1"
             )
 
-    # Шаблон для вихідних файлів (на випадок нарізання)
     output_template = os.path.join('temp_mebli', f'story_padded_{base_name}_part_%03d.mp4')
     
     cmd = [
@@ -181,14 +182,13 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
         '-profile:v', 'main', 
         '-level:v', '4.0', 
         '-pix_fmt', 'yuv420p',
-        '-b:v', '3000k',         # Цільовий стабільний бітрейт для Instagram
+        '-b:v', '3000k',         
         '-maxrate', '4500k', 
         '-bufsize', '9000k', 
         '-c:a', 'aac', 
         '-b:a', '128k'
     ]
     
-    # Якщо відео довше за 60 секунд, нарізаємо сегментами
     if duration > 60.0:
         print(f"✂️ Відео триває {duration:.1f} сек. Нарізаємо на частини по 60 секунд...")
         cmd += [
@@ -225,7 +225,6 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
 # ✍️ ГАРМОНІЙНЕ НАКЛАДАННЯ ТЕКСТУ НА ЗОБРАЖЕННЯ (PILLOW) — НОВИЙ МАКЕТ
 def overlay_text_on_image(image_path, text, year=None, location=None):
     try:
-        # Очищення тексту від непідтримуваних символів
         text = "".join(c for c in text if ord(c) < 128 or (0x0400 <= ord(c) <= 0x04FF) or c in "—–«»’'\".,!?-() ")
         
         with Image.open(image_path) as img:
@@ -243,14 +242,12 @@ def overlay_text_on_image(image_path, text, year=None, location=None):
                 font_main = ImageFont.load_default()
                 font_meta = ImageFont.load_default()
             
-            # 1️⃣ ГОЛОВНИЙ ОПИС (Зверху по середині з переносом рядків)
             if text:
                 words = text.split()
                 lines = []
                 current_line = []
                 for word in words:
                     current_line.append(word)
-                    # Обмежуємо ширину тексту, щоб залишалися поля по боках (макс. 920 пікселів)
                     if draw.textlength(" ".join(current_line), font=font_main) > 920:
                         current_line.pop()
                         lines.append(" ".join(current_line))
@@ -258,8 +255,8 @@ def overlay_text_on_image(image_path, text, year=None, location=None):
                 if current_line:
                     lines.append(" ".join(current_line))
                 
-                start_y = 200      # Позиція першого рядка зверху
-                line_height = 55   # Інтервал між рядками
+                start_y = 200      
+                line_height = 55   
                 
                 for i, line in enumerate(lines):
                     bbox = draw.textbbox((0, 0), line, font=font_main)
@@ -267,13 +264,10 @@ def overlay_text_on_image(image_path, text, year=None, location=None):
                     current_x = (1080 - text_w) // 2
                     current_y = start_y + (i * line_height)
                     
-                    # Малюємо темний контур (outline) для гарної читаємості на світлих меблях
                     for dx, dy in [(-2,-2), (-2,2), (2,-2), (2,2), (-1,0), (1,0), (0,-1), (0,1)]:
                         draw.text((current_x + dx, current_y + dy), line, font=font_main, fill=(0, 0, 0, 240))
-                    # Основний білий текст
                     draw.text((current_x, current_y), line, font=font_main, fill=(255, 255, 255))
             
-            # 2️⃣ МЕТАДАНІ (Знизу ліворуч: Локація | Рік)
             meta_parts = []
             if location and location != "Невідоме місце":
                 meta_parts.append(location)
@@ -283,12 +277,10 @@ def overlay_text_on_image(image_path, text, year=None, location=None):
             if meta_parts:
                 meta_text = " | ".join(meta_parts)
                 meta_x = 70
-                meta_y = 1650  # Безпечна зона знизу сторіс
+                meta_y = 1650  
                 
-                # Малюємо темний контур для метаданих
                 for dx, dy in [(-2,-2), (-2,2), (2,-2), (2,2), (-1,0), (1,0), (0,-1), (0,1)]:
                     draw.text((meta_x + dx, meta_y + dy), meta_text, font=font_meta, fill=(0, 0, 0, 240))
-                # Текст метаданих — стильний м'який жовтий колір (як у TikTok)
                 draw.text((meta_x, meta_y), meta_text, font=font_meta, fill=(255, 240, 100))
             
             final_img = img.convert('RGB')
@@ -297,14 +289,18 @@ def overlay_text_on_image(image_path, text, year=None, location=None):
     except Exception as e:
         print(f"⚠️ Помилка графічного накладання тексту на фото: {e}")
 
+# 🌍 ЦЕНТРАЛІЗОВАНИЙ КАСКАДНИЙ ЗАВАНТАЖУВАЧ З ПІДТРИМКОЮ IMGBB
 def get_google_drive_direct_url(file_id, local_file_path=None):
     if local_file_path and os.path.exists(local_file_path):
         filename = os.path.basename(local_file_path)
         lower_name = filename.lower()
         mime_type = "video/mp4" if lower_name.endswith(('.mp4', '.mov', '.avi')) else "image/jpeg"
-        browser_headers = {'User-Agent': 'Mozilla/5.0'}
+        browser_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+        }
         
         # 1️⃣ Catbox.moe
+        print(f"☁️ Завантажуємо сторіс-файл {filename} на Catbox.moe...")
         try:
             with open(local_file_path, 'rb') as f:
                 file_bytes = f.read()
@@ -322,6 +318,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         # 2️⃣ ImageKit.io
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
         if imagekit_key:
+            print(f"☁️ Завантажуємо сторіс-файл {filename} на ImageKit.io...")
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
@@ -335,6 +332,25 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                         return res_data.get('url'), res_data.get('fileId')
             except: pass
 
+        # 3️⃣ ImgBB API (Синхронізовано з основним модулем)
+        imgbb_key = os.environ.get("IMGBB_API_KEY")
+        if imgbb_key and mime_type == "image/jpeg":
+            print(f"☁️ Завантажуємо фото сторіс {filename} на ImgBB API...")
+            try:
+                with open(local_file_path, 'rb') as f:
+                    img_bytes = f.read()
+                if img_bytes:
+                    res = requests.post(
+                        'https://api.imgbb.com/1/upload',
+                        data={'key': imgbb_key, 'expiration': 86400},
+                        files={'image': (filename, img_bytes, mime_type)},
+                        timeout=30
+                    ).json()
+                    if res.get('success'):
+                        return res['data']['url'], None
+            except: pass
+
+    print(f"🚨 Аварійний режим завантаження для Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}", None
 
 def delete_from_imagekit(file_id: str):
