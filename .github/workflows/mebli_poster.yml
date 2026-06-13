@@ -57,7 +57,7 @@ jobs:
     # --- КРОК 2: ЗАПУСК СТОРІС (Аналог команди cd + запуск скрипта сторіс) ---
     - name: Запуск публікатора сторіс (IG Story)
       if: github.event.inputs.forced_mode == 'ig_story'
-      working-directory: global-cms/mebli_instagram_story
+      working-directory: mebli_instagram_story
       env:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
