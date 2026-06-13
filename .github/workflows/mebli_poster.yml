@@ -51,7 +51,7 @@ jobs:
         FB_PAGE_ID: ${{ secrets.MEBLI_FB_PAGE_ID }}
         META_ACCESS_TOKEN: ${{ secrets.MEBLI_META_ACCESS_TOKEN }}
       run: |
-        print("📋 [Система] Режим: [${{ github.event.inputs.forced_mode }}]")
+        echo "📋 [Система] Режим: [${{ github.event.inputs.forced_mode }}]"
         python publish_content_mebli.py ${{ github.event.inputs.forced_mode }} "Меблі"
 
     # --- КРОК 2: ЗАПУСК СТОРІС (Аналог команди cd + запуск скрипта сторіс) ---
