@@ -84,13 +84,14 @@ def main():
             try:
                 final_date, lat, lon = get_intellectual_date(local_path, f_name, f)
                 date_str = final_date.strftime('%d.%m.%Y') if hasattr(final_date, 'strftime') else str(final_date)
+                # Повертає локацію мовою країни, де знято медіафайл
                 display_location, group_location = get_location_data(lat, lon)
             except Exception as e:
                 print(f"⚠️ Помилка автоматичного визначення дати/локації для {f_name}: {e}")
                 date_str = datetime.now().strftime('%d.%m.%Y')
                 display_location, group_location = "", ""
 
-            # Визначення компанії за назвою файлу (працює за ключами з COMPANIES_DB)
+            # Визначення компанії за назвою файлу
             detected_company = "Загальне"
             for key in config.COMPANIES_DB.keys():
                 if key in lower_name:
@@ -121,7 +122,7 @@ def main():
             selected_queue = groups[first_key][:4]
             print(f"📂 [Гаряча Папка] Сформовано чергу: Дата={first_key[0]}, Локація={first_key[1]}. Елементів: {len(selected_queue)}")
             
-            # Видаляємо локальні копії файлів, які не потрапили в поточну чергу запуска
+            # Видаляємо локальні копії файлів, які не потрапили в поточну чергу
             selected_ids = {x["id"] for x in selected_queue}
             for item in hot_group_items:
                 if item["id"] not in selected_ids and os.path.exists(item["local_path"]):
@@ -141,7 +142,7 @@ def main():
             print("ℹ️ Реєстр порожній. Публікувати нічого.")
             return
 
-        col_idx = 4  # Стовпець E (індекс лічильника)
+        col_idx = 4  # Стовпець E (лічильник)
         col_letter = "E"
         valid_rows = []
 
@@ -160,18 +161,18 @@ def main():
             print("ℹ️ Немає доступних рядків для публікації.")
             return
 
-        # Шукаємо мінімальне значення лічильника
+        # Шукаємо мінімальне значення лічильника запуску
         min_counter = min(item["counter"] for item in valid_rows)
         min_pool = [item for item in valid_rows if item["counter"] == min_counter]
 
-        # Групуємо рядки за Категорією, Датою та МІСТОМ (стовпець I, json)
+        # Групуємо рядки за Категорією, Датою та МІСТОМ (стовпець I, JSON)
         groups = {}
         for item in min_pool:
             data = item["data"]
             group_key = (data[2], data[6] if len(data) > 6 else "", data[8] if len(data) > 8 else "")
             groups.setdefault(group_key, []).append(item)
 
-        # Формуємо чергу (до 4-х елементів з першої групи)
+        # Формуємо чергу з першої групи
         first_key = list(groups.keys())[0]
         selected_group_items = groups[first_key][:4]
         category_name, target_date, target_city_json = first_key
@@ -179,7 +180,6 @@ def main():
         
         for item in selected_group_items:
             data = item["data"]
-            
             selected_queue.append({
                 "id": data[0],
                 "name": data[1],
@@ -282,16 +282,18 @@ def main():
         story_caption_text = generate_story_caption([ai_media_snapshot], item["category"], item["date"], lang_idx, item["location"])
         print(f"💬 Сгенерований текст: \"{story_caption_text}\"")
 
-        # Парсинг року та локації під мовний індекс для нанесення на медіафайл
+        # Парсинг року
         try:
             year_variable = item["date"].split(".")[2] if item["date"] and len(item["date"].split(".")) == 3 else str(datetime.now().year)
         except Exception:
             year_variable = str(datetime.now().year)
             
+        # 🌟 БЕЗПЕЧНИЙ ПАРСИНГ ЛОКАЦІЇ (Працює як для JSON, так і для прямого тексту мовою локації)
         try:
             loc_json = json.loads(item["location"])
             location_variable = loc_json.get(str(lang_idx), loc_json.get("0", ""))
         except Exception:
+            # Якщо це чистий текст (Сценарій 1 без accept-language), він падає в цей блок і зберігає мову локації
             location_variable = item["location"]
 
         # 2-3. Оптимізація та накладання тексту на фото/відео
