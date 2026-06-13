@@ -29,6 +29,43 @@ SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/a
 VALID_MEDIA_EXTENSIONS = ('.gif', '.heic', '.heif', '.jpeg', '.jpg', '.mp4', '.png', '.webp', '.mov', '.avi')
 DOCUMENT_EXTENSIONS = ('.pdf', '.doc', '.docx', '.djvu', '.txt', '.rtf', '.fb2', '.epub')
 
+# 🌍 ЦЕНТРАЛІЗОВАНА ЛОКАЛІЗАЦІЯ ІНТЕРФЕЙСУ ПОСТІВ
+LANG_CONFIG = {
+    0: {  # 🇺🇦 Українська
+        "year": "Рік", 
+        "brand": "Виробник", 
+        "loc": "Локація", 
+        "assembly": "Монтаж: Меблі, у монтажі яких ми брали участь (професійне збирання)", 
+        "concept": "Концепт: Цікаві меблеві рішення, тренди та ідеї з усього світу", 
+        "ergonomics": "Ергономіка та проектування: Корисні стандарти та розміри, яких варто дотримуватися при проектуванні меблів.",
+        "link_in_bio": "🔗 Посилання на портфоліо — у шапці нашого профілю!",
+        "fallback_caption": "Чудова робота нашої команди! Як вам результат? 👇😊",
+        "no_gemini_caption": "Якісні меблі для вашого затишку! 👇✨ #меблі #інтерєр"
+    },
+    1: {  # 🇬🇧 Англійська
+        "year": "Year", 
+        "brand": "Manufacturer", 
+        "loc": "Location", 
+        "assembly": "Assembly: Furniture we helped assemble (professional installation)", 
+        "concept": "Concept: Interesting furniture solutions, trends, and ideas from around the world", 
+        "ergonomics": "Ergonomics and Design: Useful standards and dimensions to follow when designing furniture.",
+        "link_in_bio": "🔗 Portfolio link is in our bio!",
+        "fallback_caption": "Great work by our team! How do you like the result? 👇😊",
+        "no_gemini_caption": "Quality furniture for your comfort! 👇✨ #furniture #interiordesign"
+    },
+    2: {  # 🇩🇪 Німецька
+        "year": "Jahr", 
+        "brand": "Hersteller", 
+        "loc": "Standort", 
+        "assembly": "Montage: Möbel, bei deren Montage wir mitgewirkt haben (professioneller Aufbau)", 
+        "concept": "Konzept: Interessante Möbellösungen, Trends und Ideen aus aller Welt", 
+        "ergonomics": "Ergonomie und Konstruktion: Nützliche Standards und Maße, die bei der Möbelkonstruktion beachtet werden sollten.",
+        "link_in_bio": "🔗 Link zum Portfolio finden Sie in unserer Bio!",
+        "fallback_caption": "Tolle Arbeit unseres Teams! Wie gefällt Ihnen das Ergebnis? 👇😊",
+        "no_gemini_caption": "Qualitätsmöbel für Ihr gemütliches Zuhause! 👇✨ #moebel #interieur"
+    }
+}
+
 # 🏢 ГЛОБАЛЬНА БАЗА ДАНИХ КОМПАНІЙ ТА КАТЕГОРІЙ
 COMPANIES_DB = {
     "goncharenko": {
@@ -206,67 +243,77 @@ def delete_from_imagekit(file_id: str):
         print(f"🗑️ Файл {file_id} видалено з ImageKit.")
     except: pass
 
-def get_manufacturer_header(category, date_str, lang_idx, mode):
-    """Генерує естетичний заголовок відповідно до категорії та обраної мови."""
+def get_manufacturer_header(category, date_str, lang_idx, mode, target_loc=None):
+    """Генерує естетичний заголовок відповідно до категорії, обраної мови та локації."""
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
     cat_lower = category.lower()
     
+    # Використовуємо глобальний конфіг локалізації
+    pref = LANG_CONFIG.get(lang_idx, LANG_CONFIG[0])
+    header_lines = []
+
+    invalid_markers = ["невідоме місце", "невідомо", "unknown", "unbekannt", "-", "none", "null"]
+    has_valid_loc = target_loc and not any(marker in str(target_loc).lower() for marker in invalid_markers)
+
     # 1. СПЕЦІАЛЬНІ КАТЕГОРІЇ
     if "montage various" in cat_lower:
-        if lang_idx == 0: return f"📅 Рік: {year}\n🛠️ Монтаж: Меблі, у монтажі яких мы брали участь (професійне збирання)\n\n"
-        elif lang_idx == 1: return f"📅 Year: {year}\n🛠️ Assembly: Furniture we helped assemble (professional installation)\n\n"
-        else: return f"📅 Jahr: {year}\n🛠️ Montage: Möbel, bei deren Montage wir mitgewirkt haben (professioneller Aufbau)\n\n"
+        header_lines.append(f"📅 {pref['year']}: {year}")
+        if has_valid_loc:
+            header_lines.append(f"📍 {pref['loc']}: {target_loc}")
+        header_lines.append(f"🛠️ {pref['assembly']}")
+        return "\n".join(header_lines) + "\n\n"
         
     if "various" in cat_lower:
-        if lang_idx == 0: return f"📅 Рік: {year}\n💡 Концепт: Цікаві меблеві рішення, тренди та ідеї з усього світу\n\n"
-        elif lang_idx == 1: return f"📅 Year: {year}\n💡 Concept: Interesting furniture solutions, trends, and ideas from around the world\n\n"
-        else: return f"📅 Jahr: {year}\n💡 Konzept: Interessante Möbellösungen, Trends und Ideen aus aller Welt\n\n"
+        header_lines.append(f"📅 {pref['year']}: {year}")
+        if has_valid_loc:
+            header_lines.append(f"📍 {pref['loc']}: {target_loc}")
+        header_lines.append(f"💡 {pref['concept']}")
+        return "\n".join(header_lines) + "\n\n"
         
     if "instruktion" in cat_lower:
-        if lang_idx == 0: return "📐 Ергономіка та проектування: Корисні стандарти та розміри, яких варто дотримуватися при проектуванні меблів.\n\n"
-        elif lang_idx == 1: return "📐 Ergonomics and Design: Useful standards and dimensions to follow when designing furniture.\n\n"
-        else: return "📐 Ergonomie und Konstruktion: Nützliche Standards und Maße, die bei der Möbelkonstruktion beachtet werden sollten.\n\n"
+        header_lines.append(f"📐 {pref['ergonomics']}")
+        if has_valid_loc:
+            header_lines.append(f"📍 {pref['loc']}: {target_loc}")
+        return "\n".join(header_lines) + "\n\n"
 
-    # 2. ПОШУК У ГЛОБАЛЬНІЙ БАЗІ
-    prefixes = {
-        0: {"year": "Рік", "brand": "Виробник"},
-        1: {"year": "Year", "brand": "Manufacturer"},
-        2: {"year": "Jahr", "brand": "Hersteller"}
-    }
-    pref = prefixes.get(lang_idx, prefixes[0])
-
+    # 2. ПОШУК У ГЛОБАЛЬНІЙ БАЗІ БРЕНДІВ
     for key, info in COMPANIES_DB.items():
         if key in cat_lower:
             correct_name = info["names"].get(lang_idx, info["names"][0])
-            header_lines = [
-                f"📅 {pref['year']}: {year}",
-                f"🛠️ {pref['brand']}: {correct_name}"
-            ]
-            # Логіка розподілу посилань залежно від платформи
-            if "ig_" in mode:  # Для ig_post або ig_story
+            header_lines.append(f"📅 {pref['year']}: {year}")
+            if has_valid_loc:
+                header_lines.append(f"📍 {pref['loc']}: {target_loc}")
+            header_lines.append(f"🛠️ {pref['brand']}: {correct_name}")
+            
+            # Розподіл посилань залежно від платформи (FB чи IG) з локалізацією заклику
+            if "ig_" in mode:
                 if info.get("ig_handle"):
-                    header_lines.append(f"📸 Instagram: {info['ig_handle']}")
-                header_lines.append("🔗 Посилання на портфоліо — у шапці нашого профілю! (Link in Bio)")
-            else:  # Для fb_post
+                    if isinstance(info['ig_handle'], list):
+                        for handle in info['ig_handle']:
+                            header_lines.append(f"📸 Instagram: {handle}")
+                    else:
+                        header_lines.append(f"📸 Instagram: {info['ig_handle']}")
+                header_lines.append(pref["link_in_bio"])
+            else:
                 if info.get("links"):
                     header_lines.extend(info["links"])
                     
             return "\n".join(header_lines) + "\n\n"
             
-    return ""
+    header_lines.append(f"📅 {pref['year']}: {year}")
+    if has_valid_loc:
+        header_lines.append(f"📍 {pref['loc']}: {target_loc}")
+    return "\n".join(header_lines) + "\n\n"
 
 def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
-    """ШІ аналізує зображення та генерує натхненний опис, знаючи реальне ім'я бренду."""
     gemini_key = os.environ.get("GEMINI_API_KEY")
+    pref = LANG_CONFIG.get(lang_idx, LANG_CONFIG[0])
     
     if not gemini_key:
-        if lang_idx == 0: return "Якісні меблі для вашого затишку! 👇✨ #меблі #інтерєр"
-        elif lang_idx == 1: return "Quality furniture for your comfort! 👇✨ #furniture #interiordesign"
-        else: return "Qualitätsmöbel für Ihr gemütliches Zuhause! 👇✨ #moebel #interieur"
+        return pref["no_gemini_caption"]
 
-    # 🔍 ВИЗНАЧЕННЯ РЕАЛЬНОГО ІМЕНІ ДЛЯ ШІ
     cat_lower = category.lower()
-    real_manufacturer = category # фолбек, якщо не знайдено збігів
+    real_manufacturer = category 
     
     if "montage various" in cat_lower:
         real_manufacturer = "Професійний монтаж та збирання меблів" if lang_idx == 0 else "Professional furniture installation"
@@ -275,7 +322,6 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
     elif "instruktion" in cat_lower:
         real_manufacturer = "Конструкторські стандарти та ергономіка меблів" if lang_idx == 0 else "Furniture design standards and ergonomics"
     else:
-        # Шукаємо реальний бренд у базі
         for key, info in COMPANIES_DB.items():
             if key in cat_lower:
                 real_manufacturer = info["names"].get(lang_idx, info["names"][0])
@@ -289,7 +335,6 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
         2: "Schreibe den Text ausschließlich auf DEUTSCH. Nutze Emojis."
     }
     
-    # Промпт тепер містить точну назву виробника/категорії
     prompt = (
         f"Ти професійний копірайтер та меблевий експерт. Подивись на ці зображення. "
         f"Напиши один короткий, натхненний пост для соцмереж. "
@@ -322,11 +367,11 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
                 continue
                 
         print("⚠️ Жодна з моделей Gemini не відповіла успішно, активовано дефолт.")
-        return "Чудова робота нашої команди! Як вам результат? 👇😊"
+        return pref["fallback_caption"]
         
     except Exception as e:
         print(f"⚠️ Критична помилка виконання функції ШІ: {e}")
-        return "Чудова робота нашої команди! Як вам результат? 👇😊"
+        return pref["fallback_caption"]
 
 def wait_for_meta_container(container_id, access_token):
     """Очікує завершення асинхронної обробки відео/медіа контейнера в Meta API."""
@@ -353,7 +398,7 @@ def main():
         print("💡 Необхідно передати параметри. Запуск: python script.py <mode> <tab_name>")
         sys.exit(1)
 
-    mode = sys.argv[1].lower()  # fb_post, ig_post
+    mode = sys.argv[1].lower()  
     forced_tab = sys.argv[2]
     
     current_tab = forced_tab if forced_tab else TAB_NAME
@@ -361,16 +406,12 @@ def main():
     
     drive, sheets = get_services()
 
-    # 🔄 Зміна діапазону з A2:H на A2:I для врахування нової 9-ї колонки "Місто (Групування)"
     res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{current_tab}'!A2:I").execute()
     rows = res.get('values', [])
     if not rows:
         print("ℹ️ Реєстр порожній.")
         return
 
-    # =====================================================================
-    # 🎯 ДИНАМІЧНЕ ВИЗНАЧЕННЯ КОЛОНКИ ЛІЧИЛЬНИКА ВІДПОВІДНО ДО РЕЖИМУ
-    # =====================================================================
     if mode == "ig_post":
         col_idx = 3
         col_letter = "D"
@@ -413,7 +454,6 @@ def main():
     # 🌐 Управління мовами через фіксовані комірки F2, G2
     # =====================================================================
     lang_value = "UK"
-    
     if mode == "fb_post":
         target_lang_cell = "'⚙️ Налаштування Папок'!F2"
     else:
@@ -509,12 +549,10 @@ def main():
         print("ℹ️ Немає доступних медіафайлів для публікації.")
         return
 
-    header_text = get_manufacturer_header(category_name, target_date, lang_idx, mode)
+    header_text = get_manufacturer_header(category_name, target_date, lang_idx, mode, target_loc)
     ai_text = generate_multimodal_caption(ai_analysis_images, category_name, target_date, lang_idx)
-    loc_footer = f"\n\n📍 Локація: {target_loc}" if target_loc and "Невідоме місце" not in target_loc else ""
-    full_caption = f"{header_text}{ai_text}{loc_footer}"
+    full_caption = f"{header_text}{ai_text}"
 
-    # 🚨 АВАРІЙНЕ ЗАВЕРШЕННЯ, якщо відсутні ID для дистриб'юції
     if not FB_PAGE_ID and mode == "fb_post":
         print("❌ Відсутній FB_PAGE_ID для публікації у Facebook!")
         sys.exit(1)
@@ -556,7 +594,7 @@ def main():
     # ==========================================
     elif mode == "ig_post":
         if len(cloud_urls) > 1:
-            print(f"🗂️ Створення каруселі Instagram з {len(cloud_urls)} elements...")
+            print(f"🗂️ Створення каруселі Instagram з {len(cloud_urls)} елементів...")
             container_ids = []
             for url in cloud_urls:
                 is_vid = url.lower().split('?')[0].endswith(('.mp4', '.mov', '.avi')) or "video" in url
@@ -608,7 +646,6 @@ def main():
                 
             print("🚀 Фінальна публікація контейнера в Instagram стрічку...")
             
-            # 🔄 Цикл повторних спроб для медіафайлів, що публікуються
             for attempt in range(6):
                 publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
                     "creation_id": creation_id, "access_token": META_ACCESS_TOKEN
@@ -657,17 +694,14 @@ def main():
                 delete_from_imagekit(ik_id)
             
     else:
-        # 🚨 АВАРІЙНЕ ЗАВЕРШЕННЯ у разі невдалої публікації в Meta API
         print(f"❌ Помилка дистриб'юції контенту Meta API: {res}")
         for f in local_files:
             if os.path.exists(f):
                 try: os.remove(f)
                 except: pass
-        print("🧹 Тимчасова папка очищена.")
-        print("🚨 Скрипт зупинено аварійно через помилку публікації.")
+        print("🧹 Тимчасова папка очищена. Скрипт зупинено аварійно.")
         sys.exit(1)
 
-    # Стандартне очищення після успішної роботи
     for f in local_files:
         if os.path.exists(f):
             try: os.remove(f)
