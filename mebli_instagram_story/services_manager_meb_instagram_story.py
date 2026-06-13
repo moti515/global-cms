@@ -1,12 +1,25 @@
+import os
+import json
+import time
+import base64
+import requests
+import subprocess
+from datetime import datetime
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+
+# Явно імпортуємо оптимізований конфіг для централізованого доступу до налаштувань
+import config_meb_insta_story as config
+
 def get_services():
     key_dict = json.loads(os.environ['GDRIVE_SERVICE_ACCOUNT_KEY'])
-    creds = service_account.Credentials.from_service_account_info(key_dict, scopes=SCOPES)
+    creds = service_account.Credentials.from_service_account_info(key_dict, scopes=config.SCOPES)
     return build('drive', 'v3', credentials=creds), build('sheets', 'v4', credentials=creds)
 
 def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="непідтримуваний формат"):
     try:
         res = sheets_service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:E"
+            spreadsheetId=config.SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:E"
         ).execute()
         rows = res.get('values', [])
         
@@ -14,7 +27,7 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
             if len(row) > 1 and row[1] == folder_name:
                 range_to_update = f"'⚙️ Налаштування Папок'!E{idx + 2}"
                 sheets_service.spreadsheets().values().update(
-                    spreadsheetId=SPREADSHEET_ID, range=range_to_update,
+                    spreadsheetId=config.SPREADSHEET_ID, range=range_to_update,
                     valueInputOption='RAW', body={'values': [[f"⚠️ {reason}: {file_name}"]]}
                 ).execute()
                 print(f"📝 Зафіксовано системне попередження для [{folder_name}] на службовому аркуші.")
@@ -22,7 +35,6 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
     except Exception as e:
         print(f"❌ Не вдалося записати помилку на службовий аркуш: {e}")
 
-  # 🌍 ЦЕНТРАЛІЗОВАНИЙ КАСКАДНИЙ ЗАВАНТАЖУВАЧ З ПІДТРИМКОЮ IMGBB
 def get_google_drive_direct_url(file_id, local_file_path=None):
     if local_file_path and os.path.exists(local_file_path):
         filename = os.path.basename(local_file_path)
@@ -65,7 +77,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                         return res_data.get('url'), res_data.get('fileId')
             except: pass
 
-        # 3️⃣ ImgBB API (Синхронізовано з основним модулем)
+        # 3️⃣ ImgBB API
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and mime_type == "image/jpeg":
             print(f"☁️ Завантажуємо фото сторіс {filename} на ImgBB API...")
@@ -93,13 +105,12 @@ def delete_from_imagekit(file_id: str):
     try: requests.delete(f"https://api.imagekit.io/v1/files/{file_id}", auth=(imagekit_key, ''), timeout=15)
     except: pass
 
-  # 🧠 ШІ ГЕНЕРАЦІЯ ЛАКОНІЧНОГО ОПИСУ ДЛЯ КОНКРЕТНОЇ СТОРІС
 def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc):
     gemini_key = os.environ.get("GEMINI_API_KEY")
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
     
-    # Використовуємо глобальний конфіг для фолбеків
-    pref = LANG_CONFIG.get(lang_idx, LANG_CONFIG[0])
+    # Фолбеки беремо з очищеного LANG_CONFIG
+    pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
     
     # --- БЛОК ОБРОБКИ БАГАТОМОВНОЇ ЛОКАЦІЇ ---
     resolved_loc = ""
@@ -116,22 +127,24 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     invalid_markers = ["невідоме місце", "невідомо", "unknown", "unbekannt", "-", "none", "null", "невідоме місто"]
     if any(marker in resolved_loc.lower() for marker in invalid_markers):
         resolved_loc = ""
-    # -----------------------------------------------
 
-    # --- ВИЗНАЧЕННЯ БРЕНДУ ТА СПЕЦ-КАТЕГОРІЙ ---
+    # --- ДИНАМІЧНЕ ВИЗНАЧЕННЯ БРЕНДУ ТА КАТЕГОРІЙ (БЕЗ ХАРДКОДУ) ---
     cat_lower = category.lower()
     real_manufacturer = category
+    matched_special = False
     
-    if "montage various" in cat_lower:
-        real_manufacturer = "Професійний монтаж меблів" if lang_idx == 0 else "Professional furniture installation"
-    elif "various" in cat_lower:
-        real_manufacturer = "Сучасні меблеві тренди" if lang_idx == 0 else "Modern furniture concepts"
-    elif "instruktion" in cat_lower:
-        real_manufacturer = "Конструкторські стандарти" if lang_idx == 0 else "Furniture design standards"
-    else:
-        for key, info in COMPANIES_DB.items():
+    # 1. Перевіряємо системні спец-категорії з LANG_CONFIG
+    for spec_key, spec_translation in pref.get("categories", {}).items():
+        if spec_key in cat_lower:
+            real_manufacturer = spec_translation
+            matched_special = True
+            break
+            
+    # 2. Якщо це не системна категорія — шукаємо збіг у спрощеній базі COMPANIES_DB
+    if not matched_special:
+        for key, names_dict in config.COMPANIES_DB.items():
             if key in cat_lower:
-                real_manufacturer = info["names"].get(lang_idx, info["names"][0])
+                real_manufacturer = names_dict.get(lang_idx, names_dict.get(0, category))
                 break
 
     if not gemini_key:
