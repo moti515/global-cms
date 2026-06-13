@@ -152,33 +152,53 @@ def get_video_metadata(video_path):
         print(f"⚠️ Помилка відео-метаданих для {video_path}: {e}")
     return date_str, lat, lon
 
-def get_location_data(lat, lon):
-    """Повертає точне місце та місто для кластеризації українською мовою."""
+def get_location_data_multilang(lat, lon):
+    """
+    Звертається до OSM Nominatim для трьох мов (UK, EN, DE).
+    Повертає дві компактні JSON-строки: для точного місця та міста групування.
+    """
     if lat is None or lon is None: 
         return "Невідоме місце", "Невідоме місто"
-    try:
-        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15&accept-language=uk"
-        headers = {'User-Agent': 'FurnitureCMS_Bot_2026'}
-        res = requests.get(url, headers=headers, timeout=10).json()
-        address = res.get('address', {})
-        
-        # 1. Точний об'єкт (назва, район або вулиця)
-        exact_place = (
-            address.get('tourism') or address.get('amenity') or 
-            address.get('historic') or address.get('suburb') or 
-            address.get('city') or address.get('town') or address.get('village')
-        )
-        country = address.get('country')
-        display_location = f"{exact_place}, {country}" if exact_place and country else (exact_place or country or "Невідоме місце")
-        
-        # 2. Стабільна назва населеного пункту для групування
-        group_place = address.get('city') or address.get('town') or address.get('village') or address.get('county')
-        group_location = f"{group_place}, {country}" if group_place and country else (group_place or country or "Невідоме місто")
-        
-        return display_location, group_location
-    except Exception as e:
-        print(f"⚠️ Помилка геокодування OSM: {e}")
-        return "Невідоме місце", "Невідоме місто"
+
+    headers = {'User-Agent': 'FurnitureCMS_Bot_2026'}
+    
+    # Словники для накопичення результатів під кожну мову-індекс
+    exact_translations = {}
+    group_translations = {}
+    
+    languages = {0: 'uk', 1: 'en', 2: 'de'}
+    
+    for idx, lang_code in languages.items():
+        try:
+            url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15&accept-language={lang_code}"
+            res = requests.get(url, headers=headers, timeout=5).json()
+            address = res.get('address', {})
+            country = address.get('country')
+            
+            # 1. Формуємо точне місце (колонку 8)
+            exact_place = (
+                address.get('tourism') or address.get('amenity') or 
+                address.get('historic') or address.get('suburb') or 
+                address.get('city') or address.get('town') or address.get('village')
+            )
+            display_location = f"{exact_place}, {country}" if exact_place and country else (exact_place or country or "Unknown")
+            exact_translations[str(idx)] = display_location
+            
+            # 2. Формуємо стабільне місто для групування (колонку 9)
+            group_place = address.get('city') or address.get('town') or address.get('village') or address.get('county')
+            group_location = f"{group_place}, {country}" if group_place and country else (group_place or country or "Unknown")
+            group_translations[str(idx)] = group_location
+            
+            # Дотримуємось правил використання сервісу OSM Nominatim
+            time.sleep(1) 
+            
+        except Exception as e:
+            print(f"⚠️ Помилка геокодування OSM ({lang_code}): {e}")
+            exact_translations[str(idx)] = "Невідоме місце"
+            group_translations[str(idx)] = "Невідоме місто"
+
+    # Конвертуємо словники в JSON-рядки
+    return json.dumps(exact_translations, ensure_ascii=False), json.dumps(group_translations, ensure_ascii=False)
 
 def get_intellectual_date(f_info, meta_date):
     """Каскадне визначення реальної дати створення об'єкта з валідацією року."""
@@ -279,10 +299,8 @@ def download_and_extract_meta(drive_service, file_id, f_info):
     file_dt = get_intellectual_date(f_info, meta_date)
     file_date_str = file_dt.strftime('%d.%m.%Y')
     
-    # Геокодування (Повертає 2 значення: точне місце та місто для групування)
-    if lat and lon:
-        time.sleep(1)  # Захист лімітів OSM Nominatim
-    display_loc, group_loc = get_location_data(lat, lon)
+    # Інтегрована нова функція: отримуємо дві структуровані JSON-строки
+    display_loc, group_loc = get_location_data_multilang(lat, lon)
 
     if os.path.exists(local_path): os.remove(local_path)
     return file_date_str, display_loc, group_loc
