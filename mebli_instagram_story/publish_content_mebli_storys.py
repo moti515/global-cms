@@ -4,6 +4,7 @@ import json
 import time
 import requests
 import subprocess
+import re  # 💡 Додано для безпечної фільтрації імен
 from datetime import datetime
 from googleapiclient.http import MediaIoBaseDownload
 from PIL import Image
@@ -12,6 +13,23 @@ from PIL import Image
 import config_meb_insta_story as config
 from media_processor_meb_instagram_story import *
 from services_manager_meb_instagram_story import *
+
+def sanitize_filename(filename):
+    """
+    Замінює кирилицю, пробіли та спецсимволи на дефіси, 
+    зберігаючи розширення, щоб уникнути збоїв у FFmpeg/PIL.
+    """
+    name, ext = os.path.splitext(filename)
+    # Замінюємо все, що НЕ є латиницею, цифрою, дефісом чи підкресленням, на дефіс
+    sanitized_name = re.sub(r'[^a-zA-Z0-9_\-]', '-', name)
+    # Прибираємо подвійні дефіси, якщо вони утворилися
+    sanitized_name = re.sub(r'-+', '-', sanitized_name).strip('-')
+    
+    # Фолбек, якщо ім'я повністю складалося з кирилиці і стало пустим
+    if not sanitized_name:
+        sanitized_name = f"media_{int(time.time())}"
+        
+    return f"{sanitized_name}{ext.lower()}"
 
 def main():
     # 0. Перевірка вхідних параметрів воркфлоу
@@ -66,8 +84,11 @@ def main():
                 print(f"⚠️ Файл [{f_name}] має непідтримуваний формат для Сторіс. Пропускаємо.")
                 continue
             
-            local_path = os.path.join('temp_mebli', f_name)
-            print(f"📥 Попереднє завантаження для аналізу метаданих: {f_name}...")
+            # 🌟 ЗАХИСТ: Очищаємо назву файлу для локального збереження
+            safe_local_name = sanitize_filename(f_name)
+            local_path = os.path.join('temp_mebli', safe_local_name)
+            
+            print(f"📥 Попереднє завантаження для аналізу метаданих: {f_name} -> {safe_local_name}...")
             try:
                 request = drive.files().get_media(fileId=f_id)
                 with open(local_path, 'wb') as fh:
@@ -91,7 +112,7 @@ def main():
                 date_str = datetime.now().strftime('%d.%m.%Y')
                 display_location, group_location = "", ""
 
-            # Визначення компанії за назвою файлу
+            # Визначення компанії за назвою файлу (шукаємо в оригінальній назві)
             detected_company = "Загальне"
             for key in config.COMPANIES_DB.keys():
                 if key in lower_name:
@@ -101,6 +122,7 @@ def main():
             hot_group_items.append({
                 "id": f_id,
                 "name": f_name,
+                "safe_local_name": safe_local_name, # зберігаємо безпечне ім'я
                 "local_path": local_path,
                 "category": detected_company,
                 "date": date_str,
@@ -122,7 +144,7 @@ def main():
             selected_queue = groups[first_key][:4]
             print(f"📂 [Гаряча Папка] Сформовано чергу: Дата={first_key[0]}, Локація={first_key[1]}. Елементів: {len(selected_queue)}")
             
-            # Видаляємо локальні копії файлів, які не потрапили в поточну чергу
+            # Видаляємо локальні копії файлів, які не потрапили в поточную чергу
             selected_ids = {x["id"] for x in selected_queue}
             for item in hot_group_items:
                 if item["id"] not in selected_ids and os.path.exists(item["local_path"]):
@@ -234,8 +256,11 @@ def main():
                 log_unsupported_to_service(sheets, item["category"], f_name, reason="непідтримуваний формат для сторіз")
                 continue
 
-            local_path = os.path.join('temp_mebli', f_name)
-            print(f"\n📥 [{idx_item + 1}/{len(selected_queue)}] Завантаження з Drive: {f_name}...")
+            # 🌟 ЗАХИСТ: Очищаємо назву файлу з таблиці перед збереженням на диск
+            safe_local_name = sanitize_filename(f_name)
+            local_path = os.path.join('temp_mebli', safe_local_name)
+            
+            print(f"\n📥 [{idx_item + 1}/{len(selected_queue)}] Завантаження з Drive: {f_name} -> {safe_local_name}...")
             try:
                 request = drive.files().get_media(fileId=f_id)
                 with open(local_path, 'wb') as fh:
@@ -249,21 +274,23 @@ def main():
                 continue
         else:
             local_path = item["local_path"]
-            print(f"\n🎬 [{idx_item + 1}/{len(selected_queue)}] Обробка файлу з гарячої папки: {f_name}...")
+            safe_local_name = item["safe_local_name"]
+            print(f"\n🎬 [{idx_item + 1}/{len(selected_queue)}] Обробка файлу з гарячої папки: {safe_local_name}...")
 
         final_path = local_path
-        is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
+        # Перевірку розширення робимо по safe_local_name, воно гарантовано приведене до нижнього регістру в sanitize_filename
+        is_video = safe_local_name.endswith(('.mp4', '.mov', '.avi'))
         
         # Обробка HEIC
-        if lower_name.endswith(('.heic', '.heif')):
-            jpg_path = os.path.join('temp_mebli', f_name.rsplit('.', 1)[0] + '.jpg')
+        if safe_local_name.endswith(('.heic', '.heif')):
+            jpg_path = os.path.join('temp_mebli', safe_local_name.rsplit('.', 1)[0] + '.jpg')
             try:
                 with Image.open(local_path) as img:
                     img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
                 final_path = jpg_path
                 local_files_to_clean.append(jpg_path)
             except Exception as e:
-                print(f"❌ Помилка конвертації HEIC для {f_name}: {e}")
+                print(f"❌ Помилка конвертації HEIC для {safe_local_name}: {e}")
                 has_global_failures = True
                 continue
 
@@ -288,25 +315,24 @@ def main():
         except Exception:
             year_variable = str(datetime.now().year)
             
-        # 🌟 БЕЗПЕЧНИЙ ПАРСИНГ ЛОКАЦІЇ (Працює як для JSON, так і для прямого тексту мовою локації)
+        # 🌟 БЕЗПЕЧНИЙ ПАРСИНГ ЛОКАЦІЇ
         try:
             loc_json = json.loads(item["location"])
             location_variable = loc_json.get(str(lang_idx), loc_json.get("0", ""))
         except Exception:
-            # Якщо це чистий текст (Сценарій 1 без accept-language), він падає в цей блок і зберігає мову локації
             location_variable = item["location"]
 
-        # 2-3. Оптимізація та накладання тексту на фото/відео
+        # 2-3. Оптимізація та накладання тексту на фото/відео (передаємо очищений safe_local_name)
         media_parts_to_upload = []
         try:
             if is_video:
-                media_parts_to_upload = optimize_video_story(final_path, f_name, story_caption_text, year=year_variable, location=location_variable)
+                media_parts_to_upload = optimize_video_story(final_path, safe_local_name, story_caption_text, year=year_variable, location=location_variable)
             else:
-                optimized_path = optimize_image_story(final_path, f_name)
+                optimized_path = optimize_image_story(final_path, safe_local_name)
                 overlay_text_on_image(optimized_path, story_caption_text, year=year_variable, location=location_variable)
                 media_parts_to_upload = [optimized_path]
         except Exception as e:
-            print(f"❌ Помилка рендерингу/оптимізації файлу {f_name}: {e}")
+            print(f"❌ Помилка рендерингу/оптимізації файлу {safe_local_name}: {e}")
             has_global_failures = True
             continue
 
@@ -316,7 +342,7 @@ def main():
         # Завантаження та публікація у Meta API
         for sub_idx, active_path in enumerate(media_parts_to_upload):
             if len(media_parts_to_upload) > 1:
-                print(f"📦 Обробка фрагмента [{sub_idx + 1}/{len(media_parts_to_upload)}] для файлу {f_name}...")
+                print(f"📦 Обробка фрагмента [{sub_idx + 1}/{len(media_parts_to_upload)}] для файлу {safe_local_name}...")
                 
             if active_path != final_path and active_path != local_path:
                 local_files_to_clean.append(active_path)
@@ -374,7 +400,7 @@ def main():
         if all_parts_successful and media_parts_to_upload:
             item_published_successfully = True
         else:
-            print(f"⚠️ Файл [{f_name}] опубліковано не повністю. Він залишається у черзі.")
+            print(f"⚠️ Файл [{safe_local_name}] опубліковано не повністю. Він залишається у черзі.")
 
         # --- ФІНАЛІЗАЦІЯ СТАТУСІВ ЕЛЕМЕНТІВ ---
         if item_published_successfully:
