@@ -351,7 +351,7 @@ def wait_for_meta_container(container_id, access_token):
 def main():
     if len(sys.argv) < 3:
         print("💡 Необхідно передати параметри. Запуск: python script.py <mode> <tab_name>")
-        return
+        sys.exit(1)
 
     mode = sys.argv[1].lower()  # fb_post, ig_post
     forced_tab = sys.argv[2]
@@ -361,7 +361,8 @@ def main():
     
     drive, sheets = get_services()
 
-    res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{current_tab}'!A2:H").execute()
+    # 🔄 Зміна діапазону з A2:H на A2:I для врахування нової 9-ї колонки "Місто (Групування)"
+    res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{current_tab}'!A2:I").execute()
     rows = res.get('values', [])
     if not rows:
         print("ℹ️ Реєстр порожній.")
@@ -378,7 +379,7 @@ def main():
         col_letter = "F"
     else:
         print(f"❌ Невідомий або непідтримуваний режим публікації: {mode}")
-        return
+        sys.exit(1)
 
     valid_rows = []
     for i, r in enumerate(rows):
@@ -513,12 +514,13 @@ def main():
     loc_footer = f"\n\n📍 Локація: {target_loc}" if target_loc and "Невідоме місце" not in target_loc else ""
     full_caption = f"{header_text}{ai_text}{loc_footer}"
 
+    # 🚨 АВАРІЙНЕ ЗАВЕРШЕННЯ, якщо відсутні ID для дистриб'юції
     if not FB_PAGE_ID and mode == "fb_post":
         print("❌ Відсутній FB_PAGE_ID для публікації у Facebook!")
-        return
+        sys.exit(1)
     if not IG_USER_ID and mode == "ig_post":
         print("❌ Відсутній IG_USER_ID для публікації в Instagram!")
-        return
+        sys.exit(1)
 
     res = None
 
@@ -554,7 +556,7 @@ def main():
     # ==========================================
     elif mode == "ig_post":
         if len(cloud_urls) > 1:
-            print(f"🗂️ Створення каруселі Instagram з {len(cloud_urls)} елементів...")
+            print(f"🗂️ Створення каруселі Instagram з {len(cloud_urls)} elements...")
             container_ids = []
             for url in cloud_urls:
                 is_vid = url.lower().split('?')[0].endswith(('.mp4', '.mov', '.avi')) or "video" in url
@@ -614,7 +616,6 @@ def main():
                 
                 if "error" in publish_res:
                     err = publish_res["error"]
-                    # Перевіряємо за кодом або субкодом неготовності медіафайлу
                     if err.get("error_subcode") == 2207027 or err.get("code") == 9007:
                         print(f"⏳ Медіафайл ще обробляється серверами Meta (Спроба {attempt + 1}/6). Очікуємо 10 секунд...")
                         time.sleep(10)
@@ -656,8 +657,17 @@ def main():
                 delete_from_imagekit(ik_id)
             
     else:
+        # 🚨 АВАРІЙНЕ ЗАВЕРШЕННЯ у разі невдалої публікації в Meta API
         print(f"❌ Помилка дистриб'юції контенту Meta API: {res}")
+        for f in local_files:
+            if os.path.exists(f):
+                try: os.remove(f)
+                except: pass
+        print("🧹 Тимчасова папка очищена.")
+        print("🚨 Скрипт зупинено аварійно через помилку публікації.")
+        sys.exit(1)
 
+    # Стандартне очищення після успішної роботи
     for f in local_files:
         if os.path.exists(f):
             try: os.remove(f)
