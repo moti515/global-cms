@@ -1,14 +1,14 @@
 import os
 import sys
 import json
-import shutil
+import time
 import requests
 import subprocess
 from datetime import datetime
 from googleapiclient.http import MediaIoBaseDownload
 from PIL import Image
 
-# Імпорт ваших модулів конфігурації та сервісів
+# Імпорт модулів конфігурації та сервісів
 import config_meb_insta_story as config
 from media_processor import *
 from services_manager import *
@@ -90,7 +90,7 @@ def main():
                 date_str = datetime.now().strftime('%d.%m.%Y')
                 display_location, group_location = "", ""
 
-            # Визначення компанії за назвою файлу
+            # Визначення компанії за назвою файлу (працює за ключами з COMPANIES_DB)
             detected_company = "Загальне"
             for key in config.COMPANIES_DB.keys():
                 if key in lower_name:
@@ -121,7 +121,7 @@ def main():
             selected_queue = groups[first_key][:4]
             print(f"📂 [Гаряча Папка] Сформовано чергу: Дата={first_key[0]}, Локація={first_key[1]}. Елементів: {len(selected_queue)}")
             
-            # Видаляємо локальні копії файлів, які не потрапили в поточну чергу запуску
+            # Видаляємо локальні копії файлів, які не потрапили в поточну чергу запуска
             selected_ids = {x["id"] for x in selected_queue}
             for item in hot_group_items:
                 if item["id"] not in selected_ids and os.path.exists(item["local_path"]):
@@ -164,18 +164,17 @@ def main():
         min_counter = min(item["counter"] for item in valid_rows)
         min_pool = [item for item in valid_rows if item["counter"] == min_counter]
 
-        # 🔄 ЗМІНА ТУТ: Групуємо рядки за Категорією, Датою та МІСТОМ (data[8] замість data[7])
+        # Групуємо рядки за Категорією, Датою та МІСТОМ (стовпець I, json)
         groups = {}
         for item in min_pool:
             data = item["data"]
-            # Замість data[7] (точне місце) беремо стовпець I (індекс 8 - місто групування)
             group_key = (data[2], data[6] if len(data) > 6 else "", data[8] if len(data) > 8 else "")
             groups.setdefault(group_key, []).append(item)
 
         # Формуємо чергу (до 4-х елементів з першої групи)
         first_key = list(groups.keys())[0]
         selected_group_items = groups[first_key][:4]
-        category_name, target_date, target_city_json = first_key # Тепер тут JSON міста
+        category_name, target_date, target_city_json = first_key
         print(f"📂 Обрано групу з Таблиці: [{category_name}]. Елементів у черзі: {len(selected_group_items)}")
         
         for item in selected_group_items:
@@ -187,14 +186,13 @@ def main():
                 "local_path": None,
                 "category": category_name,
                 "date": target_date,
-                "location": target_city_json,  # 🎯 Тепер сюди передається чисте місто для ШІ та титрів
-                "exact_location": data[7] if len(data) > 7 else "",  # Зберігаємо точну адресу про всяк випадок
+                "location": target_city_json,  
+                "exact_location": data[7] if len(data) > 7 else "",  
                 "mode": "sheet",
                 "counter_cell": f"'{current_tab}'!{col_letter}{item['row_idx']}",
                 "counter_val": item["counter"]
             })
 
-    # Перевірка наявності елементів у черзі
     if not selected_queue:
         print("ℹ️ Черга порожня. Публікувати нічого.")
         return
@@ -231,7 +229,6 @@ def main():
         f_id, f_name = item["id"], item["name"]
         lower_name = f_name.lower()
         
-        # Якщо файл із таблиці — скачуємо його зараз
         if item["mode"] == "sheet":
             if not lower_name.endswith(config.VALID_MEDIA_EXTENSIONS):
                 log_unsupported_to_service(sheets, item["category"], f_name, reason="непідтримуваний формат для сторіз")
@@ -257,7 +254,7 @@ def main():
         final_path = local_path
         is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
         
-        # Обробка та конвертація HEIC форматів
+        # Обробка HEIC
         if lower_name.endswith(('.heic', '.heif')):
             jpg_path = os.path.join('temp_mebli', f_name.rsplit('.', 1)[0] + '.jpg')
             try:
@@ -272,7 +269,7 @@ def main():
 
         local_files_to_clean.append(local_path)
 
-        # Створення стоп-кадру відео для аналізу через Gemini AI
+        # Створення стоп-кадру для відео аналізу Gemini
         ai_media_snapshot = final_path
         if is_video:
             frame_path = os.path.join('temp_mebli', f"frame_{f_id}.jpg")
@@ -314,7 +311,7 @@ def main():
         item_published_successfully = False
         all_parts_successful = True  
 
-        # Послідовне завантаження фрагментів у CDN та публікація у Meta API
+        # Завантаження та публікація у Meta API
         for sub_idx, active_path in enumerate(media_parts_to_upload):
             if len(media_parts_to_upload) > 1:
                 print(f"📦 Обробка фрагмента [{sub_idx + 1}/{len(media_parts_to_upload)}] для файлу {f_name}...")
@@ -322,7 +319,6 @@ def main():
             if active_path != final_path and active_path != local_path:
                 local_files_to_clean.append(active_path)
 
-            # 4. Завантаження на CDN (через ImageKit або Google Drive)
             pub_url, ik_id = get_google_drive_direct_url(f_id, local_file_path=active_path)
             
             if not pub_url:
@@ -331,26 +327,21 @@ def main():
                 all_parts_successful = False
                 continue
 
-            # 5. Публікація в Meta API
             print(f"📡 Надсилання сторіз в Meta API...")
             param_type = "video_url" if is_video else "image_url"
             payload = {
                 "media_type": "STORIES",
-                param_type: pub_url,
+                "param_type": pub_url,
                 "access_token": meta_access_token
             }
             
             try:
-                # Етап А: Створення медіа-контейнера Сторіс
                 res = requests.post(f"https://graph.facebook.com/v19.0/{ig_user_id}/media", data=payload).json()
-                
                 if res and "id" in res:
                     creation_id = res["id"]
-                    # Етап Б: Очікування готовності контейнера в Meta
                     is_ready = wait_for_meta_container(creation_id, meta_access_token)
                     
                     if is_ready:
-                        # Етап В: Фінальна публікація контейнера в Instagram сторіс
                         publish_res = requests.post(f"https://graph.facebook.com/v19.0/{ig_user_id}/media_publish", data={
                             "creation_id": creation_id, "access_token": meta_access_token
                         }).json()
@@ -375,19 +366,16 @@ def main():
                 has_global_failures = True
                 all_parts_successful = False
 
-            # Видаляємо тимчасовий кеш файлу з ImageKit CDN
             if ik_id: 
                 delete_from_imagekit(ik_id)
 
-        # Визначаємо повний успіх файлу (всі шматочки/фрагменти завантажилися успішно)
         if all_parts_successful and media_parts_to_upload:
             item_published_successfully = True
         else:
-            print(f"⚠️ Файл [{f_name}] опубліковано не повністю. Він залишається у черзі на наступний прохід.")
+            print(f"⚠️ Файл [{f_name}] опубліковано не повністю. Він залишається у черзі.")
 
         # --- ФІНАЛІЗАЦІЯ СТАТУСІВ ЕЛЕМЕНТІВ ---
         if item_published_successfully:
-            # Сценарій 2: Збільшуємо лічильник у таблиці для використаних рядків (+1)
             if item["mode"] == "sheet":
                 new_val = item["counter_val"] + 1
                 try:
@@ -399,7 +387,6 @@ def main():
                 except Exception as e:
                     print(f"⚠️ Не вдалося зберегти лічильник: {e}")
             
-            # Сценарій 1: Переносимо опубліковане з гарячої папки в кошик на Диску
             elif item["mode"] == "hot_folder":
                 try:
                     file_meta = drive.files().get(fileId=f_id, fields='parents').execute()
@@ -414,7 +401,7 @@ def main():
                 except Exception as e:
                     print(f"⚠️ Не вдалося перемістити файл {f_name} до кошика: {e}")
 
-    # Оновлення мовної комірки H2 для наступного автоматичного кроку
+    # Оновлення мовної комірки H2
     if success_published_any:
         try:
             sheets.spreadsheets().values().update(
@@ -425,21 +412,18 @@ def main():
         except Exception as e:
             print(f"⚠️ Не вдалося оновити мову в комірці H2: {e}")
 
-    # Очищення локальної робочої папки від залишків медіафайлів
+    # Очищення кешу
     for f in local_files_to_clean:
         if os.path.exists(f):
-            try: 
-                os.remove(f)
-            except Exception: 
-                pass
+            try: os.remove(f)
+            except: pass
     print("🧹 Тимчасові локальні файли успішно очищені.")
 
-    # 🚨 Фінальний акорд для коректної відповіді у GitHub Actions
     if has_global_failures:
-        print("\n💥 [Система] Скрипт виконав частину роботи, але зафіксовано помилки публікації контенту.")
+        print("\n💥 [Система] Скрипт виконав частину роботи, але зафіксовано помилки.")
         sys.exit(1)  
     else:
-        print("\n🚀 [Система] Зовнішній запуск API успішний! Всі обрані файли опубліковані без помилок.")
+        print("\n🚀 [Система] Зовнішній запуск API успішний! Всі обрані файли опубліковані.")
 
 if __name__ == "__main__":
     main()
