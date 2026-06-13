@@ -9,7 +9,7 @@ from googleapiclient.http import MediaIoBaseDownload
 from PIL import Image
 
 # Імпорт ваших модулів конфігурації та сервісів
-import config
+import config_meb_insta_story as config
 from media_processor import *
 from services_manager import *
 
@@ -336,7 +336,7 @@ def main():
             param_type = "video_url" if is_video else "image_url"
             payload = {
                 "media_type": "STORIES",
-                "param_type": pub_url,
+                param_type: pub_url,
                 "access_token": meta_access_token
             }
             
