@@ -10,8 +10,8 @@ from PIL import Image
 
 # Імпорт модулів конфігурації та сервісів
 import config_meb_insta_story as config
-from media_processor import *
-from services_manager import *
+from media_processor_meb_instagram_story import *
+from services_manager_meb_instagram_story import *
 
 def main():
     # 0. Перевірка вхідних параметрів воркфлоу
