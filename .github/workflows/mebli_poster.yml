@@ -67,4 +67,4 @@ jobs:
         FB_PAGE_ID: ${{ secrets.MEBLI_FB_PAGE_ID }}
         META_ACCESS_TOKEN: ${{ secrets.MEBLI_META_ACCESS_TOKEN }}
       run: |
-        python publish_content_mebli_srorys.py ${{ github.event.inputs.forced_mode }} "Меблі"
+        python publish_content_mebli_storys.py ${{ github.event.inputs.forced_mode }} "Меблі"
