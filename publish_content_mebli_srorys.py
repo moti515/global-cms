@@ -573,15 +573,44 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     gemini_key = os.environ.get("GEMINI_API_KEY")
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
     
+    # Використовуємо глобальний конфіг для фолбеків
+    pref = LANG_CONFIG.get(lang_idx, LANG_CONFIG[0])
+    
+    # --- БЛОК ОБРОБКИ БАГАТОМОВНОЇ ЛОКАЦІЇ ---
+    resolved_loc = ""
+    if target_loc:
+        try:
+            loc_json = json.loads(target_loc)
+            if isinstance(loc_json, dict):
+                resolved_loc = loc_json.get(str(lang_idx), loc_json.get("0", ""))
+            else:
+                resolved_loc = str(target_loc)
+        except (json.JSONDecodeError, TypeError):
+            resolved_loc = str(target_loc)
+
+    invalid_markers = ["невідоме місце", "невідомо", "unknown", "unbekannt", "-", "none", "null", "невідоме місто"]
+    if any(marker in resolved_loc.lower() for marker in invalid_markers):
+        resolved_loc = ""
+    # -----------------------------------------------
+
+    # --- ВИЗНАЧЕННЯ БРЕНДУ ТА СПЕЦ-КАТЕГОРІЙ ---
     cat_lower = category.lower()
     real_manufacturer = category
-    for key, info in COMPANIES_DB.items():
-        if key in cat_lower:
-            real_manufacturer = info["names"].get(lang_idx, info["names"][0])
-            break
+    
+    if "montage various" in cat_lower:
+        real_manufacturer = "Професійний монтаж меблів" if lang_idx == 0 else "Professional furniture installation"
+    elif "various" in cat_lower:
+        real_manufacturer = "Сучасні меблеві тренди" if lang_idx == 0 else "Modern furniture concepts"
+    elif "instruktion" in cat_lower:
+        real_manufacturer = "Конструкторські стандарти" if lang_idx == 0 else "Furniture design standards"
+    else:
+        for key, info in COMPANIES_DB.items():
+            if key in cat_lower:
+                real_manufacturer = info["names"].get(lang_idx, info["names"][0])
+                break
 
     if not gemini_key:
-        return "Професійна якість та увага до деталей! ✨🛠️"
+        return pref.get("no_gemini_caption", "Професійна якість та увага до деталей!")
 
     models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
     lang_instructions = {
@@ -593,10 +622,10 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     prompt = (
         f"Ти професійний копірайтер та меблевий конструктор. Подивись на це зображення (або кадр з відео).\n"
         f"Напиши ОДНУ коротку, мотиваційну або інформативну фразу (максимум 1-2 речення) для Instagram Stories.\n"
-        f"Врахуй контекст: на foto може бути як готовий меблевий шедевр, так і брудний процес виробництва, технічна документація, "
-        f"заміри приміщення, скріншоти програм, робочі моменти команди або навіть виправлення браку/дефектів.\n"
+        f"Врахуй контекст: на фото може бути як готовий меблевий шедевр, так і брудний процес виробництва, технічна документація, "
+        f"заміри приміщення, скріншоти програм, робочі моменти команди або навіть виправлення браку.\n"
         f"Зроби опис живим, експертним, без банальних закликів. Текст буде нанесено прямо на медіафайл.\n"
-        f"Бренд/Концепт: '{real_manufacturer}'. Рік: {year}. Локація: {target_loc if target_loc else 'Робочий процес'}.\n"
+        f"Бренд/Концепт: '{real_manufacturer}'. Рік: {year}. Локація: {resolved_loc if resolved_loc else 'Робочий процес'}.\n"
         f"{lang_instructions.get(lang_idx, lang_instructions[0])}\n"
         f"КРИТИЧНО: Видай ЛІШЕ фінальний текст підпису без лапок, вступів та хештегів."
     )
@@ -617,10 +646,12 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 res = requests.post(url, json=payload, timeout=20).json()
                 if 'candidates' in res and res['candidates']:
                     return res['candidates'][0]['content']['parts'][0]['text'].strip()
-            except: continue
+            except: 
+                continue
     except Exception as e:
         print(f"⚠️ Помилка генерації текста ШІ: {e}")
-    return "Створюємо меблі з душею та точним розрахунком! 📐✨"
+        
+    return pref.get("fallback_caption", "Створюємо меблі з точним розрахунком!")
 
 def wait_for_meta_container(container_id, access_token):
     check_url = f"https://graph.facebook.com/v19.0/{container_id}"
