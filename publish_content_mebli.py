@@ -252,28 +252,44 @@ def get_manufacturer_header(category, date_str, lang_idx, mode, target_loc=None)
     pref = LANG_CONFIG.get(lang_idx, LANG_CONFIG[0])
     header_lines = []
 
-    invalid_markers = ["невідоме місце", "невідомо", "unknown", "unbekannt", "-", "none", "null"]
-    has_valid_loc = target_loc and not any(marker in str(target_loc).lower() for marker in invalid_markers)
+    # --- НОВИЙ БЛОК ОБРОБКИ БАГАТОМОВНОЇ ЛОКАЦІЇ ---
+    resolved_loc = ""
+    if target_loc:
+        try:
+            # Пробуємо розпарсити як JSON, що прийшов з OSM Nominatim
+            loc_json = json.loads(target_loc)
+            if isinstance(loc_json, dict):
+                # Беремо мову за індексом (напр. "0" для UK), або фолбек на українську "0"
+                resolved_loc = loc_json.get(str(lang_idx), loc_json.get("0", ""))
+            else:
+                resolved_loc = str(target_loc)
+        except (json.JSONDecodeError, TypeError):
+            # Якщо це старий формат (звичайний рядок), залишаємо як є
+            resolved_loc = str(target_loc)
+
+    invalid_markers = ["невідоме місце", "невідомо", "unknown", "unbekannt", "-", "none", "null", "невідоме місто"]
+    has_valid_loc = resolved_loc and not any(marker in resolved_loc.lower() for marker in invalid_markers)
+    # -----------------------------------------------
 
     # 1. СПЕЦІАЛЬНІ КАТЕГОРІЇ
     if "montage various" in cat_lower:
         header_lines.append(f"📅 {pref['year']}: {year}")
         if has_valid_loc:
-            header_lines.append(f"📍 {pref['loc']}: {target_loc}")
+            header_lines.append(f"📍 {pref['loc']}: {resolved_loc}")
         header_lines.append(f"🛠️ {pref['assembly']}")
         return "\n".join(header_lines) + "\n\n"
         
     if "various" in cat_lower:
         header_lines.append(f"📅 {pref['year']}: {year}")
         if has_valid_loc:
-            header_lines.append(f"📍 {pref['loc']}: {target_loc}")
+            header_lines.append(f"📍 {pref['loc']}: {resolved_loc}")
         header_lines.append(f"💡 {pref['concept']}")
         return "\n".join(header_lines) + "\n\n"
         
     if "instruktion" in cat_lower:
         header_lines.append(f"📐 {pref['ergonomics']}")
         if has_valid_loc:
-            header_lines.append(f"📍 {pref['loc']}: {target_loc}")
+            header_lines.append(f"📍 {pref['loc']}: {resolved_loc}")
         return "\n".join(header_lines) + "\n\n"
 
     # 2. ПОШУК У ГЛОБАЛЬНІЙ БАЗІ БРЕНДІВ
@@ -282,7 +298,7 @@ def get_manufacturer_header(category, date_str, lang_idx, mode, target_loc=None)
             correct_name = info["names"].get(lang_idx, info["names"][0])
             header_lines.append(f"📅 {pref['year']}: {year}")
             if has_valid_loc:
-                header_lines.append(f"📍 {pref['loc']}: {target_loc}")
+                header_lines.append(f"📍 {pref['loc']}: {resolved_loc}")
             header_lines.append(f"🛠️ {pref['brand']}: {correct_name}")
             
             # Розподіл посилань залежно від платформи (FB чи IG) з локалізацією заклику
@@ -302,7 +318,7 @@ def get_manufacturer_header(category, date_str, lang_idx, mode, target_loc=None)
             
     header_lines.append(f"📅 {pref['year']}: {year}")
     if has_valid_loc:
-        header_lines.append(f"📍 {pref['loc']}: {target_loc}")
+        header_lines.append(f"📍 {pref['loc']}: {resolved_loc}")
     return "\n".join(header_lines) + "\n\n"
 
 def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
@@ -436,13 +452,23 @@ def main():
         print("ℹ️ Немає валідних рядків для обробки.")
         return
 
+    # ==========================================
+    # 📂 ГРУПУВАННЯ ТА ВИБІР ПУЛУ ДЛЯ ПУБЛІКАЦІЇ
+    # ==========================================
     min_counter = min(item["counter"] for item in valid_rows)
     min_pool = [item for item in valid_rows if item["counter"] == min_counter]
 
     groups = {}
     for item in min_pool:
         data = item["data"]
-        group_key = (data[2], data[6] if len(data) > 6 else "", data[7] if len(data) > 7 else "")
+        
+        # data[2] — Категорія (Колонка C)
+        # data[6] — Дата (Колонка G)
+        # data[8] — Місто групування JSON (Колонка I / 9-та колонка). 
+        # Якщо колонки немає, робимо фолбек на колонку 8 (data[7])
+        group_location_json = data[8] if len(data) > 8 else (data[7] if len(data) > 7 else "")
+        
+        group_key = (data[2], data[6] if len(data) > 6 else "", group_location_json)
         groups.setdefault(group_key, []).append(item)
 
     first_key = list(groups.keys())[0]
