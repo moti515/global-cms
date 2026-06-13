@@ -333,7 +333,7 @@ def main():
             param_type = "video_url" if is_video else "image_url"
             payload = {
                 "media_type": "STORIES",
-                "param_type": pub_url,
+                param_type: pub_url,
                 "access_token": meta_access_token
             }
             
