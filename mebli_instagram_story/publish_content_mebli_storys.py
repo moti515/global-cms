@@ -164,22 +164,22 @@ def main():
         min_counter = min(item["counter"] for item in valid_rows)
         min_pool = [item for item in valid_rows if item["counter"] == min_counter]
 
-        # Групуємо рядки з однаковим мінімальним лічильником за категорією та метаданими
+        # 🔄 ЗМІНА ТУТ: Групуємо рядки за Категорією, Датою та МІСТОМ (data[8] замість data[7])
         groups = {}
         for item in min_pool:
             data = item["data"]
-            group_key = (data[2], data[6] if len(data) > 6 else "", data[7] if len(data) > 7 else "")
+            # Замість data[7] (точне місце) беремо стовпець I (індекс 8 - місто групування)
+            group_key = (data[2], data[6] if len(data) > 6 else "", data[8] if len(data) > 8 else "")
             groups.setdefault(group_key, []).append(item)
 
         # Формуємо чергу (до 4-х елементів з першої групи)
         first_key = list(groups.keys())[0]
         selected_group_items = groups[first_key][:4]
-        category_name, target_date, target_loc = first_key
+        category_name, target_date, target_city_json = first_key # Тепер тут JSON міста
         print(f"📂 Обрано групу з Таблиці: [{category_name}]. Елементів у черзі: {len(selected_group_items)}")
         
         for item in selected_group_items:
             data = item["data"]
-            group_location_json = data[8] if len(data) > 8 else (data[7] if len(data) > 7 else "")
             
             selected_queue.append({
                 "id": data[0],
@@ -187,8 +187,8 @@ def main():
                 "local_path": None,
                 "category": category_name,
                 "date": target_date,
-                "location": target_loc,
-                "group_location": group_location_json,  
+                "location": target_city_json,  # 🎯 Тепер сюди передається чисте місто для ШІ та титрів
+                "exact_location": data[7] if len(data) > 7 else "",  # Зберігаємо точну адресу про всяк випадок
                 "mode": "sheet",
                 "counter_cell": f"'{current_tab}'!{col_letter}{item['row_idx']}",
                 "counter_val": item["counter"]
