@@ -103,32 +103,13 @@ def get_services():
     creds = service_account.Credentials.from_service_account_info(key_dict, scopes=SCOPES)
     return build('drive', 'v3', credentials=creds), build('sheets', 'v4', credentials=creds)
 
-def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="непідтримуваний формат"):
-    """Записує попередження про непідтримуваний формат на службовий аркуш налаштувань."""
-    try:
-        res = sheets_service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:E"
-        ).execute()
-        rows = res.get('values', [])
-        
-        for idx, row in enumerate(rows):
-            if len(row) > 1 and row[1] == folder_name:
-                range_to_update = f"'⚙️ Налаштування Папок'!E{idx + 2}"
-                sheets_service.spreadsheets().values().update(
-                    spreadsheetId=SPREADSHEET_ID, range=range_to_update,
-                    valueInputOption='RAW', body={'values': [[f"⚠️ {reason}: {file_name}"]]}
-                ).execute()
-                print(f"📝 Зафіксовано системне попередження для [{folder_name}] на службовому аркуші.")
-                break
-    except Exception as e:
-        print(f"❌ Не вдалося записати помилку на службовий аркуш: {e}")
-
 def optimize_media_geometry(local_path, filename, mime_type):
-    """Оптимізує пропорції зображень під вимоги Meta для звичайних постів у стрічку."""
+    """Оптимізує пропорції зображень (включаючи HEIC/PNG) під вимоги Meta."""
     if not os.path.exists(local_path):
         return local_path
 
-    if mime_type == "image/jpeg":
+    # Виправлено: обробляємо будь-які зображення, включаючи HEIC
+    if mime_type.startswith("image/"):
         try:
             with Image.open(local_path) as img:
                 img = img.convert('RGB')
@@ -175,11 +156,13 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             with open(local_file_path, 'rb') as f:
                 file_bytes = f.read()
             if file_bytes:
+                # Виправлено: збільшено таймаут для завантаження важких відеофайлів
+                upload_timeout = (10, 90) if mime_type.startswith("video") else (7, 25)
                 res = requests.post(
                     'https://catbox.moe/user/api.php',
                     data={'reqtype': 'fileupload'},
                     files={'fileToUpload': (filename, file_bytes, mime_type)},
-                    headers=browser_headers, timeout=(7, 25)
+                    headers=browser_headers, timeout=upload_timeout
                 )
                 if res.status_code == 200 and res.text.startswith('http'):
                     direct_url = res.text.strip()
@@ -252,7 +235,7 @@ def get_manufacturer_header(category, date_str, lang_idx, mode, target_loc=None)
     pref = LANG_CONFIG.get(lang_idx, LANG_CONFIG[0])
     header_lines = []
 
-    # --- НОВИЙ БЛОК ОБРОБКИ БАГАТОМОВНОЇ ЛОКАЦІЇ ---
+    # --- БЛОК ОБРОБКИ БАГАТОМОВНОЇ ЛОКАЦІЇ ---
     resolved_loc = ""
     if target_loc:
         try:
@@ -409,6 +392,12 @@ def wait_for_meta_container(container_id, access_token):
         time.sleep(10)
     return False
 
+def clean_up_local_files(files):
+    for f in files:
+        if os.path.exists(f):
+            try: os.remove(f)
+            except: pass
+
 def main():
     if len(sys.argv) < 3:
         print("💡 Необхідно передати параметри. Запуск: python script.py <mode> <tab_name>")
@@ -507,6 +496,18 @@ def main():
         
     print(f"🌐 Зчитано поточну мову з {target_lang_cell}: {lang_value} (Індекс: {lang_idx}). Наступна мова буде: {next_lang_value}")
     # =====================================================================
+    # 🚨 КРИТИЧНИЙ КОНТРОЛЬ ФОРМАТІВ ФАЙЛІВ ПЕРЕД ЗАВАНТАЖЕННЯМ
+    # =====================================================================
+    for item in selected_group_items:
+        f_name = item["data"][1]
+        lower_name = f_name.lower()
+        
+        if not lower_name.endswith(VALID_MEDIA_EXTENSIONS):
+            err_msg = f"❌ КРИТИЧНА ПОМИЛКА: Файл '{f_name}' в групі '{category_name}' має непідтримуваний формат для соцмереж!"
+            if lower_name.endswith(DOCUMENT_EXTENSIONS):
+                err_msg += " (Це файл документу, а не медіафайл)."
+            print(err_msg)
+            sys.exit(1) # Зупиняємо воркфлоу, робимо хрестик червоним
     
     os.makedirs('temp_mebli', exist_ok=True)
     local_files = []
@@ -515,19 +516,11 @@ def main():
     has_video = False
     ai_analysis_images = []
 
+    # =====================================================================
+    # 📥 ЗАВАНТАЖЕННЯ ТА ОБРОБКА МЕДІА
+    # =====================================================================
     for item in selected_group_items:
         f_id, f_name = item["data"][0], item["data"][1]
-        lower_name = f_name.lower()
-        
-        if not lower_name.endswith(VALID_MEDIA_EXTENSIONS):
-            reason = "непідтримуваний формат"
-            if lower_name.endswith(DOCUMENT_EXTENSIONS):
-                reason = "непідтримуваний формат (документ)"
-            
-            print(f"⚠️ Файл '{f_name}' має непідтримуваний формат. Реєструємо помилку...")
-            log_unsupported_to_service(sheets, category_name, f_name, reason=reason)
-            continue
-
         local_path = os.path.join('temp_mebli', f_name)
         print(f"📥 Завантаження з Drive: {f_name}...")
         
@@ -538,21 +531,29 @@ def main():
                 done = False
                 while not done: _, done = downloader.next_chunk()
         except Exception as e:
-            print(f"❌ Помилка завантаження файлу {f_name}: {e}")
-            continue
+            print(f"❌ КРИТИЧНА ПОМИЛКА: Не вдалося скачати файл '{f_name}' з Google Drive: {e}")
+            clean_up_local_files(local_files)
+            sys.exit(1)
 
         final_path = local_path
         mime_type = "image/jpeg"
+        lower_name = f_name.lower()
         
         if lower_name.endswith(('.mp4', '.mov', '.avi')):
             has_video = True
             mime_type = "video/mp4"
         elif lower_name.endswith(('.heic', '.heif')):
             jpg_path = os.path.join('temp_mebli', f_name.rsplit('.', 1)[0] + '.jpg')
-            with Image.open(local_path) as img:
-                img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
-            final_path = jpg_path
-            local_files.append(jpg_path)
+            try:
+                with Image.open(local_path) as img:
+                    img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
+                final_path = jpg_path
+                local_files.append(jpg_path)
+            except Exception as e:
+                print(f"❌ КРИТИЧНА ПОМИЛКА: Збій конвертації HEIC файлу '{f_name}': {e}")
+                local_files.append(local_path)
+                clean_up_local_files(local_files)
+                sys.exit(1)
 
         optimized_path = optimize_media_geometry(final_path, f_name, mime_type)
         if optimized_path != final_path and optimized_path != local_path:
@@ -562,35 +563,47 @@ def main():
             frame_path = os.path.join('temp_mebli', f"frame_{f_id}.jpg")
             subprocess.run(['ffmpeg', '-y', '-i', optimized_path, '-ss', '00:00:01', '-vframes', '1', frame_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             ai_analysis_images.append(frame_path)
+            local_files.append(frame_path)
         else:
             ai_analysis_images.append(optimized_path)
 
         local_files.append(local_path)
 
-        pub_url, ik_id = get_google_drive_direct_url(f_id, local_file_path=optimized_path)
-        cloud_urls.append(pub_url)
-        if ik_id: ik_ids.append(ik_id)
+        try:
+            pub_url, ik_id = get_google_drive_direct_url(f_id, local_file_path=optimized_path)
+            if not pub_url:
+                raise ValueError("Порожній URL публікації.")
+            cloud_urls.append(pub_url)
+            if ik_id: ik_ids.append(ik_id)
+        except Exception as e:
+            print(f"❌ КРИТИЧНА ПОМИЛКА: Не вдалося згенерувати публічну хмарну лінку для '{f_name}': {e}")
+            clean_up_local_files(local_files)
+            sys.exit(1)
 
     if not cloud_urls:
         print("ℹ️ Немає доступних медіафайлів для публікації.")
-        return
+        clean_up_local_files(local_files)
+        sys.exit(1)
 
+    # Генерація текстів
     header_text = get_manufacturer_header(category_name, target_date, lang_idx, mode, target_loc)
     ai_text = generate_multimodal_caption(ai_analysis_images, category_name, target_date, lang_idx)
     full_caption = f"{header_text}{ai_text}"
 
     if not FB_PAGE_ID and mode == "fb_post":
-        print("❌ Відсутній FB_PAGE_ID для публікації у Facebook!")
+        print("❌ Відсутній FB_PAGE_ID для Facebook!")
+        clean_up_local_files(local_files)
         sys.exit(1)
     if not IG_USER_ID and mode == "ig_post":
-        print("❌ Відсутній IG_USER_ID для публікації в Instagram!")
+        print("❌ Відсутній IG_USER_ID для Instagram!")
+        clean_up_local_files(local_files)
         sys.exit(1)
 
     res = None
 
-    # ==========================================
-    # 🌍 ВАРІАНТ 1: FACEBOOK ПОСТ (`fb_post`)
-    # ==========================================
+    # =====================================================================
+    # 🌍 ПУБЛІКАЦІЯ FACEBOOK
+    # =====================================================================
     if mode == "fb_post":
         if has_video:
             print("🎬 Публікація відео-поста у Facebook...")
@@ -604,8 +617,13 @@ def main():
                 photo_res = requests.post(f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos", data={
                     "url": url, "published": "false", "access_token": META_ACCESS_TOKEN
                 }).json()
-                if "id" in photo_res:
-                    attached_media.append({"media_fbid": photo_res["id"]})
+                
+                # Жорстка валідація завантаження кожної окремої фотографії альбуму
+                if "id" not in photo_res:
+                    print(f"❌ КРИТИЧНА ПОМИЛКА API META: Не вдалося завантажити під-елемент фото для альбому: {photo_res}")
+                    clean_up_local_files(local_files)
+                    sys.exit(1)
+                attached_media.append({"media_fbid": photo_res["id"]})
             
             fb_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
             payload = {
@@ -615,9 +633,9 @@ def main():
             }
             res = requests.post(fb_url, data=payload).json()
 
-    # ==========================================
-    # 📸 ВАРІАНТ 2: INSTAGRAM ПОСТ (`ig_post`)
-    # ==========================================
+    # =====================================================================
+    # 📸 ПУБЛІКАЦІЯ INSTAGRAM
+    # =====================================================================
     elif mode == "ig_post":
         if len(cloud_urls) > 1:
             print(f"🗂️ Створення каруселі Instagram з {len(cloud_urls)} елементів...")
@@ -634,11 +652,21 @@ def main():
                 if is_vid: payload["media_type"] = "VIDEO"
                 
                 item_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=payload).json()
-                if "id" in item_res:
-                    item_id = item_res["id"]
-                    if is_vid:
-                        wait_for_meta_container(item_id, META_ACCESS_TOKEN)
-                    container_ids.append(item_id)
+                
+                # Жорстка перевірка створення контейнера для елемента каруселі
+                if "id" not in item_res:
+                    print(f"❌ КРИТИЧНА ПОМИЛКА API META: Не вдалося створити контейнер елемента каруселі: {item_res}")
+                    clean_up_local_files(local_files)
+                    sys.exit(1)
+                    
+                item_id = item_res["id"]
+                if is_vid:
+                    success = wait_for_meta_container(item_id, META_ACCESS_TOKEN)
+                    if not success:
+                        print(f"❌ КРИТИЧНА ПОМИЛКА: Відео-контейнер {item_id} зафейлився на боці Meta.")
+                        clean_up_local_files(local_files)
+                        sys.exit(1)
+                container_ids.append(item_id)
             
             carousel_payload = {
                 "media_type": "CAROUSEL",
@@ -663,14 +691,17 @@ def main():
             res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media", data=payload).json()
 
             if res and "id" in res and is_vid:
-                wait_for_meta_container(res["id"], META_ACCESS_TOKEN)
+                success = wait_for_meta_container(res["id"], META_ACCESS_TOKEN)
+                if not success:
+                    print("❌ КРИТИЧНА ПОМИЛКА: Одиничний відео-контейнер не пройшов обробку в Meta.")
+                    clean_up_local_files(local_files)
+                    sys.exit(1)
 
         if res and "id" in res:
             creation_id = res["id"]
-            if has_video:
-                wait_for_meta_container(creation_id, META_ACCESS_TOKEN)
-                
+            
             print("🚀 Фінальна публікація контейнера в Instagram стрічку...")
+            published_successfully = False
             
             for attempt in range(6):
                 publish_res = requests.post(f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", data={
@@ -683,27 +714,34 @@ def main():
                         print(f"⏳ Медіафайл ще обробляється серверами Meta (Спроба {attempt + 1}/6). Очікуємо 10 секунд...")
                         time.sleep(10)
                         continue
+                
                 res = publish_res
+                if "id" in res:
+                    published_successfully = True
                 break
 
-    # ==========================================
-    # 💾 ПЕРЕВІРКА РЕЗУЛЬТАТУ ТА ОНОВЛЕННЯ БАЗИ
-    # ==========================================
+            if not published_successfully:
+                print(f"❌ КРИТИЧНА ПОМИЛКА: Не вдалося фінально опублікувати медіа-контейнер після ліміту спроб. Meta API: {res}")
+                clean_up_local_files(local_files)
+                sys.exit(1)
+
+    # =====================================================================
+    # 💾 ПЕРЕВІРКА КІНЦЕВОГО РЕЗУЛЬТАТУ ТА ОНОВЛЕННЯ БАЗИ
+    # =====================================================================
     if res and ("id" in res or "post_id" in res):
         print(f"✅ Успішно опубліковано! ID контенту: {res.get('id', res.get('post_id'))}")
         
         for item in selected_group_items:
-            if item["data"][1].lower().endswith(VALID_MEDIA_EXTENSIONS):
-                new_val = item["counter"] + 1
-                range_to_update = f"'{current_tab}'!{col_letter}{item['row_idx']}"
-                try:
-                    sheets.spreadsheets().values().update(
-                        spreadsheetId=SPREADSHEET_ID, range=range_to_update,
-                        valueInputOption='RAW', body={'values': [[new_val]]}
-                    ).execute()
-                    print(f"✍️ Лічильник рядка {item['row_idx']} у колонці {col_letter} збільшено до {new_val}.")
-                except Exception as e:
-                    print(f"⚠️ Помилка збереження лічильника в Таблицю: {e}")
+            new_val = item["counter"] + 1
+            range_to_update = f"'{current_tab}'!{col_letter}{item['row_idx']}"
+            try:
+                sheets.spreadsheets().values().update(
+                    spreadsheetId=SPREADSHEET_ID, range=range_to_update,
+                    valueInputOption='RAW', body={'values': [[new_val]]}
+                ).execute()
+                print(f"✍️ Лічильник рядка {item['row_idx']} у колонці {col_letter} збільшено до {new_val}.")
+            except Exception as e:
+                print(f"⚠️ Помилка збереження лічильника в Таблицю: {e}")
                     
         try:
             sheets.spreadsheets().values().update(
@@ -714,25 +752,21 @@ def main():
         except Exception as e:
             print(f"⚠️ Не вдалося оновити мову в комірці {target_lang_cell}: {e}")
 
+        # Очищення ImageKit (якщо використовується)
         if ik_ids:
             print("🧹 Очищення хмари ImageKit...")
             for ik_id in ik_ids:
-                delete_from_imagekit(ik_id)
+                try: delete_from_imagekit(ik_id)
+                except: pass
             
     else:
-        print(f"❌ Помилка дистриб'юції контенту Meta API: {res}")
-        for f in local_files:
-            if os.path.exists(f):
-                try: os.remove(f)
-                except: pass
-        print("🧹 Тимчасова папка очищена. Скрипт зупинено аварійно.")
+        print(f"❌ КРИТИЧНА ПОМИЛКА дистриб'юції контенту Meta API: {res}")
+        clean_up_local_files(local_files)
         sys.exit(1)
 
-    for f in local_files:
-        if os.path.exists(f):
-            try: os.remove(f)
-            except: pass
-    print("🧹 Тимчасова папка очищена.")
+    # Успішне завершення
+    clean_up_local_files(local_files)
+    print("🎯 Скрипт успішно завершив роботу.")
 
 if __name__ == "__main__":
     main()
