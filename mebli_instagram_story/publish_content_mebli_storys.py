@@ -256,7 +256,7 @@ def main():
                 continue
 
             # 🌟 ЗАХИСТ: Очищаємо назву файлу з таблиці перед збереженням на диск
-            safe_local_name = sanitize_filename(f_name)
+            safe_local_name = sanitize_filename(f"{f_id[:8]}_{f_name}")
             local_path = os.path.join('temp_mebli', safe_local_name)
             
             print(f"\n📥 [{idx_item + 1}/{len(selected_queue)}] Завантаження з Drive: {f_name} -> {safe_local_name}...")
