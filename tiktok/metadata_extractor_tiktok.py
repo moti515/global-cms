@@ -117,39 +117,71 @@ def get_video_metadata(video_path):
 
 def get_location_data(lat, lon):
     """
-    Повертає локалізацію строго українською мовою.
-    Результат: кортеж (КрасиваНазваДляВідео, НазваМістаДляГрупування)
+    Повертає локалізацію мовою країни перебування (без примусового accept-language).
+    Результат: кортеж (ДетальнаНазваДляВідео, ШирокаНазваДляГрупування)
     """
     if lat is None or lon is None: 
         return "", ""
     try:
-        # accept-language=uk гарантує повернення назв українською для генерації опису ШІ
+        # 1️⃣ Запит робимо із zoom=15 для максимальної деталізації підпису.
+        # Вилучено параметр accept-language, щоб назви поверталися мовою оригіналу (нативно).
         url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15"
-        headers = {'User-Agent': 'FurnitureStories_MetadataBot_2026'}
+        
+        # Оновили User-Agent під твій новий тревел-бренд
+        headers = {'User-Agent': 'PixelbeardTravel_Automation_2026'}
         res = requests.get(url, headers=headers, timeout=10).json()
         address = res.get('address', {})
         
-        # 1. Точне місце (виробництво, майстерня, шоурум, локальний об'єкт)
+        # 2️⃣ Витягуємо точковий об'єкт, історичне місце або мікрорайон (наприклад, Поділ або l'Eixample)
         exact_place = (
             address.get('tourism') or 
             address.get('amenity') or 
             address.get('historic') or
-            address.get('suburb') or 
+            address.get('neighbourhood') or
+            address.get('suburb')
+        )
+        
+        # 3️⃣ Витягуємо місто або великий населений пункт (наприклад, Київ або Barcelona)
+        city_town = (
             address.get('city') or 
             address.get('town') or 
-            address.get('village')
+            address.get('village') or 
+            address.get('municipality') or
+            address.get('county')
         )
-        country = address.get('country')
-        display_location = f"{exact_place}, {country}" if exact_place and country else country
         
-        # 2. Стабільне місто/регіон для кластеризації
-        group_place = address.get('city') or address.get('town') or address.get('village') or address.get('county')
-        group_location = f"{group_place}, {country}" if group_place and country else country
+        country = address.get('country') or ""
+        
+        # --- ФОРМУВАННЯ ДЕТАЛЬНОГО ПІДПИСУ (Для нанесення на відео) ---
+        # Динамічно збираємо ланцюжок: [Мікрорайон] -> [Місто] -> [Країна] (без дублів)
+        display_parts = []
+        if exact_place:
+            display_parts.append(exact_place)
+        if city_town and city_town != exact_place:
+            display_parts.append(city_town)
+        if country:
+            display_parts.append(country)
+        
+        display_location = ", ".join(display_parts)
+        
+        # --- ФОРМУВАННЯ СТАБІЛЬНОГО КЛАТЕРА (Аналог zoom=10 для групування) ---
+        # Ігноруємо мікрорайони та вулиці. Беремо лише місто/регіон + країну.
+        # Завдяки цьому файли з різних вулиць одного міста отримають ідентичний group_location.
+        group_parts = []
+        if city_town:
+            group_parts.append(city_town)
+        elif address.get('state'):
+            group_parts.append(address.get('state'))
+        if country:
+            group_parts.append(country)
+            
+        group_location = ", ".join(group_parts)
         
         return display_location, group_location
+        
     except Exception as e:
         print(f"⚠️ Помилка геокодування OSM: {e}")
-    return "", ""
+        return "", ""
 
 def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
     """
