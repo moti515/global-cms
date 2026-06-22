@@ -109,7 +109,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     gemini_key = os.environ.get("GEMINI_API_KEY")
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
     
-    # Фолбеки беремо з очищеного LANG_CONFIG
+    # Фолбеки з LANG_CONFIG
     pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
     
     # --- БЛОК ОБРОБКИ БАГАТОМОВНОЇ ЛОКАЦІЇ ---
@@ -128,19 +128,17 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     if any(marker in resolved_loc.lower() for marker in invalid_markers):
         resolved_loc = ""
 
-    # --- ДИНАМІЧНЕ ВИЗНАЧЕННЯ БРЕНДУ ТА КАТЕГОРІЙ (БЕЗ ХАРДКОДУ) ---
+    # --- ДИНАМІЧНЕ ВИЗНАЧЕННЯ БРЕНДУ ТА КАТЕГОРІЙ ---
     cat_lower = category.lower()
     real_manufacturer = category
     matched_special = False
     
-    # 1. Перевіряємо системні спец-категорії з LANG_CONFIG
     for spec_key, spec_translation in pref.get("categories", {}).items():
         if spec_key in cat_lower:
             real_manufacturer = spec_translation
             matched_special = True
             break
             
-    # 2. Якщо це не системна категорія — шукаємо збіг у спрощеній базі COMPANIES_DB
     if not matched_special:
         for key, names_dict in config.COMPANIES_DB.items():
             if key in cat_lower:
@@ -150,22 +148,33 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     if not gemini_key:
         return pref.get("no_gemini_caption", "Професійна якість та увага до деталей!")
 
-    models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+    # 🌟 ЗМІНА 1: Актуальний пул моделей 2026 року (Прибрано застарілі та тестові версії)
+    models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+    
+    # 🌟 ЗМІНА 2: Дозволяємо емодзі (бо pilmoji їх відрендерить) та коригуємо мовні вказівки
     lang_instructions = {
-        0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. КРИТИЧНО: НЕ використовуй жодних емодзі, смайлів чи спеціальних символів.",
-        1: "Write the text exclusively in ENGLISH. CRITICAL: Do NOT use any emojis or special symbols.",
-        2: "Schreibe den Text ausschließlich auf DEUTSCH. KRITISCH: Nutze absolute KEINE Emojis oder Sonderzeichen."
+        0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1-2 доречних емодзі.",
+        1: "Write the text exclusively in ENGLISH. You may include 1-2 relevant emojis.",
+        2: "Schreibe den Text ausschließlich auf DEUTSCH. Du darfst 1-2 passende Emojis hinzufügen."
     }
     
+    # 🌟 ЗМІНА 3: Новий гнучкий промт із фокусом на залаштунки, меблевий гумор та атмосферу
     prompt = (
-        f"Ти професійний копірайтер та меблевий конструктор. Подивись на це зображення (або кадр з відео).\n"
-        f"Напиши ОДНУ коротку, мотиваційну або інформативну фразу (максимум 1-2 речення) для Instagram Stories.\n"
-        f"Врахуй контекст: на фото може бути як готовий меблевий шедевр, так і брудний процес виробництва, технічна документація, "
-        f"заміри приміщення, скріншоти програм, робочі моменти команди або навіть виправлення браку.\n"
-        f"Зроби опис живим, експертним, без банальних закликів. Текст буде нанесено прямо на медіафайл.\n"
-        f"Бренд/Концепт: '{real_manufacturer}'. Рік: {year}. Локація: {resolved_loc if resolved_loc else 'Робочий процес'}.\n"
-        f"{lang_instructions.get(lang_idx, lang_instructions[0])}\n"
-        f"КРИТИЧНО: Видай ЛІШЕ фінальний текст підпису без лапок, вступів та хештегів."
+        f"Ти — досвідчений копірайтер із тонким почуттям гумору та експертний меблевий конструктор.\n"
+        f"Подивись на це зображення (або кадр з відео) і придумай ОДНУ коротку, влучну та чіпляючу фразу "
+        f"(максимум 1-2 речення) для Instagram Stories. Текст буде нанесено прямо поверх медіафайлу.\n\n"
+        f"🎯 ТОН ТА СТИЛІСТИКА:\n"
+        f"- Будь живим та іронічним. Якщо на фото робочий процес, пил, креслення чи інструменти — "
+        f"пожартуй про залаштунки, перфекціонізм, каву на тирсі чи складні технічні вузли.\n"
+        f"- Якщо на фото готовий виріб — пиши про естетику, меблеву філософію, ергономіку або «білямеблеві» теми "
+        f"(домашній затишок, ідеальні зазори, радість від завершеного проєкту).\n"
+        f"- Уникай банальних штампів: 'найкраща якість', 'купуйте у нас', 'індивідуальний підхід'.\n\n"
+        f"📋 КОНТЕКСТ ДЛЯ АНАЛІЗУ:\n"
+        f"Категорія/Бренд: '{real_manufacturer}'. Рік зйомки: {year}. Локація: {resolved_loc if resolved_loc else 'Меблеве виробництво'}.\n\n"
+        f"⚠️ СУВОРІ ОБМЕЖЕННЯ:\n"
+        f"1. {lang_instructions.get(lang_idx, lang_instructions[0])}\n"
+        f"2. Поверни ЛИШЕ фінальний текст підпису. Без лапок, без вступних слів, без хэштегів та пояснень копірайтера.\n"
+        f"3. Роби речення короткими, щоб вони легко читалися на екрані телефону."
     )
 
     try:
@@ -178,19 +187,23 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 parts.append({"inlineData": {"mimeType": "image/jpeg", "data": base64_image}})
         
         payload = {"contents": [{"parts": parts}]}
+        
         for model in models_to_try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
             try:
                 res = requests.post(url, json=payload, timeout=20).json()
                 if 'candidates' in res and res['candidates']:
                     return res['candidates'][0]['content']['parts'][0]['text'].strip()
-            except: 
+                else:
+                    print(f"⚠️ Модель {model} повернула неочікувану відповідь. Переходимо до наступної.")
+            except Exception as e:
+                print(f"⚠️ Збій під час запиту до {model}: {e}")
                 continue
     except Exception as e:
         print(f"⚠️ Помилка генерації текста ШІ: {e}")
         
     return pref.get("fallback_caption", "Створюємо меблі з точним розрахунком!")
-
+    
 def wait_for_meta_container(container_id, access_token):
     check_url = f"https://graph.facebook.com/v19.0/{container_id}"
     params = {"fields": "status_code,status", "access_token": access_token}
