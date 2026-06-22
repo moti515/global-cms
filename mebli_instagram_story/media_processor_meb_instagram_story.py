@@ -54,7 +54,7 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
     if os.path.exists(font_path):
         if text:
             # Валідація кирилиці для FFmpeg (захист від кракозябр)
-            text = "".join(c for c in text if ord(c) < 128 or (0x0400 <= ord(c) <= 0x04FF) or c in "—–«»’'\".,!?-() ")
+            text = "".join(c for c in text if ord(c) < 128 or (0x0400 <= ord(c) <= 0x04FF) or (0x00C0 <= ord(c) <= 0x00FF) or c in "—–«»’'\".,!?-() ")
             clean_text = text.replace("'", "").replace(":", "\\:").replace(",", "\\,")
             lines = textwrap.wrap(clean_text, width=30)
             
