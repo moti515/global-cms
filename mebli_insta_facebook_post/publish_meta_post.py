@@ -10,7 +10,7 @@ from pillow_heif import register_heif_opener
 # Обов'язкова реєстрація підтримки форматів HEIF/HEIC для Pillow
 register_heif_opener()
 
-# Імпорт власних модулів проєкту (аліас для збереження сумісності)
+# Імпорт власних модулів проєкту
 import config_meta_post as config
 import media_processor
 import service_manager
@@ -36,11 +36,13 @@ def wait_for_meta_container(container_id, access_token):
     return False
 
 def clean_up_local_files(files):
-    """Видаляє всі тимчасові файли на диску хоста."""
-    for f in files:
+    """Видаляє всі тимчасові файли на диску хоста (без дублікатів)."""
+    for f in set(files):
         if os.path.exists(f):
-            try: os.remove(f)
-            except: pass
+            try: 
+                os.remove(f)
+            except: 
+                pass
 
 def main():
     if len(sys.argv) < 3:
@@ -104,9 +106,9 @@ def main():
     print(f"📂 Обрано групу: {category_name} (Файлів у пулі: {len(selected_group_items)})")
 
     # =====================================================================
-    # 🌐 УПРАВЛІННЯ МОВАМИ
+    # 🌍 УПРАВЛІННЯ МОВАМИ (ПРАПОРЦІ)
     # =====================================================================
-    lang_value = "UK"
+    lang_value = "🇺🇦"
     target_lang_cell = "'⚙️ Налаштування Папок'!F2" if mode == "fb_post" else "'⚙️ Налаштування Папок'!G2"
 
     try:
@@ -117,15 +119,15 @@ def main():
     except Exception as e:
         print(f"⚠️ Не вдалося прочитати мову з комірки {target_lang_cell}: {e}")
 
-    if any(x in lang_value for x in ["EN", "ENG", "АНГЛ", "ENGLISH"]):
+    if any(x in lang_value for x in ["🇬🇧", "🇺🇸", "EN", "ENG", "АНГЛ", "ENGLISH"]):
         lang_idx = 1
-        next_lang_value = "DE"
-    elif any(x in lang_value for x in ["DE", "GER", "НІМ", "DEUTSCH"]):
+        next_lang_value = "🇩🇪"
+    elif any(x in lang_value for x in ["🇩🇪", "DE", "GER", "НІМ", "DEUTSCH"]):
         lang_idx = 2
-        next_lang_value = "UK"
+        next_lang_value = "🇺🇦"
     else:
         lang_idx = 0
-        next_lang_value = "EN"
+        next_lang_value = "🇬🇧"
         
     print(f"🌐 Поточна мова з {target_lang_cell}: {lang_value} (Індекс: {lang_idx}). Наступна: {next_lang_value}")
 
@@ -140,7 +142,7 @@ def main():
             sys.exit(1)
     
     os.makedirs('temp_mebli', exist_ok=True)
-    local_files, cloud_urls, ik_ids, ai_analysis_images = [], [], [], []
+    local_files, uploaded_media, ik_ids, ai_analysis_images = [], [], [], []
     has_video = False
 
     # =====================================================================
@@ -161,8 +163,9 @@ def main():
         final_path = local_path
         mime_type = "image/jpeg"
         lower_name = f_name.lower()
+        is_current_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
         
-        if lower_name.endswith(('.mp4', '.mov', '.avi')):
+        if is_current_video:
             has_video = True
             mime_type = "video/mp4"
         elif lower_name.endswith(('.heic', '.heif')):
@@ -182,7 +185,7 @@ def main():
         if optimized_path != final_path and optimized_path != local_path:
             local_files.append(optimized_path)
 
-        if mime_type == "video/mp4":
+        if is_current_video:
             frame_path = os.path.join('temp_mebli', f"frame_{f_id}.jpg")
             media_processor.extract_video_frame(optimized_path, frame_path)
             ai_analysis_images.append(frame_path)
@@ -195,15 +198,17 @@ def main():
         try:
             pub_url, ik_id = service_manager.get_google_drive_direct_url(f_id, local_file_path=optimized_path)
             if not pub_url: raise ValueError("Порожній URL публікації.")
-            cloud_urls.append(pub_url)
+            
+            # ОПТИМІЗАЦІЯ: Зберігаємо структуру з чітким прапорцем типу файлу
+            uploaded_media.append({"url": pub_url, "is_video": is_current_video})
             if ik_id: ik_ids.append(ik_id)
         except Exception as e:
             print(f"❌ КРИТИЧНА ПОМИЛКА: Не вдалося згенерувати лінку для '{f_name}': {e}")
             clean_up_local_files(local_files)
             sys.exit(1)
 
-    if not cloud_urls:
-        print("ℹ️ Немає доступних% медіафайлів для публікації.")
+    if not uploaded_media:
+        print("ℹ️ Немає доступних медіафайлів для публікації.")
         clean_up_local_files(local_files)
         return
 
@@ -212,13 +217,13 @@ def main():
     ai_text = service_manager.generate_multimodal_caption(ai_analysis_images, category_name, target_date, lang_idx)
     full_caption = f"{header_text}{ai_text}"
 
-    # Перевірка наявності ID профілів Meta
     if not config.FB_PAGE_ID and mode == "fb_post":
         print("❌ Відсутній FB_PAGE_ID для Facebook!"); clean_up_local_files(local_files); sys.exit(1)
     if not config.IG_USER_ID and mode == "ig_post":
         print("❌ Відсутній IG_USER_ID для Instagram!"); clean_up_local_files(local_files); sys.exit(1)
 
     res = None
+    cloud_urls = [m["url"] for m in uploaded_media]
 
     # =====================================================================
     # 🌍 ПУБЛІКАЦІЯ FACEBOOK
@@ -237,7 +242,7 @@ def main():
                     "url": url, "published": "false", "access_token": config.META_ACCESS_TOKEN
                 }).json()
                 if "id" not in photo_res:
-                    print(f"❌ Не вдалося завантажити під-елемент фото: {photo_res}")
+                    print(f"❌ Не вдалося завантажити під-елемент photo: {photo_res}")
                     clean_up_local_files(local_files); sys.exit(1)
                 attached_media.append({"media_fbid": photo_res["id"]})
             
@@ -249,11 +254,13 @@ def main():
     # 📸 ПУБЛІКАЦІЯ INSTAGRAM
     # =====================================================================
     elif mode == "ig_post":
-        if len(cloud_urls) > 1:
-            print(f"🗂️ Створення каруселі Instagram з {len(cloud_urls)} елементів...")
+        if len(uploaded_media) > 1:
+            print(f"🗂️ Створенняカруселі Instagram з {len(uploaded_media)} елементів...")
             container_ids = []
-            for url in cloud_urls:
-                is_vid = url.lower().split('?')[0].endswith(('.mp4', '.mov', '.avi')) or "video" in url
+            for item in uploaded_media:
+                url = item["url"]
+                is_vid = item["is_video"] # Виправлено: береться точне значення з аналізу, а не з тексту лінки
+                
                 param_type = "video_url" if is_vid else "image_url"
                 payload = {param_type: url, "is_carousel_item": "true", "access_token": config.META_ACCESS_TOKEN}
                 if is_vid: payload["media_type"] = "VIDEO"
@@ -272,7 +279,7 @@ def main():
             res = requests.post(f"https://graph.facebook.com/v19.0/{config.IG_USER_ID}/media", data=carousel_payload).json()
         else:
             print("🖼️ Створення одиничного контейнера в Instagram...")
-            is_vid = cloud_urls[0].lower().split('?')[0].endswith(('.mp4', '.mov', '.avi')) or "video" in cloud_urls[0]
+            is_vid = uploaded_media[0]["is_video"] # Виправлено тут теж
             param_type = "video_url" if is_vid else "image_url"
             payload = {param_type: cloud_urls[0], "caption": full_caption, "access_token": config.META_ACCESS_TOKEN}
             if is_vid: payload["media_type"] = "VIDEO"
@@ -328,9 +335,9 @@ def main():
                 spreadsheetId=config.SPREADSHEET_ID, range=target_lang_cell,
                 valueInputOption='RAW', body={'values': [[next_lang_value]]}
             ).execute()
-            print(f"🔄 Мову на наступний раз змінено на: {next_lang_value}")
+            print(f"🔄 Мову на наступний раз змінено на прапорець: {next_lang_value}")
         except Exception as e:
-            print(f"⚠️ Не вдалося оновити мову: {e}")
+            print(f"⚠️ Не вдалося оновити комірку мови: {e}")
 
         if ik_ids:
             print("🧹 Очищення хмари ImageKit...")
