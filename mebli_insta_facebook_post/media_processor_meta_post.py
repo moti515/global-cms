@@ -4,61 +4,67 @@ import subprocess
 from datetime import datetime
 from PIL import Image
 from pillow_heif import register_heif_opener
-import config
+import config_meta_post as config
 
-# Реєстрація підтримки HEIF/HEIC
+# Реєстрація підтримки HEIF/HEIC для Pillow
 register_heif_opener()
 
 def optimize_media_geometry(local_path, filename, mime_type):
-    """Оптимізує пропорції зображень та обов'язково конвертує HEIC/PNG/WEBP у JPEG для Meta."""
+    """
+    Оптимізує пропорції зображень (додає білі поля) та обов'язково 
+    конвертує формати HEIC/PNG/WEBP у стандартний JPEG під вимоги Meta API.
+    """
     if not os.path.exists(local_path):
         return local_path
 
     lower_name = filename.lower()
-    is_image = mime_type.startswith("image/") or lower_name.endswith(('.heic', '.heif', '.webp'))
+    is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
 
-    if is_image:
-        try:
-            with Image.open(local_path) as img:
-                img = img.convert('RGB')
-                w, h = img.size
-                ratio = w / h
+    if is_video:
+        return local_path  # Відео не потребує обробки геометрії в цьому модулі
+
+    try:
+        with Image.open(local_path) as img:
+            img = img.convert('RGB')
+            w, h = img.size
+            ratio = w / h
+            
+            is_jpeg = lower_name.endswith(('.jpg', '.jpeg'))
+            needs_padding = ratio < 0.8 or ratio > 1.91
+            
+            # Якщо медіа не є JPEG або виходить за межі пропорцій Meta — робимо оптимізацію
+            if needs_padding or not is_jpeg:
+                new_filename = filename.rsplit('.', 1)[0] + '.jpg'
+                os.makedirs('temp_mebli', exist_ok=True)
+                optimized_path = os.path.join('temp_mebli', 'post_ready_' + new_filename)
                 
-                is_heic_or_webp = lower_name.endswith(('.heic', '.heif', '.webp'))
-                needs_padding = ratio < 0.8 or ratio > 1.91
-                
-                if needs_padding or is_heic_or_webp:
-                    new_filename = filename.rsplit('.', 1)[0] + '.jpg'
-                    os.makedirs('temp_mebli', exist_ok=True)
-                    padded_post_path = os.path.join('temp_mebli', 'post_ready_' + new_filename)
-                    
-                    if needs_padding:
-                        print(f"📐 Оптимізація геометрії ({ratio:.2f}) та конвертація для: {filename}")
-                        if ratio < 0.8:
-                            new_w = int(h * 0.8)
-                            new_h = h
-                        else:
-                            new_w = w
-                            new_h = int(w / 1.91)
-                            
-                        canvas = Image.new('RGB', (new_w, new_h), (255, 255, 255))
-                        paste_x = (new_w - w) // 2
-                        paste_y = (new_h - h) // 2
-                        
-                        canvas.paste(img, (paste_x, paste_y))
-                        canvas.save(padded_post_path, 'JPEG', quality=95)
+                if needs_padding:
+                    print(f"📐 Оптимізація геометрії ({ratio:.2f}) та конвертація для: {filename}")
+                    if ratio < 0.8:
+                        new_w = int(h * 0.8)
+                        new_h = h
                     else:
-                        print(f"🔄 Конвертація {filename} у JPEG для сумісності з Meta API...")
-                        img.save(padded_post_path, 'JPEG', quality=95)
+                        new_w = w
+                        new_h = int(w / 1.91)
                         
-                    return padded_post_path
-        except Exception as e:
-            print(f"⚠️ Помилка калібрування геометрії поста: {e}")
+                    canvas = Image.new('RGB', (new_w, new_h), (255, 255, 255))
+                    paste_x = (new_w - w) // 2
+                    paste_y = (new_h - h) // 2
+                    
+                    canvas.paste(img, (paste_x, paste_y))
+                    canvas.save(optimized_path, 'JPEG', quality=95)
+                else:
+                    print(f"🔄 Конвертація {filename} у JPEG для сумісності з Meta API...")
+                    img.save(optimized_path, 'JPEG', quality=95)
+                    
+                return optimized_path
+    except Exception as e:
+        print(f"⚠️ Помилка калібрування геометрії або конвертації поста: {e}")
 
     return local_path
 
 def extract_video_frame(video_path, output_frame_path):
-    """Витягує 1-шу секунду відео за допомогою FFmpeg для аналізу за допомогою AI."""
+    """Витягує 1-шу секунду відео за допомогою FFmpeg для аналізу через Gemini AI."""
     print(f"🎬 Витягуємо тестовий кадр з відео: {os.path.basename(video_path)}")
     cmd = ['ffmpeg', '-y', '-i', video_path, '-ss', '00:00:01', '-vframes', '1', output_frame_path]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -72,6 +78,7 @@ def get_manufacturer_header(category, date_str, lang_idx, mode, target_loc=None)
     pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
     header_lines = []
 
+    # --- БЛОК ОБРОБКИ БАГАТОМОВНОЇ ЛОКАЦІЇ ---
     resolved_loc = ""
     if target_loc:
         try:
@@ -86,6 +93,7 @@ def get_manufacturer_header(category, date_str, lang_idx, mode, target_loc=None)
     invalid_markers = ["невідоме місце", "невідомо", "unknown", "unbekannt", "-", "none", "null", "невідоме місто"]
     has_valid_loc = resolved_loc and not any(marker in resolved_loc.lower() for marker in invalid_markers)
 
+    # 1. Спеціальні службові категорії
     if "montage various" in cat_lower:
         header_lines.append(f"📅 {pref['year']}: {year}")
         if has_valid_loc: header_lines.append(f"📍 {pref['loc']}: {resolved_loc}")
@@ -103,6 +111,7 @@ def get_manufacturer_header(category, date_str, lang_idx, mode, target_loc=None)
         if has_valid_loc: header_lines.append(f"📍 {pref['loc']}: {resolved_loc}")
         return "\n".join(header_lines) + "\n\n"
 
+    # 2. Пошук у глобальній базі брендів/компаній
     for key, info in config.COMPANIES_DB.items():
         if key in cat_lower:
             correct_name = info["names"].get(lang_idx, info["names"][0])
@@ -123,19 +132,15 @@ def get_manufacturer_header(category, date_str, lang_idx, mode, target_loc=None)
                     
             return "\n".join(header_lines) + "\n\n"
             
+    # Дефолтний вивід, якщо бренд не знайдено в базі
     header_lines.append(f"📅 {pref['year']}: {year}")
     if has_valid_loc: header_lines.append(f"📍 {pref['loc']}: {resolved_loc}")
     return "\n".join(header_lines) + "\n\n"
 
-# =====================================================================
-# 🔍 ЗАГОТОВКИ ДЛЯ РОЗШИРЕННЯ (Екзиф, Локації, Вотермарки)
-# =====================================================================
 def extract_exif_metadata(file_path):
-    """Заготовка для читання метаданих EXIF зображення (дата зйомки, GPS координати)."""
-    # Буде розширено за потреби за допомогою PIL.ExifTags
+    """Заготовка для майбутнього читання метаданих EXIF (дата, GPS)."""
     return {}
 
 def overlay_text_on_image(image_path, text, position="bottom"):
-    """Заготовка для брендування або нанесення технічного тексту безпосередньо на картинку."""
-    # Буде розширено за допомогою ImageDraw
+    """Заготовка для нанесення вотермарок або технічного брендування."""
     return image_path
