@@ -304,7 +304,7 @@ def process_video_item(input_path, output_path, text_info, target_w=1080, target
     if has_audio:
         cmd.extend(['-map', '0:a', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2'])
     else:
-        cmd.extend(['-map', '[3:a]', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2', '-shortest'])
+        cmd.extend(['-map', '3:a', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2', '-shortest'])
         
     cmd.append(output_path)
     
@@ -352,7 +352,7 @@ def process_image_item(input_path, output_path, text_info, duration=4.0, target_
             '-i', meta_png,
             '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
             '-filter_complex', filter_complex,
-            '-map', '[outv]', '-map', '[3:a]',
+            '-map', '[outv]', '-map', '3:a',
             '-c:v', 'libx264', '-t', str(duration),
             '-pix_fmt', 'yuv420p', '-r', str(FINAL_FPS),
             '-b:v', '3000k', '-maxrate', '4500k', '-bufsize', '9000k',
@@ -412,7 +412,7 @@ def add_background_music(input_path, output_path):
         'ffmpeg', '-y',
         '-i', input_path,
         '-stream_loop', '-1', '-i', music_file,
-        '-filter_complex', '[0:a]volume=1.0[orig];[1:a]volume=0.15[bg];[orig][bg]amix=inputs=2:duration=longest:dropout_transition=0',
+        '-filter_complex', '[0:a]volume=1.0[orig];[1:a]volume=0.15[bg];[orig][bg]amix=inputs=2:duration=first:dropout_transition=0',
         '-c:v', 'copy',
         '-c:a', 'aac', '-b:a', '128k',
         '-shortest',
