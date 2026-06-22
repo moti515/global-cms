@@ -39,9 +39,10 @@ jobs:
         python -m pip install --upgrade pip
         pip install requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow pillow-heif pytz pyyaml
 
-    # --- КРОК 1: ЗАПУСК ЗВИЧАЙНИХ ПОСТІВ (Працює у корені репозиторію) ---
+    # --- КРОК 1: ЗАПУСК ЗВИЧАЙНИХ ПОСТІВ (Тепер працює в окремій папці) ---
     - name: Запуск публікатора постів (FB / IG Post)
       if: github.event.inputs.forced_mode != 'ig_story'
+      working-directory: mebli_insta_facebook_post
       env:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -52,7 +53,7 @@ jobs:
         META_ACCESS_TOKEN: ${{ secrets.MEBLI_META_ACCESS_TOKEN }}
       run: |
         echo "📋 [Система] Режим: [${{ github.event.inputs.forced_mode }}]"
-        python publish_content_mebli.py ${{ github.event.inputs.forced_mode }} "Меблі"
+        python publish_meta_post.py ${{ github.event.inputs.forced_mode }} "Меблі"
 
     # --- КРОК 2: ЗАПУСК СТОРІС (Аналог команди cd + запуск скрипта сторіс) ---
     - name: Запуск публікатора сторіс (IG Story)
