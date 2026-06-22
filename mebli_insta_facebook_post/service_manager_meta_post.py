@@ -5,7 +5,7 @@ import requests
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-import config
+import config_meta_post as config
 
 def get_services():
     """Авторизація та ініціалізація Google Drive та Google Sheets API."""
