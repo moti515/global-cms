@@ -255,7 +255,7 @@ def main():
                         sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: TikTok відхилив публікацію короткого відео.")
                 return
 
-            # ВАРІАНТ 5: Один відеофайл тривалістю більше 40 секунд
+            # ВАРІАНТ 5: Один відеофайл тривалістю більше 40 секунд (ОНОВЛЕНО)
             elif 'video' in single_item['mime'] and single_item['duration'] > MAX_DURATION:
                 total_dur = single_item['duration']
                 num_parts = int(math.ceil(total_dur / MAX_DURATION))
@@ -265,9 +265,24 @@ def main():
                 all_parts_success = True
                 generated_files = []
                 
-                # Передаємо точну display_location
-                text_info = generate_ai_metadata(current_file_path, date, single_item['display_location'])
-                trending_text, year, location_name = text_info
+                # Побажання 1: Накладаємо музику на ВЕСЬ великий файл до нарізки, щоб вона тривала безперервно
+                full_video_with_music = current_file_path.replace(".mp4", "_full_music.mp4")
+                music_already_applied = False
+                
+                if add_background_music(current_file_path, full_video_with_music):
+                    if os.path.exists(full_video_with_music):
+                        source_for_slicing = full_video_with_music
+                        music_already_applied = True
+                        print("✅ Фонова музика успішно інтегрована у вихідний трек. Мелодія буде безперервною!")
+                    else:
+                        source_for_slicing = current_file_path
+                else:
+                    source_for_slicing = current_file_path
+                    print("⏩ Не вдалося додати фонову музику. Ріжемо оригінал із власним звуком.")
+
+                # Отримуємо базові метадані для накладання статичних титрів на відео
+                base_text_info = generate_ai_metadata(current_file_path, date, single_item['display_location'])
+                base_trending_text, year, location_name = base_text_info
                 
                 for part_idx in range(num_parts):
                     start = part_idx * chunk_length
@@ -275,32 +290,52 @@ def main():
                     part_output = f"ready_tiktok_part_{part_num}_{int(time.time())}.mp4"
                     
                     print(f"📦 Рендеринг частини {part_num}/{num_parts} ({start:.1f}s - {start+chunk_length:.1f}s)")
-                    modified_text_info = (f"{trending_text} (Ч. {part_num})", year, location_name)
+                    modified_text_info = (f"{base_trending_text} (Ч. {part_num})", year, location_name)
                     
+                    # Нарізаємо відео (вже з безперервною музикою, якщо вона наклалася)
                     success = process_video_item(
-                        current_file_path, part_output, modified_text_info, 
+                        source_for_slicing, part_output, modified_text_info, 
                         ss=start, t=chunk_length
                     )
                     
                     if success and os.path.exists(part_output):
                         generated_files.append(part_output)
-                        raw_loc = location_name.split(',')[0].strip().replace(" ", "") if location_name else ""
-                        loc_hashtag = f" #{raw_loc}" if raw_loc else ""
-                        part_description = f"{trending_text} (Частина {part_num}) 🌍 #travel{loc_hashtag}"
                         
-                        if not upload_with_music_wrapper(part_output, part_description):
+                        # Побажання 2: Генеруємо унікальний (живий) опис для конкретного шматочка відео
+                        print(f"🤖 ШІ аналізує та генерує унікальний опис для частини {part_num}...")
+                        part_text_info = generate_ai_metadata(part_output, date, single_item['display_location'])
+                        part_trending_text, _, part_location_name = part_text_info
+                        
+                        raw_loc = part_location_name.split(',')[0].strip().replace(" ", "") if part_location_name else ""
+                        loc_hashtag = f" #{raw_loc}" if raw_loc else ""
+                        
+                        # Специфічний живий опис + збереження нумерації частин для опису TikTok
+                        part_description = f"{part_trending_text} (Частина {part_num}) 🌍 #travel{loc_hashtag}"
+                        
+                        # Публікація
+                        if music_already_applied:
+                            # Оскільки музика вже всередині відеопотоку, використовуємо чистий uploader
+                            uploaded = upload_to_tiktok(part_output, part_description)
+                        else:
+                            uploaded = upload_with_music_wrapper(part_output, part_description)
+                            
+                        if not uploaded:
                             all_parts_success = False
                             break
                     else:
                         all_parts_success = False
                         break
                 
+                # Видаляємо тимчасовий великий файл із вшитою музикою, якщо він створювався
+                if os.path.exists(full_video_with_music): 
+                    os.remove(full_video_with_music)
+                    
                 if all_parts_success:
                     move_files_to_trash(service, [single_item])
                     for gf in generated_files:
                         if os.path.exists(gf): os.remove(gf)
                     if os.path.exists(current_file_path): os.remove(current_file_path)
-                    print("🏁 Серійну публікацію всіх частин завершено успішно!")
+                    print("🏁 Серійну публікацію всіх частин з унікальними описами та плавною музикою завершено!")
                 else:
                     sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація однієї з частин серіалу провалилася.")
                 return
