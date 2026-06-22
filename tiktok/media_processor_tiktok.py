@@ -259,7 +259,7 @@ def generate_tiktok_overlays(text_info, base_name, target_w=1080, target_h=1920)
 
 
 def process_video_item(input_path, output_path, text_info, target_w=1080, target_h=1920, ss=None, t=None, loops=0):
-    """ОДИН ПРОХІД ОБРОБКИ ВІДЕО ЧЕРЕЗ PNG-ОВЕРЛЕЇ"""
+    """ОДИН ПРОХІД ОБРОБКИ ВІДЕО ЧЕРЕЗ PNG-ОВЕРЛЕЇ З ПРИМУСОВОЮ СТАНДАРТИЗАЦІЄЮ"""
     base_name = os.path.basename(input_path).rsplit('.', 1)[0]
     
     # Генеруємо шари тексту
@@ -269,7 +269,6 @@ def process_video_item(input_path, output_path, text_info, target_w=1080, target
     if loops > 0:
         cmd.extend(['-stream_loop', str(loops)])
         
-    # Порядок вхідних файлів: [0:v] - відео, [1:v] - заголовок, [2:v] - метадата
     cmd.extend([
         '-i', input_path,
         '-i', title_png,
@@ -278,7 +277,6 @@ def process_video_item(input_path, output_path, text_info, target_w=1080, target
     
     has_audio = has_audio_stream(input_path)
     if not has_audio:
-        # Якщо аудіо немає, додаємо заглушку. Вона стане входом [3:a]
         cmd.extend(['-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100'])
         
     if ss is not None:
@@ -286,7 +284,6 @@ def process_video_item(input_path, output_path, text_info, target_w=1080, target
     if t is not None:
         cmd.extend(['-t', str(t)])
         
-    # Геометрія відео + накладання шарів з таймінгом для заголовка (перші 6 сек)
     vf_base = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=black"
     filter_complex = f"[0:v]{vf_base}[bg]; [bg][1:v]overlay=0:0:enable='lt(t,6)'[tmp]; [tmp][2:v]overlay=0:0[outv]"
     
@@ -295,23 +292,25 @@ def process_video_item(input_path, output_path, text_info, target_w=1080, target
         '-map', '[outv]'
     ])
     
+    # Стандартизація відеопотоку (Додано -video_track_timescale 90000)
     cmd.extend([
         '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
         '-r', str(FINAL_FPS),
         '-b:v', '3000k', '-maxrate', '4500k', '-bufsize', '9000k',
+        '-video_track_timescale', '90000'
     ])
     
+    # Стандартизація аудіопотоку (Примусово заганяємо в 44100Hz та Stereo для сумісності з фото)
     if has_audio:
-        cmd.extend(['-map', '0:a', '-c:a', 'aac', '-b:a', '128k'])
+        cmd.extend(['-map', '0:a', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2'])
     else:
-        cmd.extend(['-map', '[3:a]', '-c:a', 'aac', '-b:a', '128k', '-shortest'])
+        cmd.extend(['-map', '[3:a]', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2', '-shortest'])
         
     cmd.append(output_path)
     
     print(f"🎬 Обробка відео з ШІ-титрами (Адаптивний PNG): {os.path.basename(input_path)}")
     res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
-    # Видаляємо тимчасові прозорі картинки
     for f in [title_png, meta_png]:
         if os.path.exists(f):
             try: os.remove(f)
@@ -321,7 +320,7 @@ def process_video_item(input_path, output_path, text_info, target_w=1080, target
 
 
 def process_image_item(input_path, output_path, text_info, duration=4.0, target_w=1080, target_h=1920):
-    """ОДИН ПРОХІД ОБРОБКИ ФОТО ЧЕРЕЗ PNG-ОВЕРЛЕЇ"""
+    """ОДИН ПРОХІД ОБРОБКИ ФОТО ЧЕРЕЗ PNG-ОВЕРЛЕЇ З ПАРАМЕТРАМИ, ЩО ЗБІГАЮТЬСЯ З ВІДЕО"""
     temp_jpg = output_path + "_pure_canvas.jpg"
     base_name = os.path.basename(input_path).rsplit('.', 1)[0]
     
@@ -341,12 +340,12 @@ def process_image_item(input_path, output_path, text_info, duration=4.0, target_
             canvas.paste(img, offset)
             canvas.save(temp_jpg, 'JPEG', quality=95)
             
-        # Генеруємо шари тексту
         title_png, meta_png = generate_tiktok_overlays(text_info, base_name, target_w, target_h)
             
         vf_base = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=black"
         filter_complex = f"[0:v]{vf_base}[bg]; [bg][1:v]overlay=0:0:enable='lt(t,6)'[tmp]; [tmp][2:v]overlay=0:0[outv]"
             
+        # Усі параметри відео та аудіо тепер ОДИН В ОДИН як у відео (bitrate, maxrate, bufsize, timescale, ar, ac)
         cmd = [
             'ffmpeg', '-y', '-loop', '1', '-i', temp_jpg,
             '-i', title_png,
@@ -356,17 +355,22 @@ def process_image_item(input_path, output_path, text_info, duration=4.0, target_
             '-map', '[outv]', '-map', '[3:a]',
             '-c:v', 'libx264', '-t', str(duration),
             '-pix_fmt', 'yuv420p', '-r', str(FINAL_FPS),
-            '-b:v', '2500k', '-c:a', 'aac', '-b:a', '128k', '-shortest',
+            '-b:v', '3000k', '-maxrate', '4500k', '-bufsize', '9000k',
+            '-video_track_timescale', '90000',
+            '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2',
+            '-shortest',
             output_path
         ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        # Зачистка
+        print(f"📸 Обробка фото з ШІ-титрами (Адаптивний PNG): {os.path.basename(input_path)}")
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
         for f in [temp_jpg, title_png, meta_png]:
             if os.path.exists(f): 
                 try: os.remove(f)
                 except: pass
-        return True
+                
+        return res.returncode == 0
     except Exception as e:
         print(f"⚠️ Помилка обробки photo {input_path}: {e}")
         if os.path.exists(temp_jpg): os.remove(temp_jpg)
