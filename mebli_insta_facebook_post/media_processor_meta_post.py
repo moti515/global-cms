@@ -8,7 +8,7 @@ from datetime import datetime
 # Чіткі аліаси для уникнення конфліктів у майбутньому
 import config_meta_post as config
 import media_processor_meta_post as media_processor
-import service_manager
+import service_manager_meta_post as service_manager
 
 def wait_for_meta_container(container_id, access_token):
     """Очікує завершення асинхронної обробки відео/медіа контейнера в Meta API."""
