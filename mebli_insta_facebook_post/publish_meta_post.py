@@ -4,9 +4,14 @@ import json
 import time
 import requests
 from datetime import datetime
+from PIL import Image
+from pillow_heif import register_heif_opener
 
-# Імпорт власних модулів проєкту
-import config
+# Обов'язкова реєстрація підтримки форматів HEIF/HEIC для Pillow
+register_heif_opener()
+
+# Імпорт власних модулів проєкту (аліас для збереження сумісності)
+import config_meta_post as config
 import media_processor
 import service_manager
 
@@ -163,7 +168,6 @@ def main():
         elif lower_name.endswith(('.heic', '.heif')):
             jpg_path = os.path.join('temp_mebli', f_name.rsplit('.', 1)[0] + '.jpg')
             try:
-                from PIL import Image
                 with Image.open(local_path) as img:
                     img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
                 final_path = jpg_path
@@ -199,7 +203,7 @@ def main():
             sys.exit(1)
 
     if not cloud_urls:
-        print("ℹ️ Немає доступних медіафайлів для публікації.")
+        print("ℹ️ Немає доступних% медіафайлів для публікації.")
         clean_up_local_files(local_files)
         return
 
