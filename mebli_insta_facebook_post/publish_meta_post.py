@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import re  # Додано для роботи з регулярними виразами
 import requests
 from datetime import datetime
 from PIL import Image
@@ -14,6 +15,23 @@ register_heif_opener()
 import config_meta_post as config
 import media_processor_meta_post as media_processor
 import service_manager_meta_post as service_manager
+
+def sanitize_filename(filename):
+    """
+    Замінює кирилицю, пробіли та спецсимволи на дефіси, 
+    зберігаючи розширення, щоб уникнути збоїв у FFmpeg/PIL та Meta API.
+    """
+    name, ext = os.path.splitext(filename)
+    # Замінюємо все, що НЕ є латиницею, цифрою, дефісом чи підкресленням, на дефіс
+    sanitized_name = re.sub(r'[^a-zA-Z0-9_\-]', '-', name)
+    # Прибираємо подвійні дефіси, якщо вони утворилися
+    sanitized_name = re.sub(r'-+', '-', sanitized_name).strip('-')
+    
+    # Фолбек, якщо ім'я повністю складалося з кирилиці і стало порожнім
+    if not sanitized_name:
+        sanitized_name = f"media_{int(time.time())}"
+        
+    return f"{sanitized_name}{ext.lower()}"
 
 def wait_for_meta_container(container_id, access_token):
     """Очікує завершення асинхронної обробки відео/медіа контейнера в Meta API."""
@@ -119,7 +137,6 @@ def main():
     except Exception as e:
         print(f"⚠️ Не вдалося прочитати мову з комірки {target_lang_cell}: {e}")
 
-    # Строга логіка перемикання та призначення відповідних прапорів
     if lang_value == "EN":
         lang_idx = 1
         lang_flag = "🇬🇧"
@@ -151,8 +168,11 @@ def main():
     # =====================================================================
     for item in selected_group_items:
         f_id, f_name = item["data"][0], item["data"][1]
-        local_path = os.path.join('temp_mebli', f_name)
-        print(f"📥 Завантаження з Drive: {f_name}...")
+        
+        # 🌟 ЗАХИСТ: Створення безпечного імені з унікальним префіксом ID для уникнення колізій
+        safe_local_name = sanitize_filename(f"{f_id[:8]}_{f_name}")
+        local_path = os.path.join('temp_mebli', safe_local_name)
+        print(f"📥 Завантаження з Drive: {f_name} -> {safe_local_name}...")
         
         try:
             service_manager.download_file_from_drive(drive, f_id, local_path)
@@ -163,14 +183,14 @@ def main():
 
         final_path = local_path
         mime_type = "image/jpeg"
-        lower_name = f_name.lower()
+        lower_name = safe_local_name.lower()
         is_current_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
         
         if is_current_video:
             has_video = True
             mime_type = "video/mp4"
         elif lower_name.endswith(('.heic', '.heif')):
-            jpg_path = os.path.join('temp_mebli', f_name.rsplit('.', 1)[0] + '.jpg')
+            jpg_path = os.path.join('temp_mebli', safe_local_name.rsplit('.', 1)[0] + '.jpg')
             try:
                 with Image.open(local_path) as img:
                     img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
@@ -182,7 +202,8 @@ def main():
                 clean_up_local_files(local_files)
                 sys.exit(1)
 
-        optimized_path = media_processor.optimize_media_geometry(final_path, f_name, mime_type)
+        # Передаємо safe_local_name, щоб утиліта оптимізації геометрії теж зберегла файл без кирилиці
+        optimized_path = media_processor.optimize_media_geometry(final_path, safe_local_name, mime_type)
         if optimized_path != final_path and optimized_path != local_path:
             local_files.append(optimized_path)
 
@@ -212,7 +233,7 @@ def main():
         clean_up_local_files(local_files)
         return
 
-    # Створення повного підпису (додаємо прапор країни на самий початок)
+    # Створення повного підпису
     header_text = media_processor.get_manufacturer_header(category_name, target_date, lang_idx, mode, target_loc)
     ai_text = service_manager.generate_multimodal_caption(ai_analysis_images, category_name, target_date, lang_idx)
     full_caption = f"{lang_flag} {header_text}{ai_text}"
