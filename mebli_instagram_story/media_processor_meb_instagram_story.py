@@ -8,7 +8,89 @@ from datetime import datetime
 from PIL import Image, ImageDraw, ImageOps, ImageFont
 from PIL.ExifTags import TAGS, GPSTAGS
 
-# 📐 ОПТИМІЗАЦІЯ ФОТО ПІД СТОРІЗ (1080x1920) З УРАХУВАННЯМ ОРІЄНТАЦІЇ КАНАЛУ
+# 🎨 ГЕНЕРАЦІЯ ЄДИНОГО ПРОЗОРОГО PNG-ОВЕРЛЕЮ З ТЕКСТОМ ТА ЕМОДЗІ
+def generate_story_overlay(base_name, text, year=None, location=None):
+    """
+    Створює прозорий PNG-файл (1080x1920), наносить текст (з підтримкою емодзі та умляутів)
+    і повертає шлях до тимчасового файлу.
+    """
+    overlay = Image.new('RGBA', (1080, 1920), (0, 0, 0, 0))
+    
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    font_size_main = 40
+    font_size_meta = 34
+    
+    try:
+        font_main = ImageFont.truetype(font_path, font_size_main)
+        font_meta = ImageFont.truetype(font_path, font_size_meta)
+    except IOError:
+        font_main = ImageFont.load_default()
+        font_meta = ImageFont.load_default()
+
+    # Спробуємо підключити pilmoji для кольорових емодзі
+    try:
+        from pilmoji import Pilmoji
+        has_pilmoji = True
+    except ImportError:
+        print("⚠️ Бібліотеку 'pilmoji' не знайдено. Емодзі можуть відображатися некоректно. Виконайте: pip install pilmoji")
+        has_pilmoji = False
+
+    # Тимчасовий інструмент для замірів довжини рядків
+    draw_measure = ImageDraw.Draw(overlay)
+
+    # 1. Розбиття головного тексту на рядки (Wrap)
+    lines = []
+    if text:
+        words = text.split()
+        current_line = []
+        for word in words:
+            current_line.append(word)
+            if draw_measure.textlength(" ".join(current_line), font=font_main) > 920:
+                current_line.pop()
+                lines.append(" ".join(current_line))
+                current_line = [word]
+        if current_line:
+            lines.append(" ".join(current_line))
+
+    # Внутрішня функція для малювання тексту з обведенням (штрихом) через Pilmoji або Pillow
+    def draw_text_dynamic(canvas, position, content, font, fill_color, stroke_color=(0, 0, 0, 240), stroke_width=3):
+        if has_pilmoji:
+            with Pilmoji(canvas) as pilmoji:
+                pilmoji.text(position, content, font=font, fill=fill_color, stroke_width=stroke_width, stroke_fill=stroke_color)
+        else:
+            d = ImageDraw.Draw(canvas)
+            d.text(position, content, font=font, fill=fill_color, stroke_width=stroke_width, stroke_fill=stroke_color)
+
+    # 2. Малювання головного тексту (Центрований, зверху)
+    start_y = 200
+    line_height = 55
+    for i, line in enumerate(lines):
+        bbox = draw_measure.textbbox((0, 0), line, font=font_main)
+        text_w = bbox[2] - bbox[0]
+        current_x = (1080 - text_w) // 2
+        current_y = start_y + (i * line_height)
+        
+        draw_text_dynamic(overlay, (current_x, current_y), line, font_main, (255, 255, 255))
+
+    # 3. Малювання метаданих (Зліва, знизу)
+    meta_parts = []
+    if location and location != "Невідоме місце":
+        meta_parts.append(location)
+    if year:
+        meta_parts.append(str(year))
+        
+    if meta_parts:
+        meta_text = " | ".join(meta_parts)
+        meta_x = 70
+        meta_y = 1650
+        draw_text_dynamic(overlay, (meta_x, meta_y), meta_text, font_meta, (255, 240, 100))
+
+    overlay_path = os.path.join('temp_mebli', f'overlay_{base_name}.png')
+    overlay.save(overlay_path, 'PNG')
+    return overlay_path
+
+
+# 📐 ОПТИМІЗАЦІЯ ФОТО ПІД СТОРІЗ (1080x1920)
 def optimize_image_story(final_upload_path, orig_name):
     print("📐 Режим Сторіс (Фото): вписуємо зображення у формат 1080x1920...")
     story_path = os.path.join('temp_mebli', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
@@ -19,7 +101,7 @@ def optimize_image_story(final_upload_path, orig_name):
             orig_w, orig_h = img.size
             
             target_w, target_h = 1080, 1920
-            canvas = Image.new('RGB', (target_w, target_h), (20, 20, 20)) # Темно-сірий преміальний фон
+            canvas = Image.new('RGB', (target_w, target_h), (20, 20, 20)) # Темно-сірий фон
             
             scale = min(target_w / orig_w, target_h / orig_h)
             new_w = int(orig_w * scale)
@@ -37,9 +119,35 @@ def optimize_image_story(final_upload_path, orig_name):
         print(f"⚠️ Не вдалося відформатувати фото під сторіз: {e}")
         return final_upload_path
 
-# 📐 ОПТИМІЗАЦІЯ ВІДЕО ПІД СТОРІЗ (1080x1920) + НАКЛАДАННЯ ТЕКСТУ ЧЕРЕЗ FFMPEG
+
+# ✍️ НАКЛАДАННЯ ТЕКСТУ НА ЗОБРАЖЕННЯ ЧЕРЕЗ PNG-ОВЕРЛЕЙ
+def overlay_text_on_image(image_path, text, year=None, location=None):
+    try:
+        base_name = os.path.basename(image_path).rsplit('.', 1)[0]
+        # ГЕНЕРУЄМО ТЕКСТОВИЙ ШАР
+        overlay_png = generate_story_overlay(base_name, text, year, location)
+        
+        with Image.open(image_path) as img:
+            img = img.convert('RGBA')
+            with Image.open(overlay_png) as overlay:
+                # Накладаємо прозорий шар поверх фото
+                final_img = Image.alpha_composite(img, overlay)
+            
+            final_img = final_img.convert('RGB')
+            final_img.save(image_path, 'JPEG', quality=95)
+            
+        # Очищуємо тимчасовий PNG
+        if os.path.exists(overlay_png):
+            os.remove(overlay_png)
+            
+        print("🎨 Текст та емодзі успішно нанесено на фото сторіс через PNG-оверлей.")
+    except Exception as e:
+        print(f"⚠️ Помилка графічного накладання тексту на фото: {e}")
+
+
+# 📐 ОПТИМІЗАЦІЯ ВІДЕО ПІД СТОРІЗ ЧЕРЕЗ FFMPEG (МЕТОД PNG-ОВЕРЛЕЮ)
 def optimize_video_story(local_path, f_name, text, year=None, location=None):
-    print("🎬 Оптимізація Відео: підганяємо під ліміти Instagram (1080x1920, стиснення, новий макет)...")
+    print("🎬 Оптимізація Відео: підганяємо під ліміти Instagram (1080x1920) + Мапимо PNG-оверлей...")
     processed_files = []
     
     duration = get_video_duration(local_path)
@@ -48,50 +156,26 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
         duration = 59.0
         
     base_name = f_name.rsplit('.', 1)[0]
-    vf_filters = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black"
     
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    if os.path.exists(font_path):
-        if text:
-            # Валідація кирилиці для FFmpeg (захист від кракозябр)
-            text = "".join(c for c in text if ord(c) < 128 or (0x0400 <= ord(c) <= 0x04FF) or (0x00C0 <= ord(c) <= 0x00FF) or c in "—–«»’'\".,!?-() ")
-            clean_text = text.replace("'", "").replace(":", "\\:").replace(",", "\\,")
-            lines = textwrap.wrap(clean_text, width=30)
-            
-            start_y = 200
-            line_height = 55
-            for i, line in enumerate(lines):
-                current_y = start_y + (i * line_height)
-                vf_filters += (
-                    f",drawtext=fontfile={font_path}:text='{line}':"
-                    f"x=(w-text_w)/2:y={current_y}:fontsize=42:fontcolor=white:"
-                    f"borderw=5:bordercolor=black:fix_bounds=1"
-                )
-        
-        meta_parts = []
-        if location and location != "Невідоме місце":
-            meta_parts.append(location)
-        if year:
-            meta_parts.append(str(year))
-            
-        if meta_parts:
-            clean_meta = " | ".join(meta_parts).replace("'", "").replace(":", "\\:").replace(",", "\\,")
-            vf_filters += (
-                f",drawtext=fontfile={font_path}:text='{clean_meta}':"
-                f"x=70:y=1650:fontsize=34:fontcolor=0xFFE664:"  # Жовтий колір у форматі FFmpeg (Hex)
-                f"borderw=4:bordercolor=black:fix_bounds=1"
-            )
-
+    # 1. СТВОРЮЄМО КРАСИВИЙ ШАР З ТЕКСТОМ ТА ЕМОДЗІ
+    overlay_png_path = generate_story_overlay(base_name, text, year, location)
+    
+    # 2. СКЛАДАЄМО ФІЛЬТР FFMPEG: спочатку ресайз відео, потім накладання PNG оверлею за координатами 0:0
+    vf_base = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black"
+    filter_complex = f"[0:v]{vf_base}[bg]; [bg][1:v]overlay=0:0"
+    
     output_template = os.path.join('temp_mebli', f'story_padded_{base_name}_part_%03d.mp4')
     
     cmd = [
-        'ffmpeg', '-y', '-i', local_path,
-        '-vf', vf_filters,
+        'ffmpeg', '-y', 
+        '-i', local_path,          # Вхід [0:v] - відео
+        '-i', overlay_png_path,    # Вхід [1:v] - наш прозорий PNG оверлей
+        '-filter_complex', filter_complex,
         '-c:v', 'libx264', 
         '-profile:v', 'main', 
         '-level:v', '4.0', 
         '-pix_fmt', 'yuv420p',
-        '-b:v', '3000k',         
+        '-b:v', '3000k',          
         '-maxrate', '4500k', 
         '-bufsize', '9000k', 
         '-c:a', 'aac', 
@@ -112,6 +196,12 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
 
     try:
         res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # Видаляємо тимчасовий файл оверлею, бо він уже "впечений" у відео
+        if os.path.exists(overlay_png_path):
+            try: os.remove(overlay_png_path)
+            except: pass
+            
         if res.returncode == 0:
             if duration > 60.0:
                 dir_content = os.listdir('temp_mebli')
@@ -130,73 +220,6 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
         print(f"⚠️ Помилка під час рендерингу відео через FFmpeg: {e}")
         
     return [local_path]
-
-# ✍️ ГАРМОНІЙНЕ НАКЛАДАННЯ ТЕКСТУ НА ЗОБРАЖЕННЯ (PILLOW) — НОВИЙ МАКЕТ
-def overlay_text_on_image(image_path, text, year=None, location=None):
-    try:
-        text = "".join(c for c in text if ord(c) < 128 or (0x0400 <= ord(c) <= 0x04FF) or c in "—–«»’'\".,!?-() ")
-        
-        with Image.open(image_path) as img:
-            img = img.convert('RGBA')
-            draw = ImageDraw.Draw(img)
-            
-            font_size_main = 40
-            font_size_meta = 34
-            font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-            
-            try:
-                font_main = ImageFont.truetype(font_path, font_size_main)
-                font_meta = ImageFont.truetype(font_path, font_size_meta)
-            except IOError:
-                font_main = ImageFont.load_default()
-                font_meta = ImageFont.load_default()
-            
-            if text:
-                words = text.split()
-                lines = []
-                current_line = []
-                for word in words:
-                    current_line.append(word)
-                    if draw.textlength(" ".join(current_line), font=font_main) > 920:
-                        current_line.pop()
-                        lines.append(" ".join(current_line))
-                        current_line = [word]
-                if current_line:
-                    lines.append(" ".join(current_line))
-                
-                start_y = 200      
-                line_height = 55   
-                
-                for i, line in enumerate(lines):
-                    bbox = draw.textbbox((0, 0), line, font=font_main)
-                    text_w = bbox[2] - bbox[0]
-                    current_x = (1080 - text_w) // 2
-                    current_y = start_y + (i * line_height)
-                    
-                    for dx, dy in [(-2,-2), (-2,2), (2,-2), (2,2), (-1,0), (1,0), (0,-1), (0,1)]:
-                        draw.text((current_x + dx, current_y + dy), line, font=font_main, fill=(0, 0, 0, 240))
-                    draw.text((current_x, current_y), line, font=font_main, fill=(255, 255, 255))
-            
-            meta_parts = []
-            if location and location != "Невідоме місце":
-                meta_parts.append(location)
-            if year:
-                meta_parts.append(str(year))
-                
-            if meta_parts:
-                meta_text = " | ".join(meta_parts)
-                meta_x = 70
-                meta_y = 1650  
-                
-                for dx, dy in [(-2,-2), (-2,2), (2,-2), (2,2), (-1,0), (1,0), (0,-1), (0,1)]:
-                    draw.text((meta_x + dx, meta_y + dy), meta_text, font=font_meta, fill=(0, 0, 0, 240))
-                draw.text((meta_x, meta_y), meta_text, font=font_meta, fill=(255, 240, 100))
-            
-            final_img = img.convert('RGB')
-            final_img.save(image_path, 'JPEG', quality=95)
-            print("🎨 Текст та метадані успішно нанесено на фото сторіс за новим макетом.")
-    except Exception as e:
-        print(f"⚠️ Помилка графічного накладання тексту на фото: {e}")
 
 def get_video_duration(video_path):
     cmd = ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nocues=1', video_path]
