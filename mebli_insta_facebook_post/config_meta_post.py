@@ -16,7 +16,6 @@ SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/a
 
 # 📁 ФОРМАТИ ФАЙЛІВ
 VALID_MEDIA_EXTENSIONS = ('.gif', '.heic', '.heif', '.jpeg', '.jpg', '.mp4', '.png', '.webp', '.mov', '.avi')
-DOCUMENT_EXTENSIONS = ('.pdf', '.doc', '.docx', '.djvu', '.txt', '.rtf', '.fb2', '.epub')
 
 # 🌍 ЦЕНТРАЛІЗОВАНА ЛОКАЛІЗАЦІЯ ІНТЕРФЕЙСУ ПОСТІВ
 LANG_CONFIG = {
@@ -48,7 +47,7 @@ LANG_CONFIG = {
         "loc": "Standort", 
         "assembly": "Montage: Möbel, bei deren Montage wir mitgewirkt haben (professioneller Aufbau)", 
         "concept": "Konzept: Interessante Möbellösungen, Trends und Ideen aus aller Welt", 
-        "ergonomics": "Ergonomie und Konstruktion: Nützliche Standards und Maße, die bei der Möbelkonstruktion beachtet werden sollten.",
+        "ergonomics": "Eronomie und Konstruktion: Nützliche Standards und Maße, die bei der Möbelkonstruktion beachtet werden sollten.",
         "link_in_bio": "🔗 Link zum Portfolio finden Sie in unserer Bio!",
         "fallback_caption": "Tolle Arbeit unseres Teams! Wie gefällt Ihnen das Ergebnis? 👇😊",
         "no_gemini_caption": "Qualitätsmöbel für Ihr gemütliches Zuhause! 👇✨ #moebel #interieur"
