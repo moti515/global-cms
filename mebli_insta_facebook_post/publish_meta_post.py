@@ -12,8 +12,8 @@ register_heif_opener()
 
 # Імпорт власних модулів проєкту
 import config_meta_post as config
-import media_processor
-import service_manager
+import media_processor_meta_post as media_processor
+import service_manager_meta_post as service_manager
 
 def wait_for_meta_container(container_id, access_token):
     """Очікує завершення асинхронної обробки відео/медіа контейнера в Meta API."""
@@ -106,9 +106,9 @@ def main():
     print(f"📂 Обрано групу: {category_name} (Файлів у пулі: {len(selected_group_items)})")
 
     # =====================================================================
-    # 🌍 УПРАВЛІННЯ МОВАМИ (ПРАПОРЦІ)
+    # 🌍 УПРАВЛІННЯ МОВАМИ
     # =====================================================================
-    lang_value = "🇺🇦"
+    lang_value = "UK"
     target_lang_cell = "'⚙️ Налаштування Папок'!F2" if mode == "fb_post" else "'⚙️ Налаштування Папок'!G2"
 
     try:
@@ -119,26 +119,27 @@ def main():
     except Exception as e:
         print(f"⚠️ Не вдалося прочитати мову з комірки {target_lang_cell}: {e}")
 
-    if any(x in lang_value for x in ["🇬🇧", "🇺🇸", "EN", "ENG", "АНГЛ", "ENGLISH"]):
+    # Строга логіка перемикання та призначення відповідних прапорів
+    if lang_value == "EN":
         lang_idx = 1
-        next_lang_value = "🇩🇪"
-    elif any(x in lang_value for x in ["🇩🇪", "DE", "GER", "НІМ", "DEUTSCH"]):
+        lang_flag = "🇬🇧"
+        next_lang_value = "DE"
+    elif lang_value == "DE":
         lang_idx = 2
-        next_lang_value = "🇺🇦"
-    else:
+        lang_flag = "🇩🇪"
+        next_lang_value = "UK"
+    else:  # За замовчуванням UK
         lang_idx = 0
-        next_lang_value = "🇬🇧"
+        lang_flag = "🇺🇦"
+        next_lang_value = "EN"
         
-    print(f"🌐 Поточна мова з {target_lang_cell}: {lang_value} (Індекс: {lang_idx}). Наступна: {next_lang_value}")
+    print(f"🌐 Поточна мова з {target_lang_cell}: {lang_value} (Індекс: {lang_idx}, Прапор: {lang_flag}). Наступна: {next_lang_value}")
 
     # 🚨 КРИТИЧНИЙ КОНТРОЛЬ ФОРМАТІВ ФАЙЛІВ
     for item in selected_group_items:
         f_name = item["data"][1]
         if not f_name.lower().endswith(config.VALID_MEDIA_EXTENSIONS):
-            err_msg = f"❌ КРИТИЧНА ПОМИЛКА: Файл '{f_name}' має непідтримуваний формат контенту!"
-            if f_name.lower().endswith(config.DOCUMENT_EXTENSIONS):
-                err_msg += " (Це файл документу)."
-            print(err_msg)
+            print(f"❌ КРИТИЧНА ПОМИЛКА: Файл '{f_name}' має непідтримуваний формат контенту!")
             sys.exit(1)
     
     os.makedirs('temp_mebli', exist_ok=True)
@@ -199,7 +200,6 @@ def main():
             pub_url, ik_id = service_manager.get_google_drive_direct_url(f_id, local_file_path=optimized_path)
             if not pub_url: raise ValueError("Порожній URL публікації.")
             
-            # ОПТИМІЗАЦІЯ: Зберігаємо структуру з чітким прапорцем типу файлу
             uploaded_media.append({"url": pub_url, "is_video": is_current_video})
             if ik_id: ik_ids.append(ik_id)
         except Exception as e:
@@ -212,10 +212,10 @@ def main():
         clean_up_local_files(local_files)
         return
 
-    # Створення повного підпису
+    # Створення повного підпису (додаємо прапор країни на самий початок)
     header_text = media_processor.get_manufacturer_header(category_name, target_date, lang_idx, mode, target_loc)
     ai_text = service_manager.generate_multimodal_caption(ai_analysis_images, category_name, target_date, lang_idx)
-    full_caption = f"{header_text}{ai_text}"
+    full_caption = f"{lang_flag} {header_text}{ai_text}"
 
     if not config.FB_PAGE_ID and mode == "fb_post":
         print("❌ Відсутній FB_PAGE_ID для Facebook!"); clean_up_local_files(local_files); sys.exit(1)
@@ -255,11 +255,11 @@ def main():
     # =====================================================================
     elif mode == "ig_post":
         if len(uploaded_media) > 1:
-            print(f"🗂️ Створенняカруселі Instagram з {len(uploaded_media)} елементів...")
+            print(f"🗂️ Створення каруселі Instagram з {len(uploaded_media)} елементів...")
             container_ids = []
             for item in uploaded_media:
                 url = item["url"]
-                is_vid = item["is_video"] # Виправлено: береться точне значення з аналізу, а не з тексту лінки
+                is_vid = item["is_video"]
                 
                 param_type = "video_url" if is_vid else "image_url"
                 payload = {param_type: url, "is_carousel_item": "true", "access_token": config.META_ACCESS_TOKEN}
@@ -279,7 +279,7 @@ def main():
             res = requests.post(f"https://graph.facebook.com/v19.0/{config.IG_USER_ID}/media", data=carousel_payload).json()
         else:
             print("🖼️ Створення одиничного контейнера в Instagram...")
-            is_vid = uploaded_media[0]["is_video"] # Виправлено тут теж
+            is_vid = uploaded_media[0]["is_video"]
             param_type = "video_url" if is_vid else "image_url"
             payload = {param_type: cloud_urls[0], "caption": full_caption, "access_token": config.META_ACCESS_TOKEN}
             if is_vid: payload["media_type"] = "VIDEO"
@@ -335,7 +335,7 @@ def main():
                 spreadsheetId=config.SPREADSHEET_ID, range=target_lang_cell,
                 valueInputOption='RAW', body={'values': [[next_lang_value]]}
             ).execute()
-            print(f"🔄 Мову на наступний раз змінено на прапорець: {next_lang_value}")
+            print(f"🔄 Мову на наступний раз змінено на: {next_lang_value}")
         except Exception as e:
             print(f"⚠️ Не вдалося оновити комірку мови: {e}")
 
