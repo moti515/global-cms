@@ -17,11 +17,9 @@ from pillow_heif import register_heif_opener
 # Реєструємо підтримку HEIC форматів для Pillow
 register_heif_opener()
 
-# Загальний проміжний кошик для обох режимів
 TRASH_FOLDER_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
-# Розширений список підтримуваних медіа-форматів
 VALID_EXTENSIONS = (
     '.3gp', '.avi', '.gif', '.heic', '.heif', '.jpeg', '.jpg', 
     '.mkv', '.mov', '.mp4', '.mpeg', '.mpg', '.tif', '.tiff', '.webp', '.png', '.swf'
@@ -47,7 +45,6 @@ def get_gdrive_service():
 # =====================================================================
 
 def extract_date_from_filename(filename):
-    """Каскадний пошук дати в імені файлу (без Unix Timestamp)."""
     current_year = datetime.now().year
     min_year = 2000  
     name_part = filename.rsplit('.', 1)[0]
@@ -77,7 +74,6 @@ def extract_date_from_filename(filename):
     return None
 
 def get_exif_data(image_path):
-    """Витягує дату зйомки та GPS координати з фотографій (включаючи суб-блоки IFD)."""
     date_str, lat, lon = None, None, None
     try:
         with Image.open(image_path) as img:
@@ -118,7 +114,6 @@ def get_exif_data(image_path):
     return date_str, lat, lon
 
 def get_video_metadata(video_path):
-    """Зчитує метадані відеофайлу за допомогою ffprobe."""
     date_str, lat, lon = None, None, None
     try:
         cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', video_path]
@@ -143,38 +138,47 @@ def get_video_metadata(video_path):
         print(f"⚠️ Попередження відео-метаданих для {video_path}: {e}")
     return date_str, lat, lon
 
-def get_location_data(lat, lon):
-    """Повертає назви гео-локацій строго українською мовою: (ГарнийПідпис, МістоДляГрупування)"""
+def get_location_data(lat, lon, mode='family'):
+    """Повертає назви міст/країн українською мовою. Для режиму exchange генерує посилання."""
     if lat is None or lon is None: 
         return "", ""
     try:
-        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15&accept-language=uk"
+        # zoom=13 ігнорує дрібні мікрорайони та фокусується на рівні міста
+        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=13&accept-language=uk"
         headers = {'User-Agent': 'FurnitureArchive_TelegramBot_2026'}
         res = requests.get(url, headers=headers, timeout=10).json()
         address = res.get('address', {})
         
-        exact_place = (
-            address.get('tourism') or 
-            address.get('amenity') or 
-            address.get('historic') or
-            address.get('suburb') or 
+        city_town = (
             address.get('city') or 
             address.get('town') or 
-            address.get('village')
+            address.get('village') or 
+            address.get('municipality') or
+            address.get('county')
         )
-        country = address.get('country')
-        display_location = f"{exact_place}, {country}" if exact_place and country else country
+        country = address.get('country') or ""
         
-        group_place = address.get('city') or address.get('town') or address.get('village') or address.get('county')
-        group_location = f"{group_place}, {country}" if group_place and country else country
-        
+        if city_town and country:
+            clean_location = f"{city_town}, {country}"
+        elif country:
+            clean_location = country
+        else:
+            clean_location = city_town or ""
+            
+        group_location = clean_location
+        display_location = clean_location
+
+        # Робимо гарний клікабельний підпис для фотообмінника
+        if mode == 'exchange' and display_location:
+            google_maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            display_location = f'<a href="{google_maps_url}">{clean_location}</a>'
+            
         return display_location, group_location
     except Exception as e:
         print(f"⚠️ Помилка геокодування OSM: {e}")
     return "", ""
 
 def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
-    """Каскадний інтелектуальний пошук дати створення медіафайлу."""
     if now_time is None:
         now_time = datetime.now()
     min_year = 2000  
@@ -228,9 +232,9 @@ def convert_to_mp4(input_path, output_path):
     print(f"🎬 Оптимізуємо відео {input_path} в стандартний MP4...")
     cmd = [
         'ffmpeg', '-y', '-i', input_path,
-        '-vcodec', 'libx264', '-crf', '28',
+        '-vcodec', 'libx264', '-crf', '30',  # Трохи збільшено стиснення для економії ліміту
         '-preset', 'faster', '-acodec', 'aac',
-        '-b:a', '128k', '-pix_fmt', 'yuv420p',
+        '-b:a', '96k', '-pix_fmt', 'yuv420p',
         '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
         output_path
     ]
@@ -263,6 +267,7 @@ def send_media_group(media_batch, caption, chat_id):
         media_obj = {"type": m_type, "media": f"attach://{attach_name}"}
         if idx == 0:
             media_obj["caption"] = caption
+            media_obj["parse_mode"] = "HTML"  # Включаємо підтримку HTML тегів для посилань
             
         media.append(media_obj)
         files[attach_name] = open(item['local_path'], 'rb')
@@ -357,7 +362,7 @@ def main():
         file_date = final_dt.strftime('%d.%m.%Y')
         
         # Отримання структурованої локації
-        display_loc, group_loc = get_location_data(lat, lon)
+        display_loc, group_loc = get_location_data(lat, lon, mode=mode)
         if not group_loc:
             group_loc = "Невідоме місце"
 
@@ -384,18 +389,18 @@ def main():
                 continue
 
         elif mime_type.startswith('video/') or lower_name.endswith(('.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg', '.swf')):
-            is_large = os.path.getsize(local_path) > 49 * 1024 * 1024
+            is_large = os.path.getsize(local_path) > 47 * 1024 * 1024
             is_not_mp4 = not lower_name.endswith('.mp4') or mime_type != 'video/mp4' or lower_name.endswith('.swf')
             
             if is_large or is_not_mp4:
                 compressed_path = os.path.join('downloaded', 'opt_' + f['name'].rsplit('.', 1)[0] + '.mp4')
                 convert_to_mp4(local_path, compressed_path)
-                if os.path.exists(compressed_path) and os.path.getsize(compressed_path) <= 49 * 1024 * 1024:
+                if os.path.exists(compressed_path) and os.path.getsize(compressed_path) <= 47 * 1024 * 1024:
                     local_files_to_clean.append(compressed_path)
                     local_path = compressed_path
                     mime_type = 'video/mp4'
                 elif is_large:
-                    print(f"❌ Не вдалося оптимізувати відео {f['name']} під ліміт 50MB, пропускаємо.")
+                    print(f"❌ Не вдалося оптимізувати відео {f['name']} під ліміт Bot API, пропускаємо.")
                     continue
                 
         processed_items.append({
@@ -414,17 +419,34 @@ def main():
         key = (item['date'], item['group_location'])
         groups.setdefault(key, []).append(item)
         
-    # Публікація СУВОРО ОДНОГО альбому (макс 10 елементів) за один запуск
+    # Публікація суворо ОДНОГО безпечного за розміром альбому за один сеанс
     for (date, group_loc), items in groups.items():
-        batch = items[:10]  
+        batch = []
+        current_batch_size = 0
         
-        # Використовуємо найкрасивіший підпис локації з першого елемента пакета
+        for item in items:
+            f_size = os.path.getsize(item['local_path'])
+            # Пропускаємо поодинокі файли, що перевищують жорсткий ліміт API
+            if f_size > 48 * 1024 * 1024:
+                print(f"⚠️ Файл {item['name']} занадто великий ({f_size / 1024 / 1024:.2f} MB). Пропускаємо.")
+                continue
+                
+            # Захист від Request Entity Too Large: макс 10 шт або сумарно 90 МБ на HTTP-запит
+            if len(batch) >= 10 or (current_batch_size + f_size) > 90 * 1024 * 1024:
+                break
+                
+            batch.append(item)
+            current_batch_size += f_size
+            
+        if not batch:
+            continue
+            
         sample_display_loc = batch[0]['display_location']
         caption = f"📅 {date}"
         if sample_display_loc:
             caption += f" 📍 {sample_display_loc}"
                 
-        print(f"\n📡 Надсилання альбому для {caption} (Елементів: {len(batch)})...")
+        print(f"\n📡 Надсилання безпечного альбому для {date} (Елементів: {len(batch)}, Розмір: {current_batch_size / 1024 / 1024:.2f} MB)...")
         success = send_media_group(batch, caption, CHAT_ID)
             
         if success:
@@ -441,20 +463,17 @@ def main():
                 except Exception as e:
                     print(f"❌ Не вдалося перемістити {uploaded_item['name']}: {e}")
             
-            # Очищення тимчасового локального сміття
             clean_local_files(local_files_to_clean)
-            print(f"\n🏁 Першу партію медіа ({len(batch)} шт.) успішно оброблено. Завершуємо.")
+            print(f"\n🏁 Альбом успішно оброблено. Завершуємо роботу.")
             sys.exit(0)
         else:
-            print(f"\n💥 ПОМИЛКА: Не вдалося опублікувати альбом для {caption}!")
+            print(f"\n💥 ПОМИЛКА: Не вдалося опублікувати альбом для {date}!")
             clean_local_files(local_files_to_clean)
-            sys.exit(1)  # Аварійне завершення для зупинки GitHub Actions (файли не видаляються з черги)
+            sys.exit(1)
 
-    # Якщо цикл завершився і нічого не надіслав через порожні групи
     clean_local_files(local_files_to_clean)
 
 def clean_local_files(files_list):
-    """Видаляє локально завантажені/згенеровані файли."""
     for f in files_list:
         if os.path.exists(f):
             try:
