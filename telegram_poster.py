@@ -143,7 +143,6 @@ def get_location_data(lat, lon, mode='family'):
     if lat is None or lon is None: 
         return "", ""
     try:
-        # zoom=13 ігнорує дрібні мікрорайони та фокусується на рівні міста
         url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=13&accept-language=uk"
         headers = {'User-Agent': 'FurnitureArchive_TelegramBot_2026'}
         res = requests.get(url, headers=headers, timeout=10).json()
@@ -168,9 +167,9 @@ def get_location_data(lat, lon, mode='family'):
         group_location = clean_location
         display_location = clean_location
 
-        # Робимо гарний клікабельний підпис для фотообмінника
+        # Виправлено формат посилання на Google Maps
         if mode == 'exchange' and display_location:
-            google_maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            google_maps_url = f"https://www.google.com/maps/?q={lat},{lon}"
             display_location = f'<a href="{google_maps_url}">{clean_location}</a>'
             
         return display_location, group_location
@@ -232,7 +231,7 @@ def convert_to_mp4(input_path, output_path):
     print(f"🎬 Оптимізуємо відео {input_path} в стандартний MP4...")
     cmd = [
         'ffmpeg', '-y', '-i', input_path,
-        '-vcodec', 'libx264', '-crf', '30',  # Трохи збільшено стиснення для економії ліміту
+        '-vcodec', 'libx264', '-crf', '30',  
         '-preset', 'faster', '-acodec', 'aac',
         '-b:a', '96k', '-pix_fmt', 'yuv420p',
         '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
@@ -267,7 +266,7 @@ def send_media_group(media_batch, caption, chat_id):
         media_obj = {"type": m_type, "media": f"attach://{attach_name}"}
         if idx == 0:
             media_obj["caption"] = caption
-            media_obj["parse_mode"] = "HTML"  # Включаємо підтримку HTML тегів для посилань
+            media_obj["parse_mode"] = "HTML"  
             
         media.append(media_obj)
         files[attach_name] = open(item['local_path'], 'rb')
@@ -307,7 +306,7 @@ def main():
         print("❌ ПОМИЛКА: Не вказано ID цільового чату/каналу!")
         sys.exit(1)
         
-    print("🚀 Старт синхронізації медіа...")
+    print("🚀 Старт синхронізації media...")
     service = get_gdrive_service()
     
     try:
@@ -413,25 +412,31 @@ def main():
             'display_location': display_loc
         })
 
+    # [ЗАХИСТ 1] Файли на Диску були, але жоден не зміг успішно обробитися/завантажитися
+    if gdrive_files and not processed_items:
+        print("💥 ПОМИЛКА: Файли на Диску виявлено, але жоден з них не вдалося завантажити чи обробити!")
+        clean_local_files(local_files_to_clean)
+        sys.exit(1)
+
     # Розумне групування за [Дата + МістоДляГрупування]
     groups = {}
     for item in processed_items:
         key = (item['date'], item['group_location'])
         groups.setdefault(key, []).append(item)
         
-    # Публікація суворо ОДНОГО безпечного за розміром альбому за один сеанс
+    album_was_sent = False
+
+    # Публікація альбому
     for (date, group_loc), items in groups.items():
         batch = []
         current_batch_size = 0
         
         for item in items:
             f_size = os.path.getsize(item['local_path'])
-            # Пропускаємо поодинокі файли, що перевищують жорсткий ліміт API
             if f_size > 48 * 1024 * 1024:
                 print(f"⚠️ Файл {item['name']} занадто великий ({f_size / 1024 / 1024:.2f} MB). Пропускаємо.")
                 continue
                 
-            # Захист від Request Entity Too Large: макс 10 шт або сумарно 90 МБ на HTTP-запит
             if len(batch) >= 10 or (current_batch_size + f_size) > 90 * 1024 * 1024:
                 break
                 
@@ -450,6 +455,7 @@ def main():
         success = send_media_group(batch, caption, CHAT_ID)
             
         if success:
+            album_was_sent = True
             print(f"✅ Успішно надіслано в Telegram. Переміщаємо файли в кошик Google Диску...")
             for uploaded_item in batch:
                 try:
@@ -465,15 +471,21 @@ def main():
             
             clean_local_files(local_files_to_clean)
             print(f"\n🏁 Альбом успішно оброблено. Завершуємо роботу.")
-            sys.exit(0)
+            sys.exit(0)  # Успішний вихід після першого обробленого альбому
         else:
             print(f"\n💥 ПОМИЛКА: Не вдалося опублікувати альбом для {date}!")
             clean_local_files(local_files_to_clean)
             sys.exit(1)
 
-    clean_local_files(local_files_to_clean)
+    # [ЗАХИСТ 2] Якщо пройшли весь цикл, обробили файли, але жоден батч не сформувався (наприклад, усі файли великі)
+    if not album_was_sent:
+        print("💥 ПОМИЛКА: Контент було оброблено, але жодного альбому не надіслано через обмеження розміру файлів!")
+        clean_local_files(local_files_to_clean)
+        sys.exit(1)
 
 def clean_local_files(files_list):
+    if not files_list:
+        return
     for f in files_list:
         if os.path.exists(f):
             try:
