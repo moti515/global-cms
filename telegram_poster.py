@@ -5,6 +5,8 @@ import io
 import time
 import subprocess
 import re
+import glob
+import math
 from datetime import datetime
 import requests
 from google.oauth2 import service_account
@@ -167,7 +169,6 @@ def get_location_data(lat, lon, mode='family'):
         group_location = clean_location
         display_location = clean_location
 
-        # Виправлено формат посилання на Google Maps
         if mode == 'exchange' and display_location:
             google_maps_url = f"https://www.google.com/maps/?q={lat},{lon}"
             display_location = f'<a href="{google_maps_url}">{clean_location}</a>'
@@ -248,6 +249,56 @@ def gif_to_mp4(input_path, output_path):
         output_path
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def split_video(video_path, target_max_size_mb=40):
+    """Швидко розрізає відео без втрати якості (copy кодек), якщо воно перевищує ліміт."""
+    file_size = os.path.getsize(video_path)
+    target_size_bytes = target_max_size_mb * 1024 * 1024
+    if file_size <= target_size_bytes:
+        return [video_path]
+        
+    print(f"✂️ Відео {video_path} завелике ({file_size / 1024 / 1024:.2f} MB). Нарізаємо на частини...")
+    
+    cmd = ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+    if res.returncode != 0 or not res.stdout.strip():
+        print("⚠️ Не вдалося визначити тривалість відео для нарізки.")
+        return [video_path]
+        
+    try:
+        total_duration = float(res.stdout.strip())
+    except ValueError:
+        return [video_path]
+        
+    num_parts = math.ceil(file_size / target_size_bytes)
+    part_duration = total_duration / num_parts
+    
+    base_dir = os.path.dirname(video_path) or '.'
+    filename_only = os.path.basename(video_path)
+    name_part = filename_only.rsplit('.', 1)[0]
+    ext_part = filename_only.rsplit('.', 1)[1] if '.' in filename_only else 'mp4'
+    
+    output_template = os.path.join(base_dir, f"split_v_{name_part}_%03d.{ext_part}")
+    
+    split_cmd = [
+        'ffmpeg', '-y', '-i', video_path,
+        '-c', 'copy', '-map', '0',
+        '-f', 'segment', '-segment_time', str(part_duration),
+        '-reset_timestamps', '1',
+        output_template
+    ]
+    
+    subprocess.run(split_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    pattern = os.path.join(base_dir, f"split_v_{name_part}_*.*")
+    generated_files = sorted(glob.glob(pattern))
+    
+    if generated_files:
+        print(f"🪓 Відео успішно розрізано на {len(generated_files)} частин.")
+        return generated_files
+    else:
+        print("❌ Помилка під час нарізки відео через ffmpeg. Залишаємо оригінал.")
+        return [video_path]
 
 def send_media_group(media_batch, caption, chat_id):
     token = os.environ.get('TELEGRAM_BOT_TOKEN')
@@ -388,20 +439,35 @@ def main():
                 continue
 
         elif mime_type.startswith('video/') or lower_name.endswith(('.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg', '.swf')):
-            is_large = os.path.getsize(local_path) > 47 * 1024 * 1024
+            is_large = os.path.getsize(local_path) > 44 * 1024 * 1024
             is_not_mp4 = not lower_name.endswith('.mp4') or mime_type != 'video/mp4' or lower_name.endswith('.swf')
             
             if is_large or is_not_mp4:
                 compressed_path = os.path.join('downloaded', 'opt_' + f['name'].rsplit('.', 1)[0] + '.mp4')
                 convert_to_mp4(local_path, compressed_path)
-                if os.path.exists(compressed_path) and os.path.getsize(compressed_path) <= 47 * 1024 * 1024:
+                if os.path.exists(compressed_path):
                     local_files_to_clean.append(compressed_path)
                     local_path = compressed_path
                     mime_type = 'video/mp4'
-                elif is_large:
-                    print(f"❌ Не вдалося оптимізувати відео {f['name']} під ліміт Bot API, пропускаємо.")
-                    continue
-                
+            
+            # [ІНТЕЛЕКТУАЛЬНА НАРІЗКА ВЕЛИКИХ ВІДЕО]
+            if os.path.getsize(local_path) > 44 * 1024 * 1024:
+                video_parts = split_video(local_path, target_max_size_mb=40)
+                for idx, part_path in enumerate(video_parts):
+                    if part_path != local_path:
+                        local_files_to_clean.append(part_path)
+                    
+                    processed_items.append({
+                        'id': f['id'],
+                        'name': f['name'],
+                        'mime': 'video/mp4',
+                        'local_path': part_path,
+                        'date': file_date,
+                        'group_location': group_loc,
+                        'display_location': display_loc
+                    })
+                continue
+
         processed_items.append({
             'id': f['id'],
             'name': f['name'],
@@ -412,9 +478,8 @@ def main():
             'display_location': display_loc
         })
 
-    # [ЗАХИСТ 1] Файли на Диску були, але жоден не зміг успішно обробитися/завантажитися
     if gdrive_files and not processed_items:
-        print("💥 ПОМИЛКА: Файли на Диску виявлено, але жоден з них не вдалося завантажити чи обробити!")
+        print("💥 ПОМИЛКА: Файли на Диску виявлено, але жоден з них не зміг успішно завантажитися чи обробитися!")
         clean_local_files(local_files_to_clean)
         sys.exit(1)
 
@@ -424,64 +489,104 @@ def main():
         key = (item['date'], item['group_location'])
         groups.setdefault(key, []).append(item)
         
-    album_was_sent = False
-
-    # Публікація альбому
+    # Публікація суворо ОДНОГО безпечного за розміром контенту за сесію
     for (date, group_loc), items in groups.items():
+        # Захист від розриву частин: групуємо елементи за оригінальним Google Drive ID
+        from collections import OrderedDict
+        files_dict = OrderedDict()
+        for item in items:
+            files_dict.setdefault(item['id'], []).append(item)
+            
         batch = []
         current_batch_size = 0
         
-        for item in items:
-            f_size = os.path.getsize(item['local_path'])
-            if f_size > 48 * 1024 * 1024:
-                print(f"⚠️ Файл {item['name']} занадто великий ({f_size / 1024 / 1024:.2f} MB). Пропускаємо.")
-                continue
-                
-            if len(batch) >= 10 or (current_batch_size + f_size) > 90 * 1024 * 1024:
-                break
-                
-            batch.append(item)
-            current_batch_size += f_size
+        for gdrive_id, file_parts in files_dict.items():
+            file_total_size = sum(os.path.getsize(p['local_path']) for p in file_parts)
             
+            # Якщо файл (або всі його частини разом) влазить у поточні ліміти альбому
+            if len(batch) + len(file_parts) <= 10 and (current_batch_size + file_total_size) <= 80 * 1024 * 1024:
+                batch.extend(file_parts)
+                current_batch_size += file_total_size
+            else:
+                if batch:
+                    break  # Зупиняємося, якщо батч вже має інші медіа
+                else:
+                    # Якщо батч порожній, а один цей файл перевищує ліміти (наприклад, дуже довге відео на багато шматків),
+                    # ми забираємо його повністю, а нижче розіб'ємо на послідовні під-альбоми
+                    batch = file_parts
+                    current_batch_size = file_total_size
+                    break
+                    
         if not batch:
             continue
             
         sample_display_loc = batch[0]['display_location']
-        caption = f"📅 {date}"
-        if sample_display_loc:
-            caption += f" 📍 {sample_display_loc}"
+        success = False
+        
+        # Перевіряємо, чи потрібно розбивати великий батч на послідовні під-альбоми
+        if current_batch_size > 80 * 1024 * 1024 or len(batch) > 10:
+            print(f"🔄 Великий контент розбито на декілька під-альбомів через ліміти ({current_batch_size / 1024 / 1024:.2f} MB)...")
+            sub_batches = []
+            sub_b = []
+            sub_size = 0
+            for item in batch:
+                f_size = os.path.getsize(item['local_path'])
+                if len(sub_b) >= 5 or (sub_size + f_size) > 75 * 1024 * 1024:
+                    sub_batches.append(sub_b)
+                    sub_b = []
+                    sub_size = 0
+                sub_b.append(item)
+                sub_size += f_size
+            if sub_b:
+                sub_batches.append(sub_b)
                 
-        print(f"\n📡 Надсилання безпечного альбому для {date} (Елементів: {len(batch)}, Розмір: {current_batch_size / 1024 / 1024:.2f} MB)...")
-        success = send_media_group(batch, caption, CHAT_ID)
+            all_success = True
+            for s_idx, sb in enumerate(sub_batches):
+                caption = f"📅 {date}"
+                if sample_display_loc:
+                    caption += f" 📍 {sample_display_loc}"
+                caption += f" (Частина {s_idx + 1}/{len(sub_batches)})"
+                
+                print(f"📡 Надсилання під-альбому {s_idx + 1}/{len(sub_batches)} (Елементів: {len(sb)})...")
+                if not send_media_group(sb, caption, CHAT_ID):
+                    all_success = False
+                    break
+            success = all_success
+        else:
+            # Звичайне надсилання цілісного альбому
+            caption = f"📅 {date}"
+            if sample_display_loc:
+                caption += f" 📍 {sample_display_loc}"
+                
+            print(f"\n📡 Надсилання безпечного альбому для {date} (Елементів: {len(batch)}, Розмір: {current_batch_size / 1024 / 1024:.2f} MB)...")
+            success = send_media_group(batch, caption, CHAT_ID)
             
         if success:
-            album_was_sent = True
             print(f"✅ Успішно надіслано в Telegram. Переміщаємо файли в кошик Google Диску...")
-            for uploaded_item in batch:
+            uploaded_ids = set(item['id'] for item in batch)
+            for g_id in uploaded_ids:
+                name_sample = next(item['name'] for item in batch if item['id'] == g_id)
                 try:
                     service.files().update(
-                        fileId=uploaded_item['id'],
+                        fileId=g_id,
                         addParents=TRASH_FOLDER_ID,
                         removeParents=FOLDER_ID,
                         fields='id, parents'
                     ).execute()
-                    print(f"📦 Переміщено на Диску: {uploaded_item['name']}")
+                    print(f"📦 Переміщено на Диску: {name_sample}")
                 except Exception as e:
-                    print(f"❌ Не вдалося перемістити {uploaded_item['name']}: {e}")
+                    print(f"❌ Не вдалося перемістити {name_sample}: {e}")
             
             clean_local_files(local_files_to_clean)
-            print(f"\n🏁 Альбом успішно оброблено. Завершуємо роботу.")
-            sys.exit(0)  # Успішний вихід після першого обробленого альбому
+            print(f"\n🏁 Роботу успішно завершено.")
+            sys.exit(0)
         else:
-            print(f"\n💥 ПОМИЛКА: Не вдалося опублікувати альбом для {date}!")
+            print(f"\n💥 ПОМИЛКА: Не вдалося опублікувати контент для {date}!")
             clean_local_files(local_files_to_clean)
             sys.exit(1)
 
-    # [ЗАХИСТ 2] Якщо пройшли весь цикл, обробили файли, але жоден батч не сформувався (наприклад, усі файли великі)
-    if not album_was_sent:
-        print("💥 ПОМИЛКА: Контент було оброблено, але жодного альбому не надіслано через обмеження розміру файлів!")
-        clean_local_files(local_files_to_clean)
-        sys.exit(1)
+    # Якщо пройшли цикл, але нічого не відправили
+    clean_local_files(local_files_to_clean)
 
 def clean_local_files(files_list):
     if not files_list:
