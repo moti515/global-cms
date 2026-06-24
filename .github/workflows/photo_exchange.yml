@@ -27,5 +27,4 @@ jobs:
       env:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      # Зверніть увагу на аргумент 'exchange' в кінці команди!
-      run: python main.py exchange
+      run: python telegram_poster.py exchange
