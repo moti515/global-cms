@@ -141,7 +141,6 @@ def get_video_metadata(video_path):
     return date_str, lat, lon
 
 def get_location_data(lat, lon, mode='family'):
-    """Повертає назви міст/країн українською мовою. Для режиму exchange генерує посилання."""
     if lat is None or lon is None: 
         return "", ""
     try:
@@ -250,7 +249,7 @@ def gif_to_mp4(input_path, output_path):
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def split_video(video_path, target_max_size_mb=40):
+def split_video(video_path, target_max_size_mb=38):
     """Швидко розрізає відео без втрати якості (copy кодек), якщо воно перевищує ліміт."""
     file_size = os.path.getsize(video_path)
     target_size_bytes = target_max_size_mb * 1024 * 1024
@@ -407,16 +406,13 @@ def main():
 
         local_files_to_clean.append(local_path)
 
-        # Аналіз інтелектуальної дати та геокоординат
         final_dt, lat, lon = get_intellectual_date(local_path, f['name'], f)
         file_date = final_dt.strftime('%d.%m.%Y')
         
-        # Отримання структурованої локації
         display_loc, group_loc = get_location_data(lat, lon, mode=mode)
         if not group_loc:
             group_loc = "Невідоме місце"
 
-        # Оптимізація та конвертація форматів
         if mime_type == 'image/gif' or lower_name.endswith('.gif'):
             mp4_path = os.path.join('downloaded', f['name'].rsplit('.', 1)[0] + '_gif.mp4')
             gif_to_mp4(local_path, mp4_path)
@@ -439,7 +435,7 @@ def main():
                 continue
 
         elif mime_type.startswith('video/') or lower_name.endswith(('.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg', '.swf')):
-            is_large = os.path.getsize(local_path) > 44 * 1024 * 1024
+            is_large = os.path.getsize(local_path) > 40 * 1024 * 1024
             is_not_mp4 = not lower_name.endswith('.mp4') or mime_type != 'video/mp4' or lower_name.endswith('.swf')
             
             if is_large or is_not_mp4:
@@ -451,8 +447,8 @@ def main():
                     mime_type = 'video/mp4'
             
             # [ІНТЕЛЕКТУАЛЬНА НАРІЗКА ВЕЛИКИХ ВІДЕО]
-            if os.path.getsize(local_path) > 44 * 1024 * 1024:
-                video_parts = split_video(local_path, target_max_size_mb=40)
+            if os.path.getsize(local_path) > 40 * 1024 * 1024:
+                video_parts = split_video(local_path, target_max_size_mb=38)
                 for idx, part_path in enumerate(video_parts):
                     if part_path != local_path:
                         local_files_to_clean.append(part_path)
@@ -489,9 +485,7 @@ def main():
         key = (item['date'], item['group_location'])
         groups.setdefault(key, []).append(item)
         
-    # Публікація суворо ОДНОГО безпечного за розміром контенту за сесію
     for (date, group_loc), items in groups.items():
-        # Захист від розриву частин: групуємо елементи за оригінальним Google Drive ID
         from collections import OrderedDict
         files_dict = OrderedDict()
         for item in items:
@@ -503,16 +497,15 @@ def main():
         for gdrive_id, file_parts in files_dict.items():
             file_total_size = sum(os.path.getsize(p['local_path']) for p in file_parts)
             
-            # Якщо файл (або всі його частини разом) влазить у поточні ліміти альбому
-            if len(batch) + len(file_parts) <= 10 and (current_batch_size + file_total_size) <= 80 * 1024 * 1024:
+            # 🚨 СУВОРИЙ ЗАХИСТ: Сумарна вага всього батчу не повинна перевищувати 45 МБ!
+            if len(batch) + len(file_parts) <= 10 and (current_batch_size + file_total_size) <= 45 * 1024 * 1024:
                 batch.extend(file_parts)
                 current_batch_size += file_total_size
             else:
                 if batch:
-                    break  # Зупиняємося, якщо батч вже має інші медіа
+                    break  
                 else:
-                    # Якщо батч порожній, а один цей файл перевищує ліміти (наприклад, дуже довге відео на багато шматків),
-                    # ми забираємо його повністю, а нижче розіб'ємо на послідовні під-альбоми
+                    # Якщо навіть один файл/його шматки перевищують 45 МБ, забираємо і нижче поділимо на під-альбоми
                     batch = file_parts
                     current_batch_size = file_total_size
                     break
@@ -524,14 +517,14 @@ def main():
         success = False
         
         # Перевіряємо, чи потрібно розбивати великий батч на послідовні під-альбоми
-        if current_batch_size > 80 * 1024 * 1024 or len(batch) > 10:
-            print(f"🔄 Великий контент розбито на декілька під-альбомів через ліміти ({current_batch_size / 1024 / 1024:.2f} MB)...")
+        if current_batch_size > 45 * 1024 * 1024 or len(batch) > 10:
+            print(f"🔄 Великий контент розбито на декілька під-альбомів через жорсткі ліміти POST-запиту ({current_batch_size / 1024 / 1024:.2f} MB)...")
             sub_batches = []
             sub_b = []
             sub_size = 0
             for item in batch:
                 f_size = os.path.getsize(item['local_path'])
-                if len(sub_b) >= 5 or (sub_size + f_size) > 75 * 1024 * 1024:
+                if len(sub_b) >= 5 or (sub_size + f_size) > 42 * 1024 * 1024:
                     sub_batches.append(sub_b)
                     sub_b = []
                     sub_size = 0
@@ -585,7 +578,6 @@ def main():
             clean_local_files(local_files_to_clean)
             sys.exit(1)
 
-    # Якщо пройшли цикл, але нічого не відправили
     clean_local_files(local_files_to_clean)
 
 def clean_local_files(files_list):
