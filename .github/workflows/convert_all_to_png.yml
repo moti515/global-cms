@@ -35,22 +35,22 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y autoconf libtool texinfo build-essential git
         
-        # Клонуємо репозиторій разом із підмодулями (запобігає помилці jsmn.h)
         git clone --depth 1 --recursive https://github.com/LibreDWG/libredwg.git
         cd libredwg
         
-        # Генеруємо конфігурацію
         ./autogen.sh
-        
-        # Вимикаємо важкі мовні прив'язки та JSON, щоб зібрати лише утиліту dwg2dxf
         ./configure --disable-bindings --disable-json
         
-        # Компілюємо паралельно на всіх ядрах процесора раннера
-        make -j$(nproc)
-        sudo make install
+        # Компілюємо ТІЛЬКИ ядро (src) та консольні утиліти (programs)
+        make -j$(nproc) -C src
+        make -j$(nproc) -C programs
+        
+        # Встановлюємо лише їх, минаючи зламану папку examples
+        sudo make -C src install
+        sudo make -C programs install
         sudo ldconfig
         
-        # Перевіряємо, що утиліта встановилася і готова до роботи
+        # Перевіряємо, що все на місці й працює
         dwg2dxf --version
 
     # Бібліотеки для CAD ставимо лише за наявності dxf або dwg файлів
