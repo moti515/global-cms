@@ -29,40 +29,22 @@ jobs:
         GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
       run: python convert_pdf_to_png.py --scan
 
-    # Складна збірка LibreDWG запускається ТІЛЬКИ якщо знайдено нові файли .dwg
-    - name: Встановлення залежностей та збірка Офіційного LibreDWG
+    # Замість складної збірки LibreDWG, ставимо готовий промисловий конвертер від ODA
+    - name: Встановлення ODA File Converter (Teigha)
       if: steps.scan_step.outputs.has_dwg == 'true'
       run: |
         sudo apt-get update
+        # Встановлюємо мінімальні залежності для графіки та віртуального екрана (xvfb)
+        sudo apt-get install -y libgl1-mesa-glx xvfb libfontconfig1 libxrender1 libxext6 libglib2.0-0 libxi6 libxrandr2
         
-        # 1. Спробуємо встановити вже готовий пакет з репозиторію Ubuntu (це займе 3 секунди)
-        if sudo apt-get install -y libredwg-utils; then
-          echo "Успішно встановлено готову утиліту з apt!"
-        else
-          echo "Готового пакета немає в apt. Починаємо супер-швидку збірку з коду..."
-          
-          # 2. Якщо пакета немає, збираємо полегшену версію з коду на всіх ядрах
-          sudo apt-get install -y autoconf libtool texinfo build-essential git
-          
-          # Клонуємо лише останній коміт (--depth 1) разом із підмодулями (--recursive)
-          git clone --depth 1 --recursive https://github.com/LibreDWG/libredwg.git
-          cd libredwg
-          
-          ./autogen.sh
-          
-          # --disable-json вирішує проблему з jsmn і економить час
-          # --disable-bindings вимикає важкі мовні обгортки
-          ./configure --disable-bindings --disable-json
-          
-          # -j$(nproc) запускає збірку на всіх доступних ядрах раннера (в рази швидше)
-          make -j$(nproc)
-          
-          sudo make install
-          sudo ldconfig
-        fi
+        # Завантажуємо офіційний релізний deb-пакет утиліти
+        curl -L "https://download.opendesign.com/guestfiles/ODAFileConverter/ODAFileConverter_QT5_lnxX64_8.3dll.deb" -o oda.deb
         
-        # Перевірка працездатності
-        which dwg2dxf
+        # Встановлюємо утиліту в систему
+        sudo dpkg -i oda.deb || sudo apt-get install -f -y
+        
+        # Перевіряємо наявність у системному шляху
+        which ODAFileConverter
 
     # Бібліотеки для CAD ставимо лише за наявності dxf або dwg файлів
     - name: Встановлення CAD бібліотек Python
