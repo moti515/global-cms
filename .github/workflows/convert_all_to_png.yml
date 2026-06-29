@@ -34,15 +34,31 @@ jobs:
       if: steps.scan_step.outputs.has_dwg == 'true'
       run: |
         sudo apt-get update
-        sudo apt-get install -y autoconf libtool texinfo build-essential unzip
-        curl -L https://codeload.github.com/LibreDWG/libredwg/zip/refs/heads/master -o libredwg.zip
-        unzip libredwg.zip
-        cd libredwg-master
-        ./autogen.sh
-        ./configure --disable-bindings
-        make
-        sudo make install
-        sudo ldconfig
+        
+        # 1. Спробуємо встановити вже готовий пакет з репозиторію Ubuntu
+        if sudo apt-get install -y libredwg-utils; then
+          echo "Успішно встановлено готову утиліту з apt за кілька секунд!"
+        else
+          echo "Готового пакета немає в apt. Починаємо швидку збірку з коду..."
+          
+          # 2. Якщо пакета немає, збираємо з коду, але використовуємо всі ядра процесора
+          sudo apt-get install -y autoconf libtool texinfo build-essential unzip
+          curl -L https://codeload.github.com/LibreDWG/libredwg/zip/refs/heads/master -o libredwg.zip
+          unzip libredwg.zip
+          cd libredwg-master
+          
+          ./autogen.sh
+          ./configure --disable-bindings
+          
+          # Прапорець -j$(nproc) задіє всі доступні ядра процесора раннера
+          make -j$(nproc)
+          
+          sudo make install
+          sudo ldconfig
+        fi
+        
+        # Перевірка, чи утиліта на місці
+        which dwg2dxf
 
     # Бібліотеки для CAD ставимо лише за наявності dxf або dwg файлів
     - name: Встановлення CAD бібліотек Python
