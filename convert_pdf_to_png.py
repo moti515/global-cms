@@ -150,33 +150,25 @@ def main():
             dxf_to_render = temp_input_path
             
             if ext == '.dwg':
-                print("  -> Запуск ізольованого Docker-конвертера для DWG...")
-                
-                # Отримуємо абсолютний шлях до нашої тимчасової папки на хості
-                abs_temp_dir = os.path.abspath(TEMP_DIR)
-                
-                # Команда запускає Docker, монтує папку з файлом у /data всередині контейнера
-                cmd = [
-                    "docker", "run", "--rm",
-                    "-v", f"{abs_temp_dir}:/data",
-                    "local/dwg-to-dxf"
-                ]
-                
-                # Запускаємо контейнер (він сам знайде наш DWG всередині /data)
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                
-                # Контейнер поклав DXF точно в ту саму папку, перевіряємо його наявність
+                print("  -> Конвертація DWG у DXF через LibreDWG...")
                 temp_dxf_path = os.path.join(TEMP_DIR, f"{base_name}.dxf")
                 
+                # Синтаксис LibreDWG: dwg2dxf -o <куди_зберегти> <що_конвертувати>
+                cmd = ["dwg2dxf", "-o", temp_dxf_path, temp_input_path]
+                
+                # Запускаємо конвертацію
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                
+                # Перевіряємо, чи успішно створився файл DXF
                 if not os.path.exists(temp_dxf_path):
-                    print(f"  [Помилка Docker-конвертера]: {result.stderr}")
+                    print(f"  [Помилка dwg2dxf]: {result.stderr}")
                     if os.path.exists(temp_input_path): os.remove(temp_input_path)
                     continue
-                    
+                
                 dxf_to_render = temp_dxf_path
-                print("  -> DWG успішно конвертовано в DXF за допомогою Docker.")
+                print("  -> DWG успішно переведено в DXF.")
 
-            # Рендеримо DXF (оригінальний або щойно створений з DWG) у формат PNG
+            # Рендеримо отриманий або оригінальний DXF у PNG
             img_name = f"{base_name}.png"
             img_path = os.path.join(TEMP_DIR, img_name)
             
@@ -184,10 +176,10 @@ def main():
                 file_metadata = {'name': img_name, 'parents': [FOLDER_ID], 'modifiedTime': mod_time_str}
                 media = MediaFileUpload(img_path, mimetype='image/png')
                 service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-                print(f"  -> Успішно завантажено рендер: {img_name}")
+                print(f"  -> Завантажено малюнок на Google Drive: {img_name}")
                 os.remove(img_path)
             
-            # Видаляємо тимчасовий DXF, якщо ми його генерували з DWG
+            # Видаляємо тимчасовий DXF, якщо він був створений з DWG
             if ext == '.dwg' and os.path.exists(dxf_to_render):
                 os.remove(dxf_to_render)
 
