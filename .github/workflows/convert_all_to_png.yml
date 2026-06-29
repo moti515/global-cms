@@ -23,10 +23,10 @@ jobs:
 
     - name: Клонування та збірка LibreDWG (dwg2dxf)
       run: |
-        # Очищаємо внутрішні токени GitHub, щоб вони не заважали доступу до зовнішнього репозиторію
-        git config --global --unset http.https://github.com/.extraheader
+        # Додаємо || true, щоб крок не падав, якщо цього параметра немає в конфігу
+        git config --global --unset http.https://github.com/.extraheader || true
         
-        # Тепер клонування пройде абсолютно вільно
+        # Тепер клонування пройде без проблем
         git clone --depth 1 https://github.com/LibreDWG/libdwg.git
         cd libdwg
         ./autogen.sh
