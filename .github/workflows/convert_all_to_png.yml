@@ -1,52 +1,36 @@
-name: Google Drive all to Images
-
-on:
-  workflow_dispatch:
-
-jobs:
-  convert-pdfs:
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Перевірка репозиторію
-      uses: actions/checkout@v4
-
-    - name: Налаштування Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-
-    - name: Встановлення залежностей для збірки LibreDWG
+- name: Завантаження та збірка LibreDWG (Розумний скрипт)
       run: |
-        sudo apt-get update
-        sudo apt-get install -y autoconf libtool texinfo build-essential
-
-    - name: Завантаження та збірка LibreDWG (БЕЗ GIT)
-      run: |
-        # Завантажуємо архів коду напряму через curl (ігноруючи Git)
-        curl -L https://github.com/LibreDWG/libdwg/archive/refs/heads/master.tar.gz -o libdwg.tar.gz
+        # 1. Пробуємо завантажити гілку 'main' з браузерним User-Agent
+        echo "Спроба завантажити гілку main..."
+        curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" https://github.com/LibreDWG/libdwg/archive/refs/heads/main.tar.gz -o libdwg.tar.gz
         
-        # Розпаковуємо його
+        # 2. Якщо файл занадто малий (менше 500 байтів), то це текст помилки. Пробуємо гілку 'master'
+        if [ $(stat -c%s libdwg.tar.gz) -lt 500 ]; then
+          echo "Гілка main не знайдена або доступ обмежено. Пробуємо гілку master..."
+          curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" https://github.com/LibreDWG/libdwg/archive/refs/heads/master.tar.gz -o libdwg.tar.gz
+        fi
+        
+        # 3. Якщо і 'master' збіг за помилкою, виводимо її вміст в лог для діагностики
+        if [ $(stat -c%s libdwg.tar.gz) -lt 500 ]; then
+          echo "=== ПОМИЛКА ЗАВАНТАЖЕННЯ! Вміст відповіді сервера: ==="
+          cat libdwg.tar.gz
+          echo -e "\n====================================================="
+          exit 1
+        fi
+
+        # 4. Розпаковуємо успішно завантажений архів
         tar -xzf libdwg.tar.gz
         
-        # Переходимо в папку з кодом
-        cd libdwg-master
+        # 5. Визначаємо, яка папка створилася, і переходимо в неї
+        if [ -d "libdwg-main" ]; then
+          cd libdwg-main
+        else
+          cd libdwg-master
+        fi
         
-        # Компілюємо та встановлюємо в систему
+        # 6. Компіляція та встановлення в систему
         ./autogen.sh
         ./configure
         make
         sudo make install
         sudo ldconfig
-
-    - name: Встановлення бібліотек Python
-      run: |
-        python -m pip install --upgrade pip
-        pip install pymupdf ezdxf matplotlib google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
-        
-    - name: Запуск скрипту конвертації
-      env:
-        GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
-        GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
-        GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-      run: python convert_pdf_to_png.py
