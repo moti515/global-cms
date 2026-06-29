@@ -150,16 +150,33 @@ def main():
             dxf_to_render = temp_input_path
             
             if ext == '.dwg':
-                print("  -> Конвертація DWG у тимчасовий DXF...")
-                temp_dxf_path = os.path.join(TEMP_DIR, f"{base_name}_converted.dxf")
-                result = subprocess.run(['dwg2dxf', '-o', temp_dxf_path, temp_input_path], capture_output=True, text=True)
+                print("  -> Конвертація DWG у тимчасовий DXF через ODAFileConverter...")
+                # Файл уже завантажено в TEMP_DIR. 
+                # Кажемо утиліті взяти файл з TEMP_DIR, покласти туди ж, але відфільтрувати суворо за ім'ям файлу.
+                cmd = [
+                    "xvfb-run", "-a", "ODAFileConverter", 
+                    TEMP_DIR,                  # Вхідна папка
+                    TEMP_DIR,                  # Вихідна папка
+                    "ACAD2018",                # Версія на виході
+                    "DXF",                     # Формат
+                    "0",                       # Рекурсія (ні)
+                    "1",                       # Аудит файлу (так)
+                    file_name                  # Фільтр (наш конкретний файл)
+                ]
                 
-                if result.returncode != 0 or not os.path.exists(temp_dxf_path):
-                    print(f"  [Помилка dwg2dxf]: {result.stderr}")
+                # Запускаємо БЕЗ shell=True, щоб список аргументів передався правильно
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                
+                temp_dxf_path = os.path.join(TEMP_DIR, f"{base_name}.dxf")
+                
+                # Перевіряємо, чи з'явився сконвертований файл
+                if not os.path.exists(temp_dxf_path):
+                    print(f"  [Помилка ODAFileConverter]: {result.stderr}")
                     if os.path.exists(temp_input_path): os.remove(temp_input_path)
                     continue
                 dxf_to_render = temp_dxf_path
 
+            # Рендеримо DXF (неважливо, оригінальний чи отриманий з DWG) у PNG
             img_name = f"{base_name}.png"
             img_path = os.path.join(TEMP_DIR, img_name)
             
@@ -170,6 +187,7 @@ def main():
                 print(f"  -> Завантажено готове креслення: {img_name}")
                 os.remove(img_path)
             
+            # Видаляємо тимчасовий DXF, якщо ми його створювали з DWG
             if ext == '.dwg' and os.path.exists(dxf_to_render):
                 os.remove(dxf_to_render)
 
