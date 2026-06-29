@@ -14,17 +14,27 @@ jobs:
     - name: Налаштування Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.12'
 
-    - name: Встановлення системних утиліт для DWG
+    - name: Встановлення залежностей для збірки LibreDWG
       run: |
         sudo apt-get update
-        sudo apt-get install -y libdwg-bin
+        sudo apt-get install -y autoconf libtool texinfo build-essential git
+
+    - name: Клонування та збірка LibreDWG (dwg2dxf)
+      run: |
+        git clone --depth 1 https://github.com/LibreDWG/libdwg.git
+        cd libdwg
+        ./autogen.sh
+        ./configure
+        make
+        sudo make install
+        sudo ldconfig
 
     - name: Встановлення бібліотек Python
       run: |
         python -m pip install --upgrade pip
-        pip install pymupdf google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 ezdxf matplotlib
+        pip install pymupdf ezdxf matplotlib google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
         
     - name: Запуск скрипту конвертації
       env:
