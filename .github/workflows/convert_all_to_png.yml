@@ -16,35 +16,45 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Встановлення залежностей для збірки LibreDWG
+    - name: Встановлення базових залежностей для аналізу Диску
+      run: |
+        python -m pip install --upgrade pip
+        pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
+
+    - name: Швидке сканування Google Диску
+      id: scan_step
+      env:
+        GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+        GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+        GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+      run: python convert_pdf_to_png.py --scan
+
+    # Складна збірка LibreDWG запускається ТІЛЬКИ якщо знайдено нові файли .dwg
+    - name: Встановлення залежностей та збірка Офіційного LibreDWG
+      if: steps.scan_step.outputs.has_dwg == 'true'
       run: |
         sudo apt-get update
         sudo apt-get install -y autoconf libtool texinfo build-essential unzip
-
-    - name: Завантаження та збірка Офіційного LibreDWG
-      run: |
-        # Завантажуємо ОФІЦІЙНИЙ репозиторій libredwg через стабільний CDN архівом
         curl -L https://codeload.github.com/LibreDWG/libredwg/zip/refs/heads/master -o libredwg.zip
-        
-        # Розпаковуємо архів
         unzip libredwg.zip
         cd libredwg-master
-        
-        # Запускаємо стандартний процес компіляції GNU
         ./autogen.sh
         ./configure --disable-bindings
         make
         sudo make install
         sudo ldconfig
-        
-        # Перевіряємо, чи утиліта з'явилася в системі
-        which dwg2dxf
 
-    - name: Встановлення бібліотек Python
-      run: |
-        python -m pip install --upgrade pip
-        pip install pymupdf ezdxf matplotlib google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
-        
+    # Бібліотеки для CAD ставимо лише за наявності dxf або dwg файлів
+    - name: Встановлення CAD бібліотек Python
+      if: steps.scan_step.outputs.has_dxf == 'true' || steps.scan_step.outputs.has_dwg == 'true'
+      run: pip install ezdxf matplotlib
+
+    # Модуль для PDF ставимо лише за наявності pdf файлів
+    - name: Встановлення PDF бібліотек Python
+      if: steps.scan_step.outputs.has_pdf == 'true'
+      run: pip install pymupdf
+
+    # Запуск основного процесу (обробить лише те, для чого встановилися пакети)
     - name: Запуск скрипту конвертації
       env:
         GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
