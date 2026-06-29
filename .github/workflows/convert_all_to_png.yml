@@ -10,8 +10,6 @@ jobs:
     steps:
     - name: Перевірка репозиторію
       uses: actions/checkout@v4
-      with:
-        persist-credentials: false  # ЗАБОРОНЯЄ GitHub підставляти свої токени в налаштування Git
 
     - name: Налаштування Python
       uses: actions/setup-python@v5
@@ -21,14 +19,20 @@ jobs:
     - name: Встановлення залежностей для збірки LibreDWG
       run: |
         sudo apt-get update
-        sudo apt-get install -y autoconf libtool texinfo build-essential git
+        sudo apt-get install -y autoconf libtool texinfo build-essential
 
-    - name: Клонування та збірка LibreDWG (dwg2dxf)
+    - name: Завантаження та збірка LibreDWG (БЕЗ GIT)
       run: |
-        # Клонуємо із примусовим очищенням заголовків авторизації в поточній команді
-        git -c http.https://github.com/.extraheader="" clone --depth 1 https://github.com/LibreDWG/libdwg.git
+        # Завантажуємо архів коду напряму через curl (ігноруючи Git)
+        curl -L https://github.com/LibreDWG/libdwg/archive/refs/heads/master.tar.gz -o libdwg.tar.gz
         
-        cd libdwg
+        # Розпаковуємо його
+        tar -xzf libdwg.tar.gz
+        
+        # Переходимо в папку з кодом
+        cd libdwg-master
+        
+        # Компілюємо та встановлюємо в систему
         ./autogen.sh
         ./configure
         make
