@@ -16,46 +16,44 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Встановлення залежностей для збірки LibreDWG
+    - name: Встановлення залежностей для збірки
       run: |
         sudo apt-get update
-        sudo apt-get install -y autoconf libtool texinfo build-essential
+        sudo apt-get install -y autoconf libtool texinfo build-essential unzip wget
 
-    - name: Завантаження та збірка LibreDWG (Розумний скрипт)
+    - name: Завантаження та збірка dwg2dxf через Codeload CDN
       run: |
-        # 1. Пробуємо завантажити гілку 'main' з браузерним User-Agent
-        echo "Спроба завантажити гілку main..."
-        curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" https://github.com/LibreDWG/libdwg/archive/refs/heads/main.tar.gz -o libdwg.tar.gz
+        # 1. Завантажуємо ZIP-архів через codeload (гілка master)
+        echo "Завантаження гілки master..."
+        curl -L https://codeload.github.com/wanttobeno/dwg2dxf/zip/refs/heads/master -o dwg2dxf.zip
         
-        # 2. Якщо файл занадто малий (менше 500 байтів), то це текст помилки. Пробуємо гілку 'master'
-        if [ $(stat -c%s libdwg.tar.gz) -lt 500 ]; then
-          echo "Гілка main не знайдена або доступ обмежено. Пробуємо гілку master..."
-          curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" https://github.com/LibreDWG/libdwg/archive/refs/heads/master.tar.gz -o libdwg.tar.gz
+        # 2. Якщо master видав помилку (файл порожній або замалий), пробуємо гілку main
+        if [ ! -s dwg2dxf.zip ] || [ $(stat -c%s dwg2dxf.zip) -lt 1000 ]; then
+          echo "Гілка master не знайдена, пробуємо main..."
+          curl -L https://codeload.github.com/wanttobeno/dwg2dxf/zip/refs/heads/main -o dwg2dxf.zip
         fi
         
-        # 3. Якщо і 'master' збіг за помилкою, виводимо її вміст в лог для діагностики
-        if [ $(stat -c%s libdwg.tar.gz) -lt 500 ]; then
-          echo "=== ПОМИЛКА ЗАВАНТАЖЕННЯ! Вміст відповіді сервера: ==="
-          cat libdwg.tar.gz
-          echo -e "\n====================================================="
-          exit 1
-        fi
-
-        # 4. Розпаковуємо успішно завантажений архів
-        tar -xzf libdwg.tar.gz
+        # 3. Розпаковуємо архіватором unzip
+        unzip dwg2dxf.zip
         
-        # 5. Визначаємо, яка папка створилася, і переходимо в неї
-        if [ -d "libdwg-main" ]; then
-          cd libdwg-main
+        # 4. Переходимо в розпаковану папку (автоматично визначаємо ім'я)
+        cd dwg2dxf-master 2>/dev/null || cd dwg2dxf-main 2>/dev/null || cd dwg2dxf-*
+        
+        # 5. Розумна збірка: перевіряємо структуру репозиторію та компілюємо
+        if [ -f "autogen.sh" ]; then
+          ./autogen.sh
+          ./configure
+          make
+          sudo make install
+        elif [ -f "Makefile" ]; then
+          make
+          sudo make install
         else
-          cd libdwg-master
+          echo "Скриптів автоматичної збірки не знайдено. Вміст папки:"
+          ls -la
         fi
         
-        # 6. Компіляція та встановлення в систему
-        ./autogen.sh
-        ./configure
-        make
-        sudo make install
+        # Оновлюємо кеш лінків бібліотек в системі
         sudo ldconfig
 
     - name: Встановлення бібліотек Python
@@ -63,7 +61,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install pymupdf ezdxf matplotlib google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
         
-    - name: Запуск скрипту конвертації
+    - name: Запуск скрипту👑 конвертації
       env:
         GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
         GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
