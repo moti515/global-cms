@@ -1,4 +1,4 @@
-name: Google Drive PDF to Images
+name: Google Drive all to Images
 
 on:
   workflow_dispatch:
