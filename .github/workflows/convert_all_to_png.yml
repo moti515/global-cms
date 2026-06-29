@@ -21,14 +21,12 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y autoconf libtool texinfo build-essential git
 
-    - name: Клонування та збірка LibreDWG (dwg2dxf)
+    - name: Завантаження та збірка LibreDWG через архів
       run: |
-        # Очищаємо внутрішні токени GitHub, щоб вони не заважали доступу до зовнішнього репозиторію
-        git config --global --unset http.https://github.com/.extraheader
-        
-        # Тепер клонування пройде абсолютно вільно
-        git clone --depth 1 https://github.com/LibreDWG/libdwg.git
-        cd libdwg
+        # Завантажуємо код архівом, оминаючи git-авторизацію
+        wget https://github.com/LibreDWG/libdwg/archive/refs/heads/master.tar.gz
+        tar -xzf master.tar.gz
+        cd libdwg-master
         ./autogen.sh
         ./configure
         make
