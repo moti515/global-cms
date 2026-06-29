@@ -31,12 +31,12 @@ def main():
     service = get_drive_service()
     os.makedirs(TEMP_DIR, exist_ok=True)
 
-    # 1. Отримуємо список УСІХ файлів у папці, щоб побудувати кеш існуючих файлів
+    # 1. Отримуємо список УСІХ файлів у папці
     print("Аналіз вмісту папки на Google Диску...")
     results = service.files().list(
         q=f"'{FOLDER_ID}' in parents and trashed = false",
         fields="files(id, name, mimeType, modifiedTime)",
-        maxResults=1000
+        pageSize=1000  # <--- ВИПРАВЛЕНО ТУТ (було maxResults)
     ).execute()
     all_files = results.get('files', [])
 
