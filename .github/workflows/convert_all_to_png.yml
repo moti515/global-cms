@@ -34,8 +34,8 @@ jobs:
       if: steps.scan_step.outputs.has_dwg == 'true'
       run: |
         sudo apt-get update
-        # Встановлюємо мінімальні залежності для графіки та віртуального екрана (xvfb)
-        sudo apt-get install -y libgl1-mesa-glx xvfb libfontconfig1 libxrender1 libxext6 libglib2.0-0 libxi6 libxrandr2
+        # Замінено libgl1-mesa-glx на актуальний для Ubuntu 24.04 пакет libgl1
+        sudo apt-get install -y libgl1 xvfb libfontconfig1 libxrender1 libxext6 libglib2.0-0 libxi6 libxrandr2
         
         # Завантажуємо офіційний релізний deb-пакет утиліти
         curl -L "https://download.opendesign.com/guestfiles/ODAFileConverter/ODAFileConverter_QT5_lnxX64_8.3dll.deb" -o oda.deb
