@@ -10,6 +10,8 @@ jobs:
     steps:
     - name: Перевірка репозиторію
       uses: actions/checkout@v4
+      with:
+        persist-credentials: false  # ЗАБОРОНЯЄ GitHub підставляти свої токени в налаштування Git
 
     - name: Налаштування Python
       uses: actions/setup-python@v5
@@ -23,11 +25,9 @@ jobs:
 
     - name: Клонування та збірка LibreDWG (dwg2dxf)
       run: |
-        # Додаємо || true, щоб крок не падав, якщо цього параметра немає в конфігу
-        git config --global --unset http.https://github.com/.extraheader || true
+        # Клонуємо із примусовим очищенням заголовків авторизації в поточній команді
+        git -c http.https://github.com/.extraheader="" clone --depth 1 https://github.com/LibreDWG/libdwg.git
         
-        # Тепер клонування пройде без проблем
-        git clone --depth 1 https://github.com/LibreDWG/libdwg.git
         cd libdwg
         ./autogen.sh
         ./configure
