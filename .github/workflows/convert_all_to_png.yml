@@ -16,52 +16,36 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Встановлення залежностей для збірки
+    - name: Встановлення залежностей для збірки LibreDWG
       run: |
         sudo apt-get update
-        sudo apt-get install -y autoconf libtool texinfo build-essential unzip wget
+        sudo apt-get install -y autoconf libtool texinfo build-essential unzip
 
-    - name: Завантаження та збірка dwg2dxf через Codeload CDN
+    - name: Завантаження та збірка Офіційного LibreDWG
       run: |
-        # 1. Завантажуємо ZIP-архів через codeload (гілка master)
-        echo "Завантаження гілки master..."
-        curl -L https://codeload.github.com/wanttobeno/dwg2dxf/zip/refs/heads/master -o dwg2dxf.zip
+        # Завантажуємо ОФІЦІЙНИЙ репозиторій libredwg через стабільний CDN архівом
+        curl -L https://codeload.github.com/LibreDWG/libredwg/zip/refs/heads/master -o libredwg.zip
         
-        # 2. Якщо master видав помилку (файл порожній або замалий), пробуємо гілку main
-        if [ ! -s dwg2dxf.zip ] || [ $(stat -c%s dwg2dxf.zip) -lt 1000 ]; then
-          echo "Гілка master не знайдена, пробуємо main..."
-          curl -L https://codeload.github.com/wanttobeno/dwg2dxf/zip/refs/heads/main -o dwg2dxf.zip
-        fi
+        # Розпаковуємо архів
+        unzip libredwg.zip
+        cd libredwg-master
         
-        # 3. Розпаковуємо архіватором unzip
-        unzip dwg2dxf.zip
-        
-        # 4. Переходимо в розпаковану папку (автоматично визначаємо ім'я)
-        cd dwg2dxf-master 2>/dev/null || cd dwg2dxf-main 2>/dev/null || cd dwg2dxf-*
-        
-        # 5. Розумна збірка: перевіряємо структуру репозиторію та компілюємо
-        if [ -f "autogen.sh" ]; then
-          ./autogen.sh
-          ./configure
-          make
-          sudo make install
-        elif [ -f "Makefile" ]; then
-          make
-          sudo make install
-        else
-          echo "Скриптів автоматичної збірки не знайдено. Вміст папки:"
-          ls -la
-        fi
-        
-        # Оновлюємо кеш лінків бібліотек в системі
+        # Запускаємо стандартний процес компіляції GNU
+        ./autogen.sh
+        ./configure --disable-bindings
+        make
+        sudo make install
         sudo ldconfig
+        
+        # Перевіряємо, чи утиліта з'явилася в системі
+        which dwg2dxf
 
     - name: Встановлення бібліотек Python
       run: |
         python -m pip install --upgrade pip
         pip install pymupdf ezdxf matplotlib google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
         
-    - name: Запуск скрипту👑 конвертації
+    - name: Запуск скрипту конвертації
       env:
         GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
         GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
