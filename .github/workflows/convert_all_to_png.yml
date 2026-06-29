@@ -29,22 +29,15 @@ jobs:
         GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
       run: python convert_pdf_to_png.py --scan
 
-    # Замість складної збірки LibreDWG, ставимо готовий промисловий конвертер від ODA
-    - name: Встановлення ODA File Converter (Teigha)
+    # Встановлюємо вже готовий офіційний пакет інструментів LibreDWG з репозиторію Ubuntu 24.04
+    - name: Встановлення готового інструментарію LibreDWG
       if: steps.scan_step.outputs.has_dwg == 'true'
       run: |
         sudo apt-get update
-        # Замінено libgl1-mesa-glx на актуальний для Ubuntu 24.04 пакет libgl1
-        sudo apt-get install -y libgl1 xvfb libfontconfig1 libxrender1 libxext6 libglib2.0-0 libxi6 libxrandr2
+        sudo apt-get install -y libredwg-utils
         
-        # Завантажуємо офіційний релізний deb-пакет утиліти
-        curl -L "https://download.opendesign.com/guestfiles/ODAFileConverter/ODAFileConverter_QT5_lnxX64_8.3dll.deb" -o oda.deb
-        
-        # Встановлюємо утиліту в систему
-        sudo dpkg -i oda.deb || sudo apt-get install -f -y
-        
-        # Перевіряємо наявність у системному шляху
-        which ODAFileConverter
+        # Перевіряємо, що утиліта dwg2dxf доступна в системі
+        dwg2dxf --version
 
     # Бібліотеки для CAD ставимо лише за наявності dxf або dwg файлів
     - name: Встановлення CAD бібліотек Python
