@@ -24,4 +24,4 @@ jobs:
     - name: Запуск скрипту конвертації
       env:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
-      run: python convert_pdf.py
+      run: python convert_pdf_to_png.py
