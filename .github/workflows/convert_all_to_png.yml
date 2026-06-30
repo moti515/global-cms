@@ -56,7 +56,7 @@ jobs:
     # Бібліотеки для CAD ставимо лише за наявності dxf або dwg файлів
     - name: Встановлення CAD бібліотек Python
       if: steps.scan_step.outputs.has_dxf == 'true' || steps.scan_step.outputs.has_dwg == 'true'
-      run: pip install ezdxf matplotlib
+      run: pip install ezdxf matplotlib pillow
 
     # Модуль для PDF ставимо лише за наявності pdf файлів
     - name: Встановлення PDF бібліотек Python
