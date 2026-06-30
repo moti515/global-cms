@@ -492,7 +492,15 @@ def main():
         key = (item['date'], item['group_location'])
         groups.setdefault(key, []).append(item)
         
-    for (date, group_loc), items in groups.items():
+    if groups:
+        # 🎯 ГОЛОВНА ЗМІНА: Беремо лише ПЕРШУ групу зі списку знайдених.
+        # Оскільки запит до Диску сортується за `orderBy="createdTime"`, це буде найдавніша група.
+        first_key = list(groups.keys())[0]
+        items = groups[first_key]
+        date, group_loc = first_key
+        
+        print(f"\n💎 Знайдено декілька дат. Публікуємо тільки ОДНУ групу: {date} | {group_loc}")
+        
         sample_display_loc = items[0]['display_location']
         base_caption = f"📅 {date}"
         if sample_display_loc:
@@ -511,7 +519,8 @@ def main():
             for item in album_items:
                 f_size = os.path.getsize(item['local_path'])
                 if len(current_batch) >= 10 or (current_batch_size + f_size) > 45 * 1024 * 1024:
-                    sub_batches.append(current_batch)
+                    if current_batch:  # ✅ ВИПРАВЛЕНО: Запобігаємо появі порожніх батчів у масиві
+                        sub_batches.append(current_batch)
                     current_batch = []
                     current_batch_size = 0
                 current_batch.append(item)
@@ -545,8 +554,11 @@ def main():
                 clean_local_files(local_files_to_clean)
                 sys.exit(1)
 
+    # Очищуємо локальну папку від абсолютно ВСІХ завантажених за цей сеанс файлів.
+    # Ті файли, чию групу ми не опублікували, залишаться цілими й неушкодженими на Google Диску
+    # і потраплять під обробку під час наступного запуску крону.
     clean_local_files(local_files_to_clean)
-    print(f"\n🏁 Синхронізацію успішно завершено.")
+    print(f"\n🏁 Синхронізацію однієї поточної групи успішно завершено.")
     sys.exit(0)
 
 def clean_local_files(files_list):
