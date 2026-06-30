@@ -63,7 +63,8 @@ COMPANIES_DB = {
     },
     "gurov": {
         "names": {0: "Андрій Гуров", 1: "Andrii Gurov", 2: "Andrii Gurov"},
-        "links": ["🌐 Facebook: fb.com/andrej.gurov.755581"]
+        "links": ["🌐 Facebook: fb.com/andrej.gurov.755581"],
+        "ig_handle": "@gurov_andrey0612"
     },
     "solovey": {
         "names": {0: "Студія меблів «Соловей»", 1: "Solovey Furniture Studio", 2: "Möbelstudio Solovey"},
