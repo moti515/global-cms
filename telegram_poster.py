@@ -464,6 +464,40 @@ def main():
                     })
                 continue
 
+        # 🚨 [НОВИЙ БЛОК: СУВОРУЙ ЗАХИСТ ТА ОПТИМІЗАЦІЯ ДЛЯ ФОТО (Max 10 MB)]
+        if mime_type.startswith('image/') or lower_name.endswith(('.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff')):
+            if os.path.getsize(local_path) > 9.5 * 1024 * 1024:
+                opt_jpg_path = os.path.join('downloaded', 'opt_' + f['name'].rsplit('.', 1)[0] + '.jpg')
+                print(f"📸 Фото {f['name']} завелике ({os.path.getsize(local_path) / 1024 / 1024:.2f} MB) для лімітів фото Telegram. Оптимізуємо...")
+                try:
+                    with Image.open(local_path) as img:
+                        # Етап 1: Пробуємо стиснути якість без зміни роздільної здатності
+                        quality = 85
+                        img.convert('RGB').save(opt_jpg_path, 'JPEG', quality=quality)
+                        
+                        while os.path.getsize(opt_jpg_path) > 9.5 * 1024 * 1024 and quality > 40:
+                            quality -= 10
+                            img.convert('RGB').save(opt_jpg_path, 'JPEG', quality=quality)
+                            
+                        # Етап 2: Якщо файл все ще гігантський (наприклад, панорама), пропорційно зменшуємо роздільну здатність
+                        if os.path.getsize(opt_jpg_path) > 9.5 * 1024 * 1024:
+                            width, height = img.size
+                            scale = 0.9
+                            while os.path.getsize(opt_jpg_path) > 9.5 * 1024 * 1024 and scale > 0.2:
+                                new_w = int(width * scale)
+                                new_h = int(height * scale)
+                                resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                                resized_img.convert('RGB').save(opt_jpg_path, 'JPEG', quality=80)
+                                scale -= 0.1
+                                
+                    if os.path.exists(opt_jpg_path):
+                        local_files_to_clean.append(opt_jpg_path)
+                        local_path = opt_jpg_path
+                        mime_type = 'image/jpeg'
+                        print(f"⚡ Фото оптимізовано! Новий розмір: {os.path.getsize(local_path) / 1024 / 1024:.2f} MB")
+                except Exception as e:
+                    print(f"⚠️ Помилка оптимізації фото {f['name']}: {e}")
+
         processed_items.append({
             'id': f['id'],
             'name': f['name'],
@@ -497,7 +531,7 @@ def main():
         for gdrive_id, file_parts in files_dict.items():
             file_total_size = sum(os.path.getsize(p['local_path']) for p in file_parts)
             
-            # 🚨 СУВОРИЙ ЗАХИСТ: Сумарна вага всього батчу не повинна перевищувати 45 МБ!
+            # Сумарна вага всього батчу (тіла HTTP-запиту) не повинна перевищувати 45 МБ
             if len(batch) + len(file_parts) <= 10 and (current_batch_size + file_total_size) <= 45 * 1024 * 1024:
                 batch.extend(file_parts)
                 current_batch_size += file_total_size
@@ -505,7 +539,6 @@ def main():
                 if batch:
                     break  
                 else:
-                    # Якщо навіть один файл/його шматки перевищують 45 МБ, забираємо і нижче поділимо на під-альбоми
                     batch = file_parts
                     current_batch_size = file_total_size
                     break
@@ -516,7 +549,6 @@ def main():
         sample_display_loc = batch[0]['display_location']
         success = False
         
-        # Перевіряємо, чи потрібно розбивати великий батч на послідовні під-альбоми
         if current_batch_size > 45 * 1024 * 1024 or len(batch) > 10:
             print(f"🔄 Великий контент розбито на декілька під-альбомів через жорсткі ліміти POST-запиту ({current_batch_size / 1024 / 1024:.2f} MB)...")
             sub_batches = []
@@ -546,7 +578,6 @@ def main():
                     break
             success = all_success
         else:
-            # Звичайне надсилання цілісного альбому
             caption = f"📅 {date}"
             if sample_display_loc:
                 caption += f" 📍 {sample_display_loc}"
