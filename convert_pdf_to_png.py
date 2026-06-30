@@ -24,57 +24,50 @@ def get_drive_service():
     return build('drive', 'v3', credentials=creds)
 
 def convert_dxf_to_png(dxf_path, png_path):
-    """Конвертує DXF файл у PNG за допомогою ezdxf та matplotlib з коригуванням кольорів та просторів."""
+    """Конвертує DXF у PNG та виводить аудит об'єктів для діагностики 3D."""
     try:
         import ezdxf
         from ezdxf.addons.drawing import RenderContext, Frontend
         from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
         from ezdxf.addons.drawing.properties import LayoutProperties
         import matplotlib.pyplot as plt
+        from collections import Counter
 
         doc = ezdxf.readfile(dxf_path)
         msp = doc.modelspace()
         
-        # 1. ПЕРЕВІРКА НА ПОРОЖНІЙ MODELSPACE
-        # Якщо в просторі моделі немає об'єктів, шукаємо перший заповнений Layout (Paper Space)
         if not len(msp):
-            print("  [Попередження]: Modelspace порожній. Шукаємо креслення у вкладках Layouts...")
-            found_layout = False
+            print("  [Попередження]: Modelspace порожній. Шукаємо в Layouts...")
             for layout in doc.layouts:
                 if layout.name != 'Model' and len(layout):
                     msp = layout
-                    print(f"  -> Знайдено активне креслення в Layout: '{layout.name}' ({len(layout)} об'єктів)")
-                    found_layout = True
                     break
-            if not found_layout:
-                print("  [Помилка]: Файл повністю порожній (немає об'єктів ні в Model, ні в Layouts).")
-                return False
-        else:
-            print(f"  -> Рендеринг Modelspace ({len(msp)} об'єктів)...")
 
-        # 2. НАЛАШТУВАННЯ КОЛЬОРІВ ТА ПОЛОТНА
-        # Збільшуємо розмір фігури та DPI для чіткості тонких ліній
+        # --- ДІАГНОСТИЧНИЙ БЛОК (АУДИТ) ---
+        # Рахуємо, які типи об'єктів реально дійшли після конвертації
+        entity_types = [e.dxftype() for e in msp]
+        types_count = dict(Counter(entity_types))
+        print(f"  [ДІАГНОСТИКА CAD]: Векторні об'єкти у файлі: {types_count}")
+        # ----------------------------------
+
+        if not entity_types:
+            print("  [Помилка]: У файлі взагалі немає об'єктів для малювання.")
+            return False
+
         fig = plt.figure(figsize=(20, 14), dpi=200)
         ax = fig.add_axes([0, 0, 1, 1])
         ax.axis('off')
         
         ctx = RenderContext(doc)
-        
-        # КЛЮЧОВИЙ МОМЕНТ: Створюємо властивості відображення.
-        # Вказуємо біле тло (#ffffff). ezdxf автоматично інвертує білі/світлі лінії у чорні,
-        # щоб їх було чітко видно на білому папері Matplotlib.
         layout_props = LayoutProperties.from_layout(msp)
         layout_props.set_colors(bg='#ffffff')
         
-        # 3. РАНДЕРИНГ
         backend = MatplotlibBackend(ax)
         Frontend(ctx, backend).draw_layout(msp, finalize=True, layout_properties=layout_props)
         
-        # Зберігаємо результат
         fig.savefig(png_path, dpi=200, bbox_inches='tight', pad_inches=0.05)
         plt.close(fig)
         return True
-        
     except Exception as e:
         print(f"  [Помилка рендерингу CAD]: {e}")
         return False
