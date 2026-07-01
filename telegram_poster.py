@@ -117,12 +117,16 @@ def get_exif_data(image_path):
 
 def get_video_metadata(video_path):
     date_str, lat, lon = None, None, None
+    duration = None
     try:
         cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', video_path]
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode == 0:
             data = json.loads(result.stdout)
-            tags = data.get('format', {}).get('tags', {})
+            fmt = data.get('format', {})
+            if fmt.get('duration'):
+                duration = float(fmt['duration'])
+            tags = fmt.get('tags', {})
             creation_time = tags.get('creation_time')
             if creation_time:
                 try:
@@ -138,7 +142,7 @@ def get_video_metadata(video_path):
                     lat, lon = float(match.group(1)), float(match.group(2))
     except Exception as e:
         print(f"⚠️ Попередження відео-метаданих для {video_path}: {e}")
-    return date_str, lat, lon
+    return date_str, lat, lon, duration
 
 def get_location_data(lat, lon, mode='family'):
     if lat is None or lon is None: 
@@ -187,16 +191,17 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
         print(f"🎯 Дату розпізнано з назви файлу '{filename}': {fn_date.strftime('%d.%m.%Y')}")
     
     meta_date, lat, lon = None, None, None
+    duration = None
     mime_type = gdrive_file.get('mimeType', '')
     lower_name = filename.lower()
     
     if mime_type.startswith('image/') or lower_name.endswith(('.heic', '.heif', '.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff')):
         meta_date, lat, lon = get_exif_data(local_path)
     elif mime_type.startswith('video/') or lower_name.endswith(('.mp4', '.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg')):
-        meta_date, lat, lon = get_video_metadata(local_path)
+        meta_date, lat, lon, duration = get_video_metadata(local_path)
 
     if fn_date:
-        return fn_date, lat, lon
+        return fn_date, lat, lon, duration
 
     if meta_date:
         for date_format in ('%Y:%m:%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S'):
@@ -206,7 +211,7 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
                 dt_parsed = datetime.strptime(clean_meta, clean_fmt)
                 
                 if min_year <= dt_parsed.year <= now_time.year:
-                    return dt_parsed, lat, lon
+                    return dt_parsed, lat, lon, duration
             except ValueError:
                 continue
         print(f"⚠️ Метадані {filename} нелогічні ({meta_date}). Шукаємо в системі Drive.")
@@ -217,27 +222,15 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
         earliest_gdrive = min(dt_created, dt_modified)
         
         if min_year <= earliest_gdrive.year <= now_time.year:
-            return earliest_gdrive, lat, lon
+            return earliest_gdrive, lat, lon, duration
     except Exception as e:
         print(f"⚠️ Помилка зчитування дат Google Drive: {e}")
 
-    return now_time, lat, lon
+    return now_time, lat, lon, duration
 
 # =====================================================================
 # ⚙️ ФУНКЦІЇ ОБРОБКИ МЕДІА ТА НАДСИЛАННЯ
 # =====================================================================
-
-def convert_to_mp4(input_path, output_path):
-    print(f"🎬 Оптимізуємо відео {input_path} в стандартний MP4...")
-    cmd = [
-        'ffmpeg', '-y', '-i', input_path,
-        '--vcodec', 'libx264', '-crf', '28',  
-        '-preset', 'faster', '-acodec', 'aac',
-        '-b:a', '128k', '-pix_fmt', 'yuv420p',
-        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-        output_path
-    ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def gif_to_mp4(input_path, output_path):
     print(f"🎞️ Конвертуємо анімацію GIF {input_path} в MP4...")
@@ -398,14 +391,13 @@ def main():
 
         local_files_to_clean.append(local_path)
 
-        # Перевірка ліміту 2 ГБ (Абсолютний максимум для Telegram)
+        # Перевірка ліміту 2 ГБ
         file_size = os.path.getsize(local_path)
         if file_size > 2 * 1024 * 1024 * 1024:
-            print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ: Файл {f['name']} перевищує 2 ГБ ({file_size / 1024 / 1024 / 1024:.2f} GB) і не може бути надісланий.")
-            clean_local_files(local_files_to_clean)
-            sys.exit(1)
+            print(f"⚠️ Файл {f['name']} перевищує 2 ГБ. Пропускаємо його.")
+            continue
 
-        final_dt, lat, lon = get_intellectual_date(local_path, f['name'], f)
+        final_dt, lat, lon, duration = get_intellectual_date(local_path, f['name'], f)
         file_date = final_dt.strftime('%d.%m.%Y')
         
         display_loc, group_loc = get_location_data(lat, lon, mode=mode)
@@ -432,43 +424,75 @@ def main():
                 local_path = jpg_path
                 mime_type = 'image/jpeg'
             except Exception as e:
-                print(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка конвертації HEIC {f['name']}: {e}")
-                clean_local_files(local_files_to_clean)
-                sys.exit(1)
+                print(f"⚠️ Помилка конвертації HEIC {f['name']}: {e}. Пропускаємо.")
+                continue
 
-        # Базова конвертація відео не-MP4 (тільки якщо вони не гігантські)
+        # Розумна конвертація та стиснення відео під ліміт 50 МБ
         elif mime_type.startswith('video/') or lower_name.endswith(('.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg', '.swf')):
             is_not_mp4 = not lower_name.endswith('.mp4') or mime_type != 'video/mp4' or lower_name.endswith('.swf')
-            if is_not_mp4 and file_size <= 50 * 1024 * 1024:
+            needs_compression = is_not_mp4 or file_size > 50 * 1024 * 1024
+            
+            if needs_compression:
                 compressed_path = os.path.join('downloaded', 'opt_' + f['name'].rsplit('.', 1)[0] + '.mp4')
-                convert_to_mp4(local_path, compressed_path)
+                
+                if file_size > 50 * 1024 * 1024 and duration and duration > 0:
+                    print(f"🎬 Відео {f['name']} перевищує ліміт Telegram ({file_size / 1024 / 1024:.2f} MB). Стискаємо під ліміт 50 MB...")
+                    target_size_bits = 44 * 1024 * 1024 * 8  # Цільовий розмір 44 MB із запасом
+                    total_bitrate = int(target_size_bits / duration)
+                    audio_bitrate = 64000 if total_bitrate < 300000 else 96000
+                    video_bitrate = total_bitrate - audio_bitrate
+                    
+                    if video_bitrate < 100000:
+                        video_bitrate = 100000
+                        
+                    scale_vf = 'scale=trunc(iw/4)*2:trunc(ih/4)*2' if video_bitrate < 400000 else 'scale=trunc(iw/2)*2:trunc(ih/2)*2'
+                    
+                    cmd = [
+                        'ffmpeg', '-y', '-i', local_path,
+                        '-vcodec', 'libx264', '-b:v', str(video_bitrate),
+                        '-maxrate', str(int(video_bitrate * 1.2)), '-bufsize', str(int(video_bitrate * 2)),
+                        '-preset', 'faster', '-acodec', 'aac', '-b:a', str(audio_bitrate),
+                        '-pix_fmt', 'yuv420p', '-vf', scale_vf, compressed_path
+                    ]
+                else:
+                    print(f"🎬 Оптимізуємо відео {f['name']} в стандартний MP4...")
+                    cmd = [
+                        'ffmpeg', '-y', '-i', local_path,
+                        '-vcodec', 'libx264', '-crf', '28',  
+                        '-preset', 'faster', '-acodec', 'aac',
+                        '-b:a', '128k', '-pix_fmt', 'yuv420p',
+                        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+                        compressed_path
+                    ]
+                
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
                 if os.path.exists(compressed_path):
                     local_files_to_clean.append(compressed_path)
                     local_path = compressed_path
                     mime_type = 'video/mp4'
+                    print(f"✅ Стиснення завершено. Новий розмір: {os.path.getsize(local_path) / 1024 / 1024:.2f} MB")
 
-        # 🚨 СУВОРІ ПЕРЕВІРКИ ЛІМІТІВ ДЛЯ ВІДПРАВКИ ЯК СТАНДАРТНЕ МЕДІА
-        send_as_doc = False
+        # Кінцева перевірка обмежень Bot API після всіх маніпуляцій
         current_size = os.path.getsize(local_path)
+        if current_size > 50 * 1024 * 1024:
+            print(f"❌ ПОМИЛКА: Файл {f['name']} після обробки все одно важить {current_size / 1024 / 1024:.2f} MB.")
+            print("Telegram Bot API не пропустить його. Пропускаємо файл, він залишається на Диску для ручного розбору.")
+            continue
 
+        send_as_doc = False
         if mime_type.startswith('image/'):
-            if current_size > 10 * 1024 * 1024:  # Вага > 10 MB
+            if current_size > 10 * 1024 * 1024:
                 send_as_doc = True
             else:
                 try:
                     with Image.open(local_path) as img:
                         w, h = img.size
-                        # Якщо одна зі сторін > 10000px або критичне співвідношення сторін (панорама)
                         if w > 10000 or h > 10000 or (w / h) > 19 or (h / w) > 19:
                             print(f"📐 Виявлено панораму або велике фото ({w}x{h}). Буде надіслано як файл.")
                             send_as_doc = True
                 except Exception as e:
                     print(f"⚠️ Помилка аналізу геометрії фото: {e}")
-
-        elif mime_type.startswith('video/'):
-            if current_size > 50 * 1024 * 1024:  # Стандартний ліміт sendVideo бота
-                print(f"🎬 Відео перевищує 50 MB ({current_size / 1024 / 1024:.2f} MB). Буде надіслано як файл.")
-                send_as_doc = True
 
         processed_items.append({
             'id': f['id'],
@@ -482,19 +506,17 @@ def main():
         })
 
     if gdrive_files and not processed_items:
-        print("💥 ПОМИЛКА: Файли виявлено, але жоден не зміг обробитися!")
+        print("ℹ️ Файли знайдено, але жоден не готовий до відправки (можливо, усі відсіяні за розміром).")
         clean_local_files(local_files_to_clean)
-        sys.exit(1)
+        return
 
-    # Розумне групування за [Дата + МістоДляГрупування]
+    # Групування за [Дата + Місто]
     groups = {}
     for item in processed_items:
         key = (item['date'], item['group_location'])
         groups.setdefault(key, []).append(item)
         
     if groups:
-        # 🎯 ГОЛОВНА ЗМІНА: Беремо лише ПЕРШУ групу зі списку знайдених.
-        # Оскільки запит до Диску сортується за `orderBy="createdTime"`, це буде найдавніша група.
         first_key = list(groups.keys())[0]
         items = groups[first_key]
         date, group_loc = first_key
@@ -506,7 +528,6 @@ def main():
         if sample_display_loc:
             base_caption += f" 📍 {sample_display_loc}"
             
-        # Розділяємо групу на альбомні медіа та документи
         album_items = [i for i in items if not i['send_as_doc']]
         doc_items = [i for i in items if i['send_as_doc']]
         
@@ -519,7 +540,7 @@ def main():
             for item in album_items:
                 f_size = os.path.getsize(item['local_path'])
                 if len(current_batch) >= 10 or (current_batch_size + f_size) > 45 * 1024 * 1024:
-                    if current_batch:  # ✅ ВИПРАВЛЕНО: Запобігаємо появі порожніх батчів у масиві
+                    if current_batch:
                         sub_batches.append(current_batch)
                     current_batch = []
                     current_batch_size = 0
@@ -542,7 +563,7 @@ def main():
                     clean_local_files(local_files_to_clean)
                     sys.exit(1)
                     
-        # 2️⃣ НАДСИЛАННЯ ФАЙЛІВ ОКРЕМO (Панорами, важкі відео)
+        # 2️⃣ НАДСИЛАННЯ ФАЙЛІВ ОКРЕМO (Панорами, важкі документи)
         for doc_item in doc_items:
             caption = f"{base_caption}\n📄 Файл: <code>{doc_item['name']}</code>"
             print(f"\n📡 Надсилання файлу: {doc_item['name']} ({os.path.getsize(doc_item['local_path'])/1024/1024:.2f} MB)...")
@@ -554,9 +575,6 @@ def main():
                 clean_local_files(local_files_to_clean)
                 sys.exit(1)
 
-    # Очищуємо локальну папку від абсолютно ВСІХ завантажених за цей сеанс файлів.
-    # Ті файли, чию групу ми не опублікували, залишаться цілими й неушкодженими на Google Диску
-    # і потраплять під обробку під час наступного запуску крону.
     clean_local_files(local_files_to_clean)
     print(f"\n🏁 Синхронізацію однієї поточної групи успішно завершено.")
     sys.exit(0)
