@@ -22,7 +22,7 @@ def sanitize_filename(filename):
     name, ext = os.path.splitext(filename)
     # Замінюємо все, що НЕ є латиницею, цифрою, дефісом чи підкресленням, на дефіс
     sanitized_name = re.sub(r'[^a-zA-Z0-9_\-]', '-', name)
-    # Прибираємо подвійні дефіси, якщо त्यांनी утворилися
+    # Прибираємо подвійні дефіси, якщо они утворилися
     sanitized_name = re.sub(r'-+', '-', sanitized_name).strip('-')
     
     # Фолбек, якщо ім'я повністю складалося з кирилиці і стало пустим
@@ -84,11 +84,11 @@ def main():
                 print(f"⚠️ Файл [{f_name}] має непідтримуваний формат для Сторіс. Пропускаємо.")
                 continue
             
-            # 🔧 ЛОГ: Відстежуємо формування префіксу з Гарячої Папки
-            print(f"🔧 [ЛОГ] Джерело: Гаряча папка | Оригінальний ID: {f_id} -> Сформований префікс: {f_id[:8]} | Назва файлу: {f_name}")
+            # 🔧 ЛОГ: Використовуємо повний ID для унікальності локального кешу
+            print(f"🔧 [ЛОГ] Джерело: Гаряча папка | Унікальний ID: {f_id} | Назва файлу: {f_name}")
             
-            # 🌟 ЗАХИСТ: Очищаємо назву файлу для локального збереження
-            safe_local_name = sanitize_filename(f"{f_id[:8]}_{f_name}")
+            # 🌟 ЗАХИСТ: Інтегруємо повний ID в назву файлу, щоб уникнути колізій
+            safe_local_name = sanitize_filename(f"{f_id}_{f_name}")
             local_path = os.path.join('temp_mebli', safe_local_name)
             print(f"📥 Попереднє завантаження для аналізу метаданих: {f_name} -> {safe_local_name}...")
             try:
@@ -107,7 +107,6 @@ def main():
             try:
                 final_date, lat, lon = get_intellectual_date(local_path, f_name, f)
                 date_str = final_date.strftime('%d.%m.%Y') if hasattr(final_date, 'strftime') else str(final_date)
-                # Повертає локацію мовою країни, де знято медіафайл
                 display_location, group_location = get_location_data(lat, lon)
             except Exception as e:
                 print(f"⚠️ Помилка автоматичного визначення дати/локації для {f_name}: {e}")
@@ -124,7 +123,7 @@ def main():
             hot_group_items.append({
                 "id": f_id,
                 "name": f_name,
-                "safe_local_name": safe_local_name, # зберігаємо безпечне ім'я
+                "safe_local_name": safe_local_name, 
                 "local_path": local_path,
                 "category": detected_company,
                 "date": date_str,
@@ -146,7 +145,7 @@ def main():
             selected_queue = groups[first_key][:4]
             print(f"📂 [Гаряча Папка] Сформовано чергу: Дата={first_key[0]}, Локація={first_key[1]}. Елементів: {len(selected_queue)}")
             
-            # Видаляємо локальні копії файлів, які не потрапили в поточную чергу
+            # Видаляємо локальні копії файлів, які не потрапили в поточну чергу
             selected_ids = {x["id"] for x in selected_queue}
             for item in hot_group_items:
                 if item["id"] not in selected_ids and os.path.exists(item["local_path"]):
@@ -258,11 +257,11 @@ def main():
                 log_unsupported_to_service(sheets, item["category"], f_name, reason="непідтримуваний формат для сторіз")
                 continue
 
-            # 🔧 ЛОГ: Відстежуємо формування префіксу з Google Таблиці
-            print(f"🔧 [ЛОГ] Джерело: Реєстр Таблиці | Оригінальний ID з рядка: {f_id} -> Сформований префікс: {f_id[:8]} | Назва файлу: {f_name}")
+            # 🔧 ЛОГ: Використовуємо повний ID для Реєстру Таблиці
+            print(f"🔧 [ЛОГ] Джерело: Реєстр Таблиці | Унікальний ID: {f_id} | Назва файлу: {f_name}")
 
-            # 🌟 ЗАХИСТ: Очищаємо назву файлу з таблиці перед збереженням на диск
-            safe_local_name = sanitize_filename(f"{f_id[:8]}_{f_name}")
+            # 🌟 ЗАХИСТ: Застосовуємо повний ID для унікальності файлу на диску
+            safe_local_name = sanitize_filename(f"{f_id}_{f_name}")
             local_path = os.path.join('temp_mebli', safe_local_name)
             
             print(f"\n📥 [{idx_item + 1}/{len(selected_queue)}] Завантаження з Drive: {f_name} -> {safe_local_name}...")
@@ -283,7 +282,6 @@ def main():
             print(f"\n🎬 [{idx_item + 1}/{len(selected_queue)}] Обробка файлу з гарячої папки: {safe_local_name}...")
 
         final_path = local_path
-        # Перевірку розширення робимо по safe_local_name, воно гарантовано приведене до нижнього регістру в sanitize_filename
         is_video = safe_local_name.endswith(('.mp4', '.mov', '.avi'))
         
         # Обробка HEIC
@@ -320,14 +318,14 @@ def main():
         except Exception:
             year_variable = str(datetime.now().year)
             
-        # 🌟 БЕЗПЕЧНИЙ ПАРСИНГ ЛОКАЦІЇ
+        # БЕЗПЕЧНИЙ ПАРСИНГ ЛОКАЦІЇ
         try:
             loc_json = json.loads(item["location"])
             location_variable = loc_json.get(str(lang_idx), loc_json.get("0", ""))
         except Exception:
             location_variable = item["location"]
 
-        # 2-3. Оптимізація та накладання тексту на photo/відео (передаємо очищений safe_local_name)
+        # 2-3. Оптимізація та накладання тексту на фото/відео
         media_parts_to_upload = []
         try:
             if is_video:
@@ -364,7 +362,7 @@ def main():
             param_type = "video_url" if is_video else "image_url"
             payload = {
                 "media_type": "STORIES",
-                "param_type": pub_url,
+                param_type: pub_url,
                 "access_token": meta_access_token
             }
             
