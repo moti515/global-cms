@@ -8,7 +8,7 @@ from datetime import datetime
 from PIL import Image
 from pillow_heif import register_heif_opener
 
-# Обов'язкова реєстрація підтримки форматів HEIF/HEIC для Pillow
+# Обов'язакова реєстрація підтримки форматів HEIF/HEIC для Pillow
 register_heif_opener()
 
 # Імпорт власних модулів проєкту
@@ -164,16 +164,36 @@ def main():
     has_video = False
 
     # =====================================================================
-    # 📥 ЗАВАНТАЖЕННЯ ТА ОБРОБКА МЕДІА
+    # 📥 ЗАВАНТАЖЕННЯ ТА ОБРОБКА МЕДІА (З ДЕТАЛЬНИМ ЛОГУВАННЯМ)
     # =====================================================================
-    for item in selected_group_items:
+    print("\n🔍 ==================================================")
+    print("🔍 СТАРТ ПОКРОКОВОГО АНАЛІЗУ СТВОРЕННЯ ПРЕФІКСІВ ФАЙЛІВ")
+    print("🔍 ==================================================")
+    
+    for idx, item in enumerate(selected_group_items):
         f_id, f_name = item["data"][0], item["data"][1]
+        row_num = item["row_idx"]
         
-        # 🌟 ЗАХИСТ: Створення безпечного імені з унікальним префіксом ID для уникнення колізій
-        safe_local_name = sanitize_filename(f"{f_id[:8]}_{f_name}")
+        print(f"\n📸 [Файл {idx + 1} із {len(selected_group_items)}] Обробляється рядок №{row_num} з Google Таблиці:")
+        print(f"   🔸 Зчитано повний Drive ID (Колонка A): '{f_id}'")
+        print(f"   🔸 Зчитано ім'я файлу    (Колонка B): '{f_name}'")
+        
+        prefix = f_id[:8]
+        print(f"   🔸 Зріз для префікса     (Перші 8 симв.): '{prefix}'")
+        
+        raw_combined_name = f"{prefix}_{f_name}"
+        print(f"   🔸 Згенеровано сиру назву (raw_combined): '{raw_combined_name}'")
+        
+        # 🌟 Створення безпечного імені з унікальним префіксом ID
+        safe_local_name = sanitize_filename(raw_combined_name)
+        print(f"   ✨ Результат функції sanitize_filename() : '{safe_local_name}'")
+        
         local_path = os.path.join('temp_mebli', safe_local_name)
-        print(f"📥 Завантаження з Drive: {f_name} -> {safe_local_name}...")
+        print(f"   📥 Локальний шлях для збереження: {local_path}")
         
+        # Додаємо файл до списку обробки
+        local_files.append(local_path)
+
         try:
             service_manager.download_file_from_drive(drive, f_id, local_path)
         except Exception as e:
@@ -198,7 +218,6 @@ def main():
                 local_files.append(jpg_path)
             except Exception as e:
                 print(f"❌ КРИТИЧНА ПОМИЛКА: Збій конвертації HEIC '{f_name}': {e}")
-                local_files.append(local_path)
                 clean_up_local_files(local_files)
                 sys.exit(1)
 
@@ -215,8 +234,6 @@ def main():
         else:
             ai_analysis_images.append(optimized_path)
 
-        local_files.append(local_path)
-
         try:
             pub_url, ik_id = service_manager.get_google_drive_direct_url(f_id, local_file_path=optimized_path)
             if not pub_url: raise ValueError("Порожній URL публікації.")
@@ -228,8 +245,12 @@ def main():
             clean_up_local_files(local_files)
             sys.exit(1)
 
+    print("\n🔍 ==================================================")
+    print("🔍 КІНЕЦЬ БЛОКУ ЛОГУВАННЯ ПРЕФІКСІВ")
+    print("🔍 ==================================================\n")
+
     if not uploaded_media:
-        print("ℹ️ Немає доступних медіафайлів для публікації.")
+        print("ℹ️ Немає доступних meдіафайлів для публікації.")
         clean_up_local_files(local_files)
         return
 
