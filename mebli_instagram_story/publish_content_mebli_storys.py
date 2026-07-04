@@ -22,7 +22,7 @@ def sanitize_filename(filename):
     name, ext = os.path.splitext(filename)
     # Замінюємо все, що НЕ є латиницею, цифрою, дефісом чи підкресленням, на дефіс
     sanitized_name = re.sub(r'[^a-zA-Z0-9_\-]', '-', name)
-    # Прибираємо подвійні дефіси, якщо вони утворилися
+    # Прибираємо подвійні дефіси, якщо त्यांनी утворилися
     sanitized_name = re.sub(r'-+', '-', sanitized_name).strip('-')
     
     # Фолбек, якщо ім'я повністю складалося з кирилиці і стало пустим
@@ -83,6 +83,9 @@ def main():
             if not lower_name.endswith(config.VALID_MEDIA_EXTENSIONS):
                 print(f"⚠️ Файл [{f_name}] має непідтримуваний формат для Сторіс. Пропускаємо.")
                 continue
+            
+            # 🔧 ЛОГ: Відстежуємо формування префіксу з Гарячої Папки
+            print(f"🔧 [ЛОГ] Джерело: Гаряча папка | Оригінальний ID: {f_id} -> Сформований префікс: {f_id[:8]} | Назва файлу: {f_name}")
             
             # 🌟 ЗАХИСТ: Очищаємо назву файлу для локального збереження
             safe_local_name = sanitize_filename(f"{f_id[:8]}_{f_name}")
@@ -255,6 +258,9 @@ def main():
                 log_unsupported_to_service(sheets, item["category"], f_name, reason="непідтримуваний формат для сторіз")
                 continue
 
+            # 🔧 ЛОГ: Відстежуємо формування префіксу з Google Таблиці
+            print(f"🔧 [ЛОГ] Джерело: Реєстр Таблиці | Оригінальний ID з рядка: {f_id} -> Сформований префікс: {f_id[:8]} | Назва файлу: {f_name}")
+
             # 🌟 ЗАХИСТ: Очищаємо назву файлу з таблиці перед збереженням на диск
             safe_local_name = sanitize_filename(f"{f_id[:8]}_{f_name}")
             local_path = os.path.join('temp_mebli', safe_local_name)
@@ -321,7 +327,7 @@ def main():
         except Exception:
             location_variable = item["location"]
 
-        # 2-3. Оптимізація та накладання тексту на фото/відео (передаємо очищений safe_local_name)
+        # 2-3. Оптимізація та накладання тексту на photo/відео (передаємо очищений safe_local_name)
         media_parts_to_upload = []
         try:
             if is_video:
@@ -358,7 +364,7 @@ def main():
             param_type = "video_url" if is_video else "image_url"
             payload = {
                 "media_type": "STORIES",
-                param_type: pub_url,
+                "param_type": pub_url,
                 "access_token": meta_access_token
             }
             
