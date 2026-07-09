@@ -1,11 +1,11 @@
 import os
 import json
 import time
+import base64
 import requests
 import io
 from PIL import Image as PILImage
 from google import genai
-from google.genai import types  # Імпортуємо типи для правильної роботи з медіа
 from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -57,7 +57,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 files = {'fileToUpload': (remote_filename, f, mime_type)}
                 data = {
                     'reqtype': 'fileupload',
-                    'time': '1h'  # Тимчасовий файл на 1 годину згідно з документацією API
+                    'time': '1h'  # Файл видалиться сам через годину, Meta встигне забрати його за секунди
                 }
                 res = requests.post(
                     'https://litterbox.catbox.moe/resources/internals/api.php',
@@ -66,22 +66,17 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                     headers=headers,
                     timeout=30
                 )
-                
-                response_text = res.text.strip()
-                if res.status_code == 200 and response_text.startswith('http'):
-                    print(f"✅ Успішно завантажено на Litterbox: {response_text}")
-                    return response_text, None
+                if res.status_code == 200 and res.text.strip().startswith('http'):
+                    return res.text.strip(), None
                 else:
-                    print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {response_text[:100]}")
-        except requests.exceptions.Timeout:
-            print("⚠️ Litterbox не відповів за 30 секунд (Таймаут). Переходимо до резерву.")
+                    print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text[:100]}")
         except Exception as e:
             print(f"⚠️ Збій завантаження на Litterbox: {e}")
 
         # 2️⃣ ImageKit.io (Надійний бізнес-бекэнд — залишається як залізобетонний резерв)
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
         if imagekit_key:
-            print(f"☁ *Резерв:* завантажуємо сторіс-файл {filename} на ImageKit.io...")
+            print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на ImageKit.io...")
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
@@ -99,7 +94,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         # 3️⃣ ImgBB API (Тільки для photo)
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and mime_type == "image/jpeg":
-            print(f"☁ *Резерв:* завантажуємо фото сторіс {filename} на ImgBB API...")
+            print(f"☁️ Резерв: завантажуємо фото сторіс {filename} на ImgBB API...")
             try:
                 with open(local_file_path, 'rb') as f:
                     img_bytes = f.read()
@@ -168,8 +163,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     if not gemini_key:
         return pref.get("no_gemini_caption", "Професійна якість та увага до деталей!")
 
-    # Актуальний список моделей (рекомендовано починати з нових 2.5 або 2.0 Flash)
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
     
     lang_instructions = {
         0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1-2 доречних емодзі.",
@@ -196,11 +190,8 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     )
 
     try:
-        # Ініціалізація клієнта (автоматично бере GEMINI_API_KEY з os.environ)
         client = genai.Client()
-        
-        # Готуємо набір контенту для передачі моделі (текстовий промпт йде першим)
-        contents_payload = [prompt]
+        inputs = [{"type": "text", "text": prompt}]
         
         for img_path in image_paths:
             if os.path.exists(img_path):
@@ -214,26 +205,24 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                         img.save(buffer, format="JPEG", quality=82, optimize=True)
                         image_bytes = buffer.getvalue()
                     
-                    # Використовуємо офіційну структуру SDK для передачі байтів
-                    contents_payload.append(
-                        types.Part.from_bytes(
-                            data=image_bytes,
-                            mime_type="image/jpeg"
-                        )
-                    )
+                    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+                    inputs.append({
+                        "type": "image",
+                        "data": base64_image,
+                        "mime_type": "image/jpeg"
+                    })
                 except Exception as img_err:
                     print(f"⚠️ Не вдалося оптимізувати зображення {img_path}: {img_err}")
 
-        # Каскадний перебір моделей за допомогою правильного методу generate_content
         for model in models_to_try:
             print(f"🚀 Спроба генерації підпису через {model}...")
             try:
-                response = client.models.generate_content(
+                interaction = client.interactions.create(
                     model=model,
-                    contents=contents_payload
+                    input=inputs
                 )
-                if response and response.text:
-                    return response.text.strip()
+                if interaction and interaction.output_text:
+                    return interaction.output_text.strip()
                 else:
                     print(f"⚠️ Модель {model} повернула порожню відповідь.")
             except Exception as model_err:
