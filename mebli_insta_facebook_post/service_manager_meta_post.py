@@ -2,6 +2,10 @@ import os
 import json
 import base64
 import requests
+import io
+from PIL import Image as PILImage
+from google import genai
+from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -24,39 +28,47 @@ def download_file_from_drive(drive_service, file_id, local_path):
     return local_path
 
 def get_google_drive_direct_url(file_id, local_file_path=None):
-    """Каскадний завантажувач медіафайлів на зовнішні хостинги для Meta API."""
+    """Каскадний завантажувач медіафайлів на зовнішні хостинги для Meta API (з Litterbox 1h)."""
     if local_file_path and os.path.exists(local_file_path):
         filename = os.path.basename(local_file_path)
         lower_name = filename.lower()
-        mime_type = "video/mp4" if lower_name.endswith(('.mp4', '.mov', '.avi')) else "image/jpeg"
+        is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
+        mime_type = "video/mp4" if is_video else "image/jpeg"
         
-        browser_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-        }
+        # Спрощуємо ім'я файлу для віддаленого сервера
+        remote_filename = "post.mp4" if is_video else "post.jpg"
         
-        # 1️⃣ Catbox.moe
-        print(f"☁️ Завантажуємо файл {filename} на Catbox.moe...")
+        # 1️⃣ Litterbox (Тимчасове сховище — файл автоматично видалиться через годину)
+        print(f"☁️ Завантажуємо файл {filename} на Litterbox.moe (1h)...")
         try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            }
             with open(local_file_path, 'rb') as f:
-                file_bytes = f.read()
-            if file_bytes:
-                upload_timeout = (10, 90) if mime_type.startswith("video") else (7, 25)
+                files = {'fileToUpload': (remote_filename, f, mime_type)}
+                data = {
+                    'reqtype': 'fileupload',
+                    'time': '1h'
+                }
                 res = requests.post(
-                    'https://catbox.moe/user/api.php',
-                    data={'reqtype': 'fileupload'},
-                    files={'fileToUpload': (filename, file_bytes, mime_type)},
-                    headers=browser_headers, timeout=upload_timeout
+                    'https://litterbox.catbox.moe/resources/internals/api.php',
+                    data=data,
+                    files=files,
+                    headers=headers,
+                    timeout=30
                 )
-                if res.status_code == 200 and res.text.startswith('http'):
+                if res.status_code == 200 and res.text.strip().startswith('http'):
                     direct_url = res.text.strip()
-                    print(f"🔗 Посилання від Catbox: {direct_url}")
+                    print(f"🔗 Посилання від Litterbox: {direct_url}")
                     return direct_url, None
+                else:
+                    print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text[:100]}")
         except Exception as e:
-            print(f"⚠️ Помилка Catbox: {e}. Пробуємо ImageKit...")
+            print(f"⚠️ Помилка Litterbox: {e}. Пробуємо резервний ImageKit...")
 
-        # 2️⃣ ImageKit.io
+        # 2️⃣ ImageKit.io (Резервний бізнес-хостинг)
         if config.IMAGEKIT_PRIVATE_KEY:
-            print(f"☁️ Завантажуємо файл {filename} на ImageKit.io...")
+            print(f"☁️ Резерв: завантажуємо файл {filename} на ImageKit.io...")
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
@@ -73,9 +85,9 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             except Exception as e:
                 print(f"⚠️ Помилка ImageKit: {e}")
 
-        # 3️⃣ ImgBB API
+        # 3️⃣ ImgBB API (Резервний варіант виключно для фото)
         if config.IMGBB_API_KEY and mime_type == "image/jpeg":
-            print(f"☁️ Завантажуємо фото {filename} на ImgBB...")
+            print(f"☁️ Резерв: завантажуємо фото {filename} на ImgBB...")
             try:
                 with open(local_file_path, 'rb') as f:
                     img_bytes = f.read()
@@ -101,13 +113,16 @@ def delete_from_imagekit(file_id: str):
     try:
         requests.delete(f"https://api.imagekit.io/v1/files/{file_id}", auth=(config.IMAGEKIT_PRIVATE_KEY, ''), timeout=15)
         print(f"🗑️ Файл {file_id} видалено з ImageKit.")
-    except: pass
+    except: 
+        pass
 
 def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
-    """Звертається до нейромережі Gemini для побудови креативного підпису на основі зображень."""
+    """Звертається до нейромережі Gemini для побудови креативного підпису на основі зображень за допомогою нового SDK."""
     pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
     if not config.GEMINI_API_KEY:
         return pref["no_gemini_caption"]
+
+    year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
 
     cat_lower = category.lower()
     real_manufacturer = category 
@@ -124,44 +139,72 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
                 real_manufacturer = info["names"].get(lang_idx, info["names"][0])
                 break
 
-    # Спроба пройтися по актуальних моделях (завжди тримаємо в кінці стабільну версію)
+    # Пул актуальних та стабільних моделей для генерації контенту
     models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
     
     lang_instructions = {
-        0: "Напиши text виключно УКРАЇНСЬКОЮ мовою. Використовуй емодзі.",
-        1: "Write the text exclusively in ENGLISH. Use emojis.",
-        2: "Schreibe den Text ausschließlich auf DEUTSCH. Nutze Emojis."
+        0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1-2 доречних емоїз.",
+        1: "Write the text exclusively in ENGLISH. You may include 1-2 relevant emojis.",
+        2: "Schreibe den Text ausschließlich auf DEUTSCH. Du darfst 1-2 passende Emojis hinzufügen."
     }
     
     prompt = (
-        f"Ти професійний копірайтер та меблевий експерт. Подивись на ці зображення. "
-        f"Напиши один короткий, натхненний пост для соцмереж. "
-        f"Виробник/Напрямок меблів: '{real_manufacturer}'. {lang_instructions.get(lang_idx, lang_instructions[0])} "
-        f"КРИТИЧНО: Не пиши жодних передмов чи післямов. Тільки text поста."
+        f"Ти — досвідчений копірайтер із тонким почуттям гумору та експертний меблевий конструктор.\n"
+        f"Подивись на ці зображення (або кадр з відео) і придумай один короткий, влучний та чіпляючий пост для соцмереж.\n\n"
+        f"🎯 ТОН ТА СТИЛІСТИКА:\n"
+        f"- Будь живим та іронічним. Якщо на фото робочий процес, пил, креслення чи інструменти — "
+        f"пожартуй про залаштунки, перфекціонізм, каву на тирсі чи складні технічні вузли.\n"
+        f"- Якщо на фото готовий виріб — пиши про естетику, меблеву філософію, ергономіку або домашній затишок та ідеальні зазори.\n"
+        f"- Уникай банальних штампів: 'найкраща якість', 'купуйте у нас', 'індивідуальний підхід'.\n\n"
+        f"📋 КОНТЕКСТ ДЛЯ АНАЛІЗУ:\n"
+        f"Виробник/Напрямок меблів: '{real_manufacturer}'. Рік зйомки: {year}.\n\n"
+        f"⚠️ СУВОРІ ОБМЕЖЕННЯ:\n"
+        f"1. {lang_instructions.get(lang_idx, lang_instructions[0])}\n"
+        f"2. Поверни ЛИШЕ фінальний текст підпису. Без лапок, без вступних слів, без хэштегів та пояснень копірайтера.\n"
+        f"3. КРИТИЧНО: Не пиши жодних передмов чи післямов. Тільки текст поста."
     )
 
     try:
-        parts = [{"text": prompt}]
+        # Ініціалізація нового клієнта через офіційний google-genai SDK
+        client = genai.Client(api_key=config.GEMINI_API_KEY)
+        inputs = [{"type": "text", "text": prompt}]
+        
+        # Обробка та стиснення медіафайлів для ШІ за допомогою Pillow
         for img_path in image_paths:
             if os.path.exists(img_path):
                 try:
-                    with open(img_path, "rb") as f:
-                        image_bytes = f.read()
+                    with PILImage.open(img_path) as img:
+                        if img.mode in ("RGBA", "P"):
+                            img = img.convert("RGB")
+                        
+                        img.thumbnail((1024, 1024))
+                        buffer = io.BytesIO()
+                        img.save(buffer, format="JPEG", quality=82, optimize=True)
+                        image_bytes = buffer.getvalue()
+                    
                     base64_image = base64.b64encode(image_bytes).decode('utf-8')
-                    parts.append({"inlineData": {"mimeType": "image/jpeg", "data": base64_image}})
-                except Exception as e:
-                    print(f"⚠️ Не вдалося обробити файл {img_path}: {e}")
+                    inputs.append({
+                        "type": "image",
+                        "data": base64_image,
+                        "mime_type": "image/jpeg"
+                    })
+                except Exception as img_err:
+                    print(f"⚠️ Не вдалося оптимізувати зображення {img_path}: {img_err}")
         
-        payload = {"contents": [{"parts": parts}]}
-        
+        # Почерговий запит до моделей у разі тимчасової недоступності квот
         for model in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={config.GEMINI_API_KEY}"
+            print(f"🚀 Спроба генерації підпису через {model}...")
             try:
-                res = requests.post(url, json=payload, timeout=20).json()
-                if 'candidates' in res and res['candidates']:
-                    return res['candidates'][0]['content']['parts'][0]['text'].strip()
-            except Exception as e:
-                print(f"⚠️ Модель {model} недоступна: {e}. Перехід до наступної...")
+                interaction = client.interactions.create(
+                    model=model,
+                    input=inputs
+                )
+                if interaction and interaction.output_text:
+                    return interaction.output_text.strip()
+                else:
+                    print(f"⚠️ Модель {model} повернула порожню відповідь.")
+            except Exception as model_err:
+                print(f"⚠️ Помилка моделі {model}: {model_err}. Перехід до наступної...")
                 continue
                 
         print("⚠️ Моделі Gemini не відповіли успішно. Активовано дефолт.")
