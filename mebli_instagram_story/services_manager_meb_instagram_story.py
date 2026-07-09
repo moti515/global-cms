@@ -41,18 +41,28 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     if local_file_path and os.path.exists(local_file_path):
         filename = os.path.basename(local_file_path)
         lower_name = filename.lower()
-        mime_type = "video/mp4" if lower_name.endswith(('.mp4', '.mov', '.avi')) else "image/jpeg"
+        is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
+        mime_type = "video/mp4" if is_video else "image/jpeg"
+        
+        # 🧼 Спрощуємо ім'я файлу для сервера, щоб уникнути збоїв парсингу довгих назв.
+        # Catbox все одно згенерує свій випадковий короткий хеш.
+        remote_filename = "story.mp4" if is_video else "story.jpg"
         
         # 1️⃣ Catbox.moe (Оптимізована та стабільна версія)
         print(f"☁️ Завантажуємо сторіс-файл {filename} на Catbox.moe...")
         try:
+            # Маскуємо запит під звичайний браузер Chrome, щоб обійти фільтр ботів (помилку 412)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            }
             with open(local_file_path, 'rb') as f:
-                files = {'fileToUpload': (filename, f, mime_type)}
+                files = {'fileToUpload': (remote_filename, f, mime_type)}
                 data = {'reqtype': 'fileupload'}
                 res = requests.post(
                     'https://catbox.moe/user/api.php',
                     data=data,
                     files=files,
+                    headers=headers,
                     timeout=30
                 )
                 if res.status_code == 200 and res.text.strip().startswith('http'):
@@ -80,7 +90,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             except Exception as e:
                 print(f"⚠️ Збій завантаження на ImageKit: {e}")
 
-        # 3️⃣ ImgBB API (Тільки для фото)
+        # 3️⃣ ImgBB API (Тільки для photo)
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and mime_type == "image/jpeg":
             print(f"☁️ Резерв: завантажуємо фото сторіс {filename} на ImgBB API...")
@@ -99,7 +109,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             except Exception as e:
                 print(f"⚠️ Збій завантаження на ImgBB: {e}")
 
-    # Аварійний фолбек на пряме скачування з Диска (може блокуватися Instagram, але захищає від фатального крашу)
+    # Аварійний фолбек на пряме скачування з Диска
     print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}", None
 
