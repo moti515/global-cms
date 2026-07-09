@@ -5,6 +5,7 @@ import time
 import requests
 import subprocess
 import re  # 💡 Додано для безпечної фільтрації імен
+import shutil  # 💡 Додано для роботи з файлами GitHub
 from datetime import datetime
 from googleapiclient.http import MediaIoBaseDownload
 from PIL import Image
@@ -22,7 +23,7 @@ def sanitize_filename(filename):
     name, ext = os.path.splitext(filename)
     # Замінюємо все, що НЕ є латиницею, цифрою, дефісом чи підкресленням, на дефіс
     sanitized_name = re.sub(r'[^a-zA-Z0-9_\-]', '-', name)
-    # Прибираємо подвійні дефіси, якщо они утворилися
+    # Прибираємо подвійні дефіси, якщо вони утворилися
     sanitized_name = re.sub(r'-+', '-', sanitized_name).strip('-')
     
     # Фолбек, якщо ім'я повністю складалося з кирилиці і стало пустим
@@ -53,6 +54,30 @@ def main():
     drive, sheets = get_services()
     os.makedirs('temp_mebli', exist_ok=True)
     
+    # --- АВТОМАТИЧНЕ ОЧИЩЕННЯ ТИМЧАСОВИХ МЕДІА НА GITHUB ---
+    github_repo = os.environ.get("GITHUB_REPOSITORY")
+    target_dir = os.path.join("docs", "temp_media")
+    if github_repo and os.path.exists(target_dir):
+        print("🧹 [GitHub] Очищення папки тимчасових медіа від попередніх запусків...")
+        try:
+            shutil.rmtree(target_dir)
+            os.makedirs(target_dir, exist_ok=True)
+            
+            subprocess.run(["git", "config", "user.name", "github-actions[bot]"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["git", "pull", "origin", "main", "--rebase"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["git", "add", "docs/temp_media"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+            if status.stdout.strip():
+                subprocess.run(["git", "commit", "-m", "🧹 Очищення старого медіа контенту"], check=True)
+                subprocess.run(["git", "push", "origin", "main"], check=True)
+                print("✅ Репозиторій успішно очищено від залишків минулих публікацій.")
+        except Exception as clean_err:
+            print(f"⚠️ Не вдалося очистити GitHub-папку контенту: {clean_err}")
+    else:
+        os.makedirs(target_dir, exist_ok=True)
+        
     selected_queue = []
     has_global_failures = False  # 🚩 Головний індикатор помилок для GitHub Actions
     
@@ -350,7 +375,36 @@ def main():
             if active_path != final_path and active_path != local_path:
                 local_files_to_clean.append(active_path)
 
-            pub_url, ik_id = get_google_drive_direct_url(f_id, local_file_path=active_path)
+            # --- СТРАТЕГІЯ ХОСТИНГУ: GITHUB PAGES VS IMAGEKIT ---
+            if github_repo:
+                print(f"🚀 [GitHub Стратегія] Публікація фрагмента через GitHub Pages...")
+                dest_filename = os.path.basename(active_path)
+                github_dest_path = os.path.join(target_dir, dest_filename)
+                
+                try:
+                    # Копіюємо файл у папку docs/temp_media
+                    shutil.copy2(active_path, github_dest_path)
+                    
+                    # Завантажуємо в репозиторій GitHub
+                    subprocess.run(["git", "add", github_dest_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run(["git", "commit", "-m", f"🚀 Додано медіа для сторіс: {dest_filename}"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run(["git", "push", "origin", "main"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    
+                    # Формуємо пряме публічне посилання на GitHub Pages
+                    repo_owner, repo_name = github_repo.split("/")
+                    pub_url = f"https://{repo_owner}.github.io/{repo_name}/temp_media/{dest_filename}"
+                    ik_id = "github_skip"
+                    
+                    print(f"🔗 Файл успішно завантажено на GitHub Pages: {pub_url}")
+                    # Невелика пауза для гарантованого оновлення кешу GitHub CDN перед запитом Meta
+                    time.sleep(5)
+                except Exception as git_err:
+                    print(f"❌ Збій завантаження файлу на GitHub Pages: {git_err}")
+                    pub_url, ik_id = None, None
+            else:
+                # Резервний фолбек (якщо запуск локальний)
+                print(f"ℹ️ Локальний запуск. Використовуємо ImageKit / Drive хостинг...")
+                pub_url, ik_id = get_google_drive_direct_url(f_id, local_file_path=active_path)
             
             if not pub_url:
                 print(f"⚠️ Не вдалося отримати публічне посилання для фрагмента {active_path}.")
@@ -362,7 +416,7 @@ def main():
             param_type = "video_url" if is_video else "image_url"
             payload = {
                 "media_type": "STORIES",
-                param_type: pub_url,
+                "param_type": pub_url,
                 "access_token": meta_access_token
             }
             
@@ -397,7 +451,8 @@ def main():
                 has_global_failures = True
                 all_parts_successful = False
 
-            if ik_id: 
+            # Безпечне видалення з ImageKit (тільки якщо використовувався ImageKit)
+            if ik_id and ik_id != "github_skip": 
                 delete_from_imagekit(ik_id)
 
         if all_parts_successful and media_parts_to_upload:
@@ -441,7 +496,7 @@ def main():
             ).execute()
             print(f"\n🔄 Мову для наступного запуска Сторіс (H2) змінено на: {next_lang_value}")
         except Exception as e:
-            print(f"⚠️ Не вдалося оновити мову в комірці H2: {e}")
+            print(f"⚠️ Не вдалося оновити мовну комірку: {e}")
 
     # Очищення кешу
     for f in local_files_to_clean:
