@@ -4,6 +4,9 @@ import time
 import base64
 import requests
 import subprocess
+import io
+from PIL import Image as PILImage
+from google import genai
 from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -148,24 +151,22 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     if not gemini_key:
         return pref.get("no_gemini_caption", "Професійна якість та увага до деталей!")
 
-    # 🌟 ЗМІНА 1: Актуальний пул моделей 2026 року (Прибрано застарілі та тестові версії)
+    # 🌟 Актуальний пул моделей
     models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
     
-    # 🌟 ЗМІНА 2: Дозволяємо емодзі (бо pilmoji їх відрендерить) та коригуємо мовні вказівки
     lang_instructions = {
         0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1-2 доречних емодзі.",
         1: "Write the text exclusively in ENGLISH. You may include 1-2 relevant emojis.",
         2: "Schreibe den Text ausschließlich auf DEUTSCH. Du darfst 1-2 passende Emojis hinzufügen."
     }
     
-    # 🌟 ЗМІНА 3: Новий гнучкий промт із фокусом на залаштунки, меблевий гумор та атмосферу
     prompt = (
         f"Ти — досвідчений копірайтер із тонким почуттям гумору та експертний меблевий конструктор.\n"
         f"Подивись на це зображення (або кадр з відео) і придумай ОДНУ коротку, влучну та чіпляючу фразу "
         f"(максимум 1-2 речення) для Instagram Stories. Текст буде нанесено прямо поверх медіафайлу.\n\n"
         f"🎯 ТОН ТА СТИЛІСТИКА:\n"
         f"- Будь живим та іронічним. Якщо на фото робочий процес, пил, креслення чи інструменти — "
-        f"пожартуй про залаштунки, перфекціонізм, каву на тирсі чи складні технічні вузли.\n"
+        f"пожартуй про залаштунки, перфекціонізм, каву на тирсі чи складні技術ні вузли.\n"
         f"- Якщо на фото готовий виріб — пиши про естетику, меблеву філософію, ергономіку або «білямеблеві» теми "
         f"(домашній затишок, ідеальні зазори, радість від завершеного проєкту).\n"
         f"- Уникай банальних штампів: 'найкраща якість', 'купуйте у нас', 'індивідуальний підхід'.\n\n"
@@ -177,30 +178,57 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         f"3. Роби речення короткими, щоб вони легко читалися на екрані телефону."
     )
 
+    # 🌟 Ініціалізуємо новий SDK клієнт (ключ підтягнеться з os.environ['GEMINI_API_KEY'])
     try:
-        parts = [{"text": prompt}]
+        client = genai.Client()
+        
+        # Готуємо уніфікований масив вхідних даних (Interactions API)
+        inputs = [{"type": "text", "text": prompt}]
+        
+        # Обробляємо та стискаємо кожне зображення перед відправкою
         for img_path in image_paths:
             if os.path.exists(img_path):
-                with open(img_path, "rb") as f:
-                    image_bytes = f.read()
-                base64_image = base64.b64encode(image_bytes).decode('utf-8')
-                parts.append({"inlineData": {"mimeType": "image/jpeg", "data": base64_image}})
-        
-        payload = {"contents": [{"parts": parts}]}
-        
+                try:
+                    with PILImage.open(img_path) as img:
+                        if img.mode in ("RGBA", "P"):
+                            img = img.convert("RGB")
+                        
+                        # Зменшуємо роздільну здатність до розумного максимуму для ШІ
+                        img.thumbnail((1024, 1024))
+                        
+                        buffer = io.BytesIO()
+                        img.save(buffer, format="JPEG", quality=82, optimize=True)
+                        image_bytes = buffer.getvalue()
+                    
+                    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+                    
+                    # Додаємо у структурованому вигляді нового API
+                    inputs.append({
+                        "type": "image",
+                        "data": base64_image,
+                        "mime_type": "image/jpeg"
+                    })
+                except Exception as img_err:
+                    print(f"⚠️ Не вдалося оптимізувати зображення {img_path}: {img_err}")
+
+        # Каскадний перебір моделей через новий інтерфейс
         for model in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
+            print(f"🚀 Спроба генерації підпису через {model}...")
             try:
-                res = requests.post(url, json=payload, timeout=20).json()
-                if 'candidates' in res and res['candidates']:
-                    return res['candidates'][0]['content']['parts'][0]['text'].strip()
+                interaction = client.interactions.create(
+                    model=model,
+                    input=inputs
+                )
+                if interaction and interaction.output_text:
+                    return interaction.output_text.strip()
                 else:
-                    print(f"⚠️ Модель {model} повернула неочікувану відповідь. Переходимо до наступної.")
-            except Exception as e:
-                print(f"⚠️ Збій під час запиту до {model}: {e}")
+                    print(f"⚠️ Модель {model} повернула порожню відповідь.")
+            except Exception as model_err:
+                print(f"⚠️ Помилка моделі {model}: {model_err}. Переходимо до наступної.")
                 continue
-    except Exception as e:
-        print(f"⚠️ Помилка генерації текста ШІ: {e}")
+
+    except Exception as general_err:
+        print(f"⚠️ Загальний збій блоку ШІ-генерації: {general_err}")
         
     return pref.get("fallback_caption", "Створюємо меблі з точним розрахунком!")
     
