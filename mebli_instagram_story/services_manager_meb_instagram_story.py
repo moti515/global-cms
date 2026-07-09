@@ -5,13 +5,13 @@ import base64
 import requests
 import subprocess
 import io
+import shutil # 💡 Додано для копіювання файлів
 from PIL import Image as PILImage
 from google import genai
 from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-# Явно імпортуємо оптимізований конфіг для централізованого доступу до налаштувань
 import config_meb_insta_story as config
 
 def get_services():
@@ -47,34 +47,35 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
         }
         
-        # 0️⃣ GitHub Репозиторій (Основний супер-стабільний варіант)
-        github_repo = os.environ.get("GITHUB_REPOSITORY")  # Змінна автоматично надається GitHub Actions
+        # 0️⃣ GitHub Pages Репозиторій (Основний супер-стабільний варіант для Actions)
+        github_repo = os.environ.get("GITHUB_REPOSITORY")
         if github_repo:
-            print(f"🐙 [GitHub] Завантажуємо тимчасовий медіафайл {filename} у репозиторій...")
+            print(f"🐙 [GitHub Pages] Публікуємо тимчасовий медіафайл {filename}...")
             try:
                 target_dir = os.path.join("docs", "temp_media")
                 os.makedirs(target_dir, exist_ok=True)
                 github_local_path = os.path.join(target_dir, filename)
                 
-                import shutil
                 shutil.copy(local_file_path, github_local_path)
                 
-                # Автоматичне налаштування профілю Git в середовищі Actions
                 subprocess.run(["git", "config", "user.name", "github-actions[bot]"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
-                # Робимо pull з ребейзом, щоб уникнути конфліктів, якщо обробляється кілька файлів підряд
+                # Запобігаємо конфліктам паралельних запусків
                 subprocess.run(["git", "pull", "origin", "main", "--rebase"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.run(["git", "add", github_local_path], check=True)
-                subprocess.run(["git", "commit", "-m", f"⚡ Наживо: {filename}"], check=True)
+                subprocess.run(["git", "commit", "-m", f"🚀 Наживо (Pages): {filename}"], check=True)
                 subprocess.run(["git", "push", "origin", "main"], check=True)
                 
-                # Формуємо сире пряме посилання, яке працює МИТТЄВО
-                raw_url = f"https://raw.githubusercontent.com/{github_repo}/main/docs/temp_media/{filename}"
-                print(f"✅ Файл успішно опубліковано на GitHub: {raw_url}")
-                return raw_url, "github_skip"
+                # ✨ Формуємо правильний URL через GitHub Pages (інстаграм його любить)
+                repo_owner, repo_name = github_repo.split("/")
+                pages_url = f"https://{repo_owner}.github.io/{repo_name}/temp_media/{filename}"
+                
+                print(f"✅ Файл успішно опубліковано на GitHub Pages: {pages_url}")
+                time.sleep(5)  # Пауза, щоб CDN встиг підхопити файл перед запитом Meta
+                return pages_url, "github_skip"
             except Exception as git_err:
-                print(f"⚠️ Збій GitHub-хостингу: {git_err}. Переходимо до резервних хмар...")
+                print(f"⚠️ Збій GitHub Pages хостингу: {git_err}. Переходимо до резервних хмар...")
 
         # 1️⃣ Catbox.moe
         print(f"☁️ Завантажуємо сторіс-файл {filename} на Catbox.moe...")
@@ -95,7 +96,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         # 2️⃣ ImageKit.io
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
         if imagekit_key:
-            print(f"☁️ Завантажуємо сторіс-файл {filename} on ImageKit.io...")
+            print(f"☁️ Завантажуємо сторіс-файл {filename} на ImageKit.io...")
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
@@ -141,10 +142,8 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     gemini_key = os.environ.get("GEMINI_API_KEY")
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
     
-    # Фолбеки з LANG_CONFIG
     pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
     
-    # --- БЛОК ОБРОБКИ БАГАТОМОВНОЇ ЛОКАЦІЇ ---
     resolved_loc = ""
     if target_loc:
         try:
@@ -160,7 +159,6 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     if any(marker in resolved_loc.lower() for marker in invalid_markers):
         resolved_loc = ""
 
-    # --- ДИНАМІЧНЕ ВИЗНАЧЕННЯ БРЕНДУ ТА КАТЕГОРІЙ ---
     cat_lower = category.lower()
     real_manufacturer = category
     matched_special = False
@@ -180,11 +178,10 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     if not gemini_key:
         return pref.get("no_gemini_caption", "Професійна якість та увага до деталей!")
 
-    # 🌟 Актуальний пул моделей
     models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
     
     lang_instructions = {
-        0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1-2 доречних емодзі.",
+        0: "Напиши text виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1-2 доречних емодзі.",
         1: "Write the text exclusively in ENGLISH. You may include 1-2 relevant emojis.",
         2: "Schreibe den Text ausschließlich auf DEUTSCH. Du darfst 1-2 passende Emojis hinzufügen."
     }
@@ -195,7 +192,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         f"(максимум 1-2 речення) для Instagram Stories. Текст буде нанесено прямо поверх медіафайлу.\n\n"
         f"🎯 ТОН ТА СТИЛІСТИКА:\n"
         f"- Будь живим та іронічним. Якщо на фото робочий процес, пил, креслення чи інструменти — "
-        f"пожартуй про залаштунки, перфекціонізм, каву на тирсі чи складні技術ні вузли.\n"
+        f"пожартуй про залаштунки, перфекціонізм, каву на тирсі чи складні технічні вузли.\n"
         f"- Якщо на фото готовий виріб — пиши про естетику, меблеву філософію, ергономіку або «білямеблеві» теми "
         f"(домашній затишок, ідеальні зазори, радість від завершеного проєкту).\n"
         f"- Уникай банальних штампів: 'найкраща якість', 'купуйте у нас', 'індивідуальний підхід'.\n\n"
@@ -207,31 +204,22 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         f"3. Роби речення короткими, щоб вони легко читалися на екрані телефону."
     )
 
-    # 🌟 Ініціалізуємо новий SDK клієнт (ключ підтягнеться з os.environ['GEMINI_API_KEY'])
     try:
         client = genai.Client()
-        
-        # Готуємо уніфікований масив вхідних даних (Interactions API)
         inputs = [{"type": "text", "text": prompt}]
         
-        # Обробляємо та стискаємо кожне зображення перед відправкою
         for img_path in image_paths:
             if os.path.exists(img_path):
                 try:
                     with PILImage.open(img_path) as img:
                         if img.mode in ("RGBA", "P"):
                             img = img.convert("RGB")
-                        
-                        # Зменшуємо роздільну здатність до розумного максимуму для ШІ
                         img.thumbnail((1024, 1024))
-                        
                         buffer = io.BytesIO()
                         img.save(buffer, format="JPEG", quality=82, optimize=True)
                         image_bytes = buffer.getvalue()
                     
                     base64_image = base64.b64encode(image_bytes).decode('utf-8')
-                    
-                    # Додаємо у структурованому вигляді нового API
                     inputs.append({
                         "type": "image",
                         "data": base64_image,
@@ -240,7 +228,6 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 except Exception as img_err:
                     print(f"⚠️ Не вдалося оптимізувати зображення {img_path}: {img_err}")
 
-        # Каскадний перебір моделей через новий інтерфейс
         for model in models_to_try:
             print(f"🚀 Спроба генерації підпису через {model}...")
             try:
@@ -270,7 +257,7 @@ def wait_for_meta_container(container_id, access_token):
             status = r.get("status_code", "").upper()
             if status == "FINISHED": return True
             elif status == "ERROR": return False
-            print(f"⏳ Очікування обробки медіафайлу в Meta... Статус: {status}")
+            print(f"⏳ Очікування обробки медіафайлу v Meta... Статус: {status}")
         except: pass
         time.sleep(5)
     return False
