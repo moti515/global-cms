@@ -169,7 +169,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         return pref.get("no_gemini_caption", "Професійна якість та увага до деталей!")
 
     # Актуальний список моделей (рекомендовано починати з нових 2.5 або 2.0 Flash)
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
     
     lang_instructions = {
         0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1-2 доречних емодзі.",
@@ -224,13 +224,20 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 except Exception as img_err:
                     print(f"⚠️ Не вдалося оптимізувати зображення {img_path}: {img_err}")
 
+        # Налаштування конфігурації: обмежуємо глибину роздумів для швидкості
+        # Для простих підписів сторіс "low" або "minimal" суттєво зекономить час відгуку
+        config_thinking = types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_level="low")
+        )
+
         # Каскадний перебір моделей за допомогою правильного методу generate_content
         for model in models_to_try:
             print(f"🚀 Спроба генерації підпису через {model}...")
             try:
                 response = client.models.generate_content(
                     model=model,
-                    contents=contents_payload
+                    contents=contents_payload,
+                    config=config_thinking  # Передаємо наш швидкий конфіг
                 )
                 if response and response.text:
                     return response.text.strip()
