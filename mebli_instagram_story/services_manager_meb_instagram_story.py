@@ -44,22 +44,23 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
         mime_type = "video/mp4" if is_video else "image/jpeg"
         
-        # 🧼 Спрощуємо ім'я файлу для сервера, щоб уникнути збоїв парсингу довгих назв.
-        # Catbox все одно згенерує свій випадковий короткий хеш.
+        # 🧼 Спрощуємо ім'я файлу для сервера
         remote_filename = "story.mp4" if is_video else "story.jpg"
         
-        # 1️⃣ Catbox.moe (Оптимізована та стабільна версія)
-        print(f"☁️ Завантажуємо сторіс-файл {filename} на Catbox.moe...")
+        # 1️⃣ Litterbox (Тимчасове сховище — ідеально для Meta API)
+        print(f"☁️ Завантажуємо сторіс-файл {filename} на Litterbox.moe (1h)...")
         try:
-            # Маскуємо запит під звичайний браузер Chrome, щоб обійти фільтр ботів (помилку 412)
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
             }
             with open(local_file_path, 'rb') as f:
                 files = {'fileToUpload': (remote_filename, f, mime_type)}
-                data = {'reqtype': 'fileupload'}
+                data = {
+                    'reqtype': 'fileupload',
+                    'time': '1h'  # Файл видалиться сам через годину, Meta встигне забрати його за секунди
+                }
                 res = requests.post(
-                    'https://catbox.moe/user/api.php',
+                    'https://litterbox.catbox.moe/resources/internals/api.php',
                     data=data,
                     files=files,
                     headers=headers,
@@ -68,11 +69,11 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 if res.status_code == 200 and res.text.strip().startswith('http'):
                     return res.text.strip(), None
                 else:
-                    print(f"⚠️ Catbox відмовив (Статус {res.status_code}): {res.text[:100]}")
+                    print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text[:100]}")
         except Exception as e:
-            print(f"⚠️ Збій завантаження на Catbox: {e}")
+            print(f"⚠️ Збій завантаження на Litterbox: {e}")
 
-        # 2️⃣ ImageKit.io (Надійний бізнес-бекэнд)
+        # 2️⃣ ImageKit.io (Надійний бізнес-бекэнд — залишається як залізобетонний резерв)
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
         if imagekit_key:
             print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на ImageKit.io...")
@@ -109,7 +110,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             except Exception as e:
                 print(f"⚠️ Збій завантаження на ImgBB: {e}")
 
-    # Аварійний фолбек на пряме скачування з Диска
+    # Аварійний фолбек
     print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}", None
 
