@@ -3,7 +3,6 @@ import json
 import time
 import base64
 import requests
-import subprocess
 import io
 from PIL import Image as PILImage
 from google import genai
@@ -11,7 +10,7 @@ from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-# Явно імпортуємо оптимізований конфіг для централізованого доступу до налаштувань
+# Централізований конфіг проекту
 import config_meb_insta_story as config
 
 def get_services():
@@ -43,30 +42,30 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         filename = os.path.basename(local_file_path)
         lower_name = filename.lower()
         mime_type = "video/mp4" if lower_name.endswith(('.mp4', '.mov', '.avi')) else "image/jpeg"
-        browser_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-        }
         
-        # 1️⃣ Catbox.moe
+        # 1️⃣ Catbox.moe (Оптимізована та стабільна версія)
         print(f"☁️ Завантажуємо сторіс-файл {filename} на Catbox.moe...")
         try:
             with open(local_file_path, 'rb') as f:
-                file_bytes = f.read()
-            if file_bytes:
+                files = {'fileToUpload': (filename, f, mime_type)}
+                data = {'reqtype': 'fileupload'}
                 res = requests.post(
                     'https://catbox.moe/user/api.php',
-                    data={'reqtype': 'fileupload'},
-                    files={'fileToUpload': (filename, file_bytes, mime_type)},
-                    headers=browser_headers, timeout=(7, 25)
+                    data=data,
+                    files=files,
+                    timeout=30
                 )
-                if res.status_code == 200 and res.text.startswith('http'):
+                if res.status_code == 200 and res.text.strip().startswith('http'):
                     return res.text.strip(), None
-        except: pass
+                else:
+                    print(f"⚠️ Catbox відмовив (Статус {res.status_code}): {res.text[:100]}")
+        except Exception as e:
+            print(f"⚠️ Збій завантаження на Catbox: {e}")
 
-        # 2️⃣ ImageKit.io
+        # 2️⃣ ImageKit.io (Надійний бізнес-бекэнд)
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
         if imagekit_key:
-            print(f"☁️ Завантажуємо сторіс-файл {filename} на ImageKit.io...")
+            print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на ImageKit.io...")
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
@@ -78,12 +77,13 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                     if res.status_code in [200, 201]:
                         res_data = res.json()
                         return res_data.get('url'), res_data.get('fileId')
-            except: pass
+            except Exception as e:
+                print(f"⚠️ Збій завантаження на ImageKit: {e}")
 
-        # 3️⃣ ImgBB API
+        # 3️⃣ ImgBB API (Тільки для фото)
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and mime_type == "image/jpeg":
-            print(f"☁️ Завантажуємо фото сторіс {filename} на ImgBB API...")
+            print(f"☁️ Резерв: завантажуємо фото сторіс {filename} на ImgBB API...")
             try:
                 with open(local_file_path, 'rb') as f:
                     img_bytes = f.read()
@@ -96,26 +96,28 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                     ).json()
                     if res.get('success'):
                         return res['data']['url'], None
-            except: pass
+            except Exception as e:
+                print(f"⚠️ Збій завантаження на ImgBB: {e}")
 
-    print(f"🚨 Аварійний режим завантаження для Google Drive ID: {file_id}")
+    # Аварійний фолбек на пряме скачування з Диска (може блокуватися Instagram, але захищає від фатального крашу)
+    print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}", None
 
 def delete_from_imagekit(file_id: str):
     if not file_id: return
     imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
     if not imagekit_key: return
-    try: requests.delete(f"https://api.imagekit.io/v1/files/{file_id}", auth=(imagekit_key, ''), timeout=15)
-    except: pass
+    try: 
+        requests.delete(f"https://api.imagekit.io/v1/files/{file_id}", auth=(imagekit_key, ''), timeout=15)
+    except: 
+        pass
 
 def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc):
     gemini_key = os.environ.get("GEMINI_API_KEY")
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
     
-    # Фолбеки з LANG_CONFIG
     pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
     
-    # --- БЛОК ОБРОБКИ БАГАТОМОВНОЇ ЛОКАЦІЇ ---
     resolved_loc = ""
     if target_loc:
         try:
@@ -131,7 +133,6 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     if any(marker in resolved_loc.lower() for marker in invalid_markers):
         resolved_loc = ""
 
-    # --- ДИНАМІЧНЕ ВИЗНАЧЕННЯ БРЕНДУ ТА КАТЕГОРІЙ ---
     cat_lower = category.lower()
     real_manufacturer = category
     matched_special = False
@@ -151,7 +152,6 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     if not gemini_key:
         return pref.get("no_gemini_caption", "Професійна якість та увага до деталей!")
 
-    # 🌟 Актуальний пул моделей
     models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
     
     lang_instructions = {
@@ -165,27 +165,23 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         f"Подивись на це зображення (або кадр з відео) і придумай ОДНУ коротку, влучну та чіпляючу фразу "
         f"(максимум 1-2 речення) для Instagram Stories. Текст буде нанесено прямо поверх медіафайлу.\n\n"
         f"🎯 ТОН ТА СТИЛІСТИКА:\n"
-        f"- Будь живим та іронічним. Якщо на фото робочий процес, пил, креслення чи інструменти — "
-        f"пожартуй про залаштунки, перфекціонізм, каву на тирсі чи складні技術ні вузли.\n"
+        f"- Будь живим та іронічним. Якщо на foto робочий процес, пил, креслення чи інструменти — "
+        f"пожартуй про залаштунки, перфекціонізм, каву на тирсі чи складні технічні вузли.\n"
         f"- Якщо на фото готовий виріб — пиши про естетику, меблеву філософію, ергономіку або «білямеблеві» теми "
         f"(домашній затишок, ідеальні зазори, радість від завершеного проєкту).\n"
         f"- Уникай банальних штампів: 'найкраща якість', 'купуйте у нас', 'індивідуальний підхід'.\n\n"
-        f"📋 КОНТЕКСТ ДЛЯ АНАЛІЗУ:\n"
-        f"Категорія/Бренд: '{real_manufacturer}'. Рік зйомки: {year}. Локація: {resolved_loc if resolved_loc else 'Меблеве виробництво'}.\n\n"
+        f"📋  КОНТЕКСТ ДЛЯ АНАЛІЗУ:\n"
+        f"Категорія/Бренд: '{real_manufacturer}'. Рік зйомки: {year}.  Локація: {resolved_loc if resolved_loc else 'Меблеве виробництво'}.\n\n"
         f"⚠️ СУВОРІ ОБМЕЖЕННЯ:\n"
         f"1. {lang_instructions.get(lang_idx, lang_instructions[0])}\n"
         f"2. Поверни ЛИШЕ фінальний текст підпису. Без лапок, без вступних слів, без хэштегів та пояснень копірайтера.\n"
         f"3. Роби речення короткими, щоб вони легко читалися на екрані телефону."
     )
 
-    # 🌟 Ініціалізуємо новий SDK клієнт (ключ підтягнеться з os.environ['GEMINI_API_KEY'])
     try:
         client = genai.Client()
-        
-        # Готуємо уніфікований масив вхідних даних (Interactions API)
         inputs = [{"type": "text", "text": prompt}]
         
-        # Обробляємо та стискаємо кожне зображення перед відправкою
         for img_path in image_paths:
             if os.path.exists(img_path):
                 try:
@@ -193,16 +189,12 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                         if img.mode in ("RGBA", "P"):
                             img = img.convert("RGB")
                         
-                        # Зменшуємо роздільну здатність до розумного максимуму для ШІ
                         img.thumbnail((1024, 1024))
-                        
                         buffer = io.BytesIO()
                         img.save(buffer, format="JPEG", quality=82, optimize=True)
                         image_bytes = buffer.getvalue()
                     
                     base64_image = base64.b64encode(image_bytes).decode('utf-8')
-                    
-                    # Додаємо у структурованому вигляді нового API
                     inputs.append({
                         "type": "image",
                         "data": base64_image,
@@ -211,7 +203,6 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 except Exception as img_err:
                     print(f"⚠️ Не вдалося оптимізувати зображення {img_path}: {img_err}")
 
-        # Каскадний перебір моделей через новий інтерфейс
         for model in models_to_try:
             print(f"🚀 Спроба генерації підпису через {model}...")
             try:
