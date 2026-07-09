@@ -1,38 +1,27 @@
 import os
-import sys
 import json
 import time
-import base64
 import requests
-import subprocess
+import io
+from PIL import Image as PILImage
+from google import genai
+from google.genai import types  # Імпортуємо типи для правильної роботи з медіа
 from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-from PIL import Image
-from pillow_heif import register_heif_opener
 
-register_heif_opener()
-
-# ⚙️ ДИНАМІЧНІ НАЛАШТУВАННЯ META (Тепер беруться з системних змінних)
-IG_USER_ID = os.environ.get("IG_USER_ID")
-FB_PAGE_ID = os.environ.get("FB_PAGE_ID")
-META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN")
-SPREADSHEET_ID = '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0'
-
-SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
-VALID_MEDIA_EXTENSIONS = ('.gif', '.heic', '.heif', '.jpeg', '.jpg', '.mp4', '.png', '.webp')
-DOCUMENT_EXTENSIONS = ('.pdf', '.doc', '.docx', '.djvu', '.txt', '.rtf', '.fb2', '.epub')
+# Централізований конфіг проекту
+import config_meb_insta_story as config
 
 def get_services():
     key_dict = json.loads(os.environ['GDRIVE_SERVICE_ACCOUNT_KEY'])
-    creds = service_account.Credentials.from_service_account_info(key_dict, scopes=SCOPES)
+    creds = service_account.Credentials.from_service_account_info(key_dict, scopes=config.SCOPES)
     return build('drive', 'v3', credentials=creds), build('sheets', 'v4', credentials=creds)
 
 def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="непідтримуваний формат"):
     try:
         res = sheets_service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:E"
+            spreadsheetId=config.SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:E"
         ).execute()
         rows = res.get('values', [])
         
@@ -40,7 +29,7 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
             if len(row) > 1 and row[1] == folder_name:
                 range_to_update = f"'⚙️ Налаштування Папок'!E{idx + 2}"
                 sheets_service.spreadsheets().values().update(
-                    spreadsheetId=SPREADSHEET_ID, range=range_to_update,
+                    spreadsheetId=config.SPREADSHEET_ID, range=range_to_update,
                     valueInputOption='RAW', body={'values': [[f"⚠️ {reason}: {file_name}"]]}
                 ).execute()
                 print(f"📝 Зафіксовано системне попередження для [{folder_name}] на службовому аркуші.")
@@ -48,636 +37,224 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
     except Exception as e:
         print(f"❌ Не вдалося записати помилку на службовий аркуш: {e}")
 
-def get_active_rules_ordered():
-    now = datetime.now()
-    day_of_week = now.strftime('%A')
-    day_month = now.strftime('%d.%m')
-    
-    days_map = {
-        'Monday': 'Понеділок', 'Tuesday': 'Вівторок', 'Wednesday': 'Середа',
-        'Thursday': 'Четвер', 'Friday': "П'ятниця", 'Saturday': 'Субота', 'Sunday': 'Неділя'
-    }
-    
-    active_rules = []
-    if "22.12" <= day_month <= "31.12" or "01.01" == day_month: active_rules.append("Новий рік")
-    if "01.04" <= day_month <= "02.04": active_rules.append("1 квітня")
-    if "22.02" <= day_month <= "23.02": active_rules.append("23 лютого")
-    if day_month == "08.03": active_rules.append("8 Березня")
-    if day_month == "03.09": active_rules.append("3 вересня")
-    if "31.05" <= day_month <= "15.06": active_rules.append("31 травня")
-    if now.month == 11 and 23 <= now.day <= 30: active_rules.append("Чорна п'ятниця")
-    
-    # Перевірка на специфічні п'ятниці
-    if day_of_week == 'Friday':
-        if now.day == 13: active_rules.append("П'ятниця 13-те")
-        elif now.day == 12: active_rules.append("П'ятниця 12-те")
-            
-    # Перевірка на вихідні (Субота та Неділя)
-    if day_of_week in ['Saturday', 'Sunday']:
-        active_rules.append("Weekend")
-    
-    active_rules.append(days_map[day_of_week])
-    active_rules.append("Різне")
-    return active_rules
-
-def generate_multimodal_caption(image_path, category, tab_name):
-    """ШІ аналізує зображення та генерує гострий тематичний опис трьома мовами"""
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    
-    # 1. Перевірка наявності ключа
-    if not gemini_key:
-        if "мебл" in tab_name.lower():
-            return "Трохи меблевого гумору вам у стрічку! Як вам? 👇😂 #меблі #інтерєр #гумор"
-        else:
-            return "Усміхніться! Гарного настрою! 😉 #гумор #розваги #п'ятниця"
-        
-    models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
-    
-    # 2. Динамічний контекст промпту
-    topic_context = "розважальної сторінки з гострим гумором"
-    if "мебл" in tab_name.lower():
-        topic_context = "популярного пабліку про меблі, дизайн інтер'єрів та запеклі будні меблевиків (майстрів, дизайнерів, збірників)"
-
-    try:
-        with open(image_path, "rb") as f:
-            image_bytes = f.read()
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
-        
-        prompt = (
-            f"Ти топ-маркетолог {topic_context}. Подивись на цю картинку/мем. "
-            f"Напиши до неї короткий, влучний і дійсно смішний коментар (або життєву фразу/біль клієнта чи майстра) "
-            f"ТРЬОМА мовами окремими абзацами: спочатку українською, потім англійською, і німецькою. "
-            f"КРИТИЧНО: Це не має бути дослівний нудний переклад! Жарт має бути якісно адаптований (використовуй живий сленг, "
-            f"професійні жарти або зрозумілий контекст для носіїв кожної з мов). "
-            f"Врахуй, що контекст публікації — категорія '{category}' з розділу '{tab_name}'. Додай відповідні емодзі. "
-            f"Не використовуй жодних офіційних вступів чи підписів на кшталт 'Ось ваш жарт'. Формат відповіді строго такий:\n\n"
-            f"🇺🇦 [Жарт українською]\n\n"
-            f"🇬🇧 [Жарт англійською]\n\n"
-            f"🇩🇪 [Жарт німецькою]"
-        )
-        
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inlineData": {  
-                            "mimeType": "image/jpeg",  
-                            "data": base64_image
-                        }
-                    }
-                ]
-            }]
-        }
-        
-        for model in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
-            try:
-                res = requests.post(url, json=payload, timeout=20).json()
-                if 'candidates' in res and res['candidates']:
-                    return res['candidates'][0]['content']['parts'][0]['text']
-            except Exception as e:
-                print(f"⚠️ Модель {model} тимчасово недоступна: {e}. Пробуємо наступну...")
-                continue
-                
-        # 3. Дефолт, якщо жодна модель не відповіла (наприклад, таймаут мережі)
-        print("⚠️ Жодна з моделей Gemini не відповіла успішно, активовано дефолт.")
-        if "мебл" in tab_name.lower():
-            return "Трохи меблевого гумору вам у стрічку! Як вам? 👇😂 #меблі #гумор"
-        else:
-            return "Трохи гумору вам у стрічку! Як вам? 👇😂 #гумор #розваги"
-            
-    except Exception as e:
-        # 4. Дефолт на випадок критичної помилки коду (наприклад, битий файл зображення)
-        print(f"⚠️ Помилка обробки запиту до ШІ: {e}")
-        if "мебл" in tab_name.lower():
-            return "Трохи меблевого гумору вам у стрічку! Як вам? 👇😂"
-        else:
-            return "Трохи гумору вам у стрічку! Як вам? 👇😂"
-
-def delete_from_imagekit(file_id: str):
-    """Видаляє тимчасовий файл з ImageKit.io за його fileId, щоб не засмічувати хмару"""
-    if not file_id:
-        return
-
-    imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
-    if not imagekit_key:
-        print("⚠️ Змінна IMAGEKIT_PRIVATE_KEY відсутня. Автовидалення скасовано.")
-        return
-
-    url = f"https://api.imagekit.io/v1/files/{file_id}"
-    print(f"🗑️ Видаляємо тимчасовий буферний файл {file_id} з ImageKit.io...")
-    try:
-        res = requests.delete(url, auth=(imagekit_key, ''), timeout=20)
-        if res.status_code == 204:
-            print("✅ Файл успішно та безповоротно видалено з ImageKit.")
-        else:
-            print(f"⚠️ ImageKit не видалив файл (Код {res.status_code}): {res.text}")
-    except Exception as e:
-        print(f"⚠️ Помилка при виконанні запиту на видалення з ImageKit: {e}")
-
 def get_google_drive_direct_url(file_id, local_file_path=None):
-    """
-    Каскадний завантажувач медіафайлів на зовнішні хостинги з API.
-    Оптимізовано за пам'яттю (стримінг файлів замість f.read()).
-    """
     if local_file_path and os.path.exists(local_file_path):
         filename = os.path.basename(local_file_path)
         lower_name = filename.lower()
-        mime_type = "video/mp4" if lower_name.endswith('.mp4') else "image/jpeg"
+        is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
+        mime_type = "video/mp4" if is_video else "image/jpeg"
         
-        browser_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-        }
+        # 🧼 Спрощуємо ім'я файлу для сервера
+        remote_filename = "story.mp4" if is_video else "story.jpg"
         
-        # 1️⃣ Спроба через Catbox.moe (Фото + Відео) — СТРИМІНГ БЕЗ f.read()
-        print(f"☁️ Завантажуємо файл {filename} на Catbox.moe...", flush=True)
+        # 1️⃣ Litterbox (Тимчасове сховище — ідеально для Meta API)
+        print(f"☁️ Завантажуємо сторіс-файл {filename} на Litterbox.moe (1h)...")
         try:
-            data_payload = {'reqtype': 'fileupload'}
-            # Відкриваємо файл і передаємо як об'єкт — requests сам зчитає його потоком
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            }
             with open(local_file_path, 'rb') as f:
-                files_payload = {'fileToUpload': (filename, f, mime_type)}
+                files = {'fileToUpload': (remote_filename, f, mime_type)}
+                data = {
+                    'reqtype': 'fileupload',
+                    'time': '1h'  # Тимчасовий файл на 1 годину згідно з документацією API
+                }
                 res = requests.post(
-                    'https://catbox.moe/user/api.php',
-                    data=data_payload,
-                    files=files_payload,
-                    headers=browser_headers,
-                    timeout=(10, 60)  # Збільшений таймаут на вивантаження
+                    'https://litterbox.catbox.moe/resources/internals/api.php',
+                    data=data,
+                    files=files,
+                    headers=headers,
+                    timeout=30
                 )
                 
-            if res.status_code == 200 and res.text.startswith('http'):
-                direct_url = res.text.strip()
-                print(f"🔗 Отримано стабільне посилання від Catbox: {direct_url}", flush=True)
-                return direct_url, None
-            else:
-                print(f"⚠️ Catbox відмовив (Код {res.status_code}). Пробуємо ImageKit...", flush=True)
+                response_text = res.text.strip()
+                if res.status_code == 200 and response_text.startswith('http'):
+                    print(f"✅ Успішно завантажено на Litterbox: {response_text}")
+                    return response_text, None
+                else:
+                    print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {response_text[:100]}")
+        except requests.exceptions.Timeout:
+            print("⚠️ Litterbox не відповів за 30 секунд (Таймаут). Переходимо до резерву.")
         except Exception as e:
-            print(f"⚠️ Помилка з'єднання з Catbox: {e}. Пробуємо наступний хостинг...", flush=True)
+            print(f"⚠️ Збій завантаження на Litterbox: {e}")
 
-        # 2️⃣ Спроба через ImageKit.io
+        # 2️⃣ ImageKit.io (Надійний бізнес-бекэнд — залишається як залізобетонний резерв)
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
         if imagekit_key:
-            print(f"☁️ Завантажуємо файл {filename} на ImageKit.io...", flush=True)
+            print(f"☁ *Резерв:* завантажуємо сторіс-файл {filename} на ImageKit.io...")
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
                         'https://upload.imagekit.io/api/v1/files/upload',
                         auth=(imagekit_key, ''),
                         files={'file': (filename, f, mime_type)},
-                        data={
-                            'fileName': filename,
-                            'useUniqueFileName': 'true'
-                        },
-                        timeout=90
+                        data={'fileName': filename, 'useUniqueFileName': 'true'}, timeout=60
                     )
-                    
-                if res.status_code in [200, 201]:
-                    res_data = res.json()
-                    direct_url = res_data.get('url')
-                    ik_id = res_data.get('fileId')
-                    print(f"🔗 Отримано залізобетонне посилання від ImageKit: {direct_url}", flush=True)
-                    return direct_url, ik_id
-                else:
-                    print(f"⚠️ ImageKit відхилив запит (Код {res.status_code}): {res.text}", flush=True)
+                    if res.status_code in [200, 201]:
+                        res_data = res.json()
+                        return res_data.get('url'), res_data.get('fileId')
             except Exception as e:
-                print(f"⚠️ Помилка завантаження на ImageKit: {e}", flush=True)
+                print(f"⚠️ Збій завантаження на ImageKit: {e}")
 
-        # 3️⃣ Спроба через ImgBB API (Тільки для Фото)
+        # 3️⃣ ImgBB API (Тільки для photo)
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and mime_type == "image/jpeg":
-            print(f"☁️ Завантажуємо photo {filename} на ImgBB API...", flush=True)
+            print(f"☁ *Резерв:* завантажуємо фото сторіс {filename} на ImgBB API...")
             try:
                 with open(local_file_path, 'rb') as f:
+                    img_bytes = f.read()
+                if img_bytes:
                     res = requests.post(
                         'https://api.imgbb.com/1/upload',
                         data={'key': imgbb_key, 'expiration': 86400},
-                        files={'image': (filename, f, mime_type)},
+                        files={'image': (filename, img_bytes, mime_type)},
                         timeout=30
                     ).json()
-                    
-                if res.get('success'):
-                    direct_url = res['data']['url']
-                    print(f"🔗 Отримано залізобетонне посилання від ImgBB: {direct_url}", flush=True)
-                    return direct_url, None
-                else:
-                    print(f"⚠️ ImgBB повернув помилку: {res.get('error', {}).get('message')}", flush=True)
+                    if res.get('success'):
+                        return res['data']['url'], None
             except Exception as e:
-                print(f"⚠️ Помилка завантаження на ImgBB: {e}", flush=True)
+                print(f"⚠️ Збій завантаження на ImgBB: {e}")
 
-    print(f"🚨 Всі хостинги відмовили! Аварійний режим для Google Drive ID: {file_id}", flush=True)
+    # Аварійний фолбек
+    print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}", None
 
-def wait_for_instagram_media(container_id, access_token, max_retries=15, delay=10):
-    """
-    Циклічно перевіряє статус готовності медіаконтейнера в Instagram.
-    """
-    # URL для перевірки статусу контейнера
-    url = f"https://graph.facebook.com/v19.0/{container_id}"
-    params = {
-        "fields": "status_code",
-        "access_token": access_token
-    }
+def delete_from_imagekit(file_id: str):
+    if not file_id: return
+    imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
+    if not imagekit_key: return
+    try: 
+        requests.delete(f"https://api.imagekit.io/v1/files/{file_id}", auth=(imagekit_key, ''), timeout=15)
+    except: 
+        pass
+
+def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc):
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
     
-    for attempt in range(1, max_retries + 1):
+    pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
+    
+    resolved_loc = ""
+    if target_loc:
         try:
-            response = requests.get(url, params=params).json()
-            status = response.get("status_code")
-            
-            if status == "FINISHED":
-                print("✅ Відео успішно оброблено Instagram і готове до публікації!")
-                return True
-            elif status == "ERROR":
-                print(f"❌ Помилка обробки відео на стороні Instagram: {response}")
-                return False
-            elif status in ["IN_PROGRESS", "CREATING"]:
-                print(f"⏳ Instagram все ще обробляє відео (Статус: {status}). Чекаємо {delay} сек... (Спроба {attempt}/{max_retries})")
-                time.sleep(delay)
+            loc_json = json.loads(target_loc)
+            if isinstance(loc_json, dict):
+                resolved_loc = loc_json.get(str(lang_idx), loc_json.get("0", ""))
             else:
-                print(f"❓ Отримано невідомий статус: {status}. Очікування...")
-                time.sleep(delay)
-        except Exception as e:
-            print(f"⚠️ Помилка під час запиту статусу: {e}")
-            time.sleep(delay)
+                resolved_loc = str(target_loc)
+        except (json.JSONDecodeError, TypeError):
+            resolved_loc = str(target_loc)
+
+    invalid_markers = ["невідоме місце", "невідомо", "unknown", "unbekannt", "-", "none", "null", "невідоме місто"]
+    if any(marker in resolved_loc.lower() for marker in invalid_markers):
+        resolved_loc = ""
+
+    cat_lower = category.lower()
+    real_manufacturer = category
+    matched_special = False
+    
+    for spec_key, spec_translation in pref.get("categories", {}).items():
+        if spec_key in cat_lower:
+            real_manufacturer = spec_translation
+            matched_special = True
+            break
             
-    print("❌ Вийшов таймаут очікування обробки відео в Instagram.")
-    return False
-    
-def publish_to_meta_platforms(media_url, media_type, is_story=False, caption="", local_file_path=None):
-
-    if not IG_USER_ID or not FB_PAGE_ID or not META_ACCESS_TOKEN:
-        raise ValueError("❌ Відсутні обов'язкові змінні оточення: IG_USER_ID, FB_PAGE_ID або META_ACCESS_TOKEN!")
-        
-    print(f"📤 Відправка контенту в Instagram акаунт (ID: {IG_USER_ID})...")
-    ig_url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
-    ig_payload = {
-        "access_token": META_ACCESS_TOKEN,
-        "media_type": "STORIES" if is_story else ("REELS" if media_type == "video" else "IMAGE")
-    }
-    if media_type == "video": 
-        ig_payload["video_url"] = media_url
-    else: 
-        ig_payload["image_url"] = media_url
-        
-    if not is_story and caption: 
-        ig_payload["caption"] = caption
-
-    ig_res = requests.post(ig_url, data=ig_payload).json()
-    if "id" not in ig_res: 
-        # Викидаємо помилку, якщо Meta відхилила запит
-        raise ValueError(f"❌ Помилка створення контейнера Instagram: {ig_res}")
-    
-    ig_creation_id = ig_res["id"]
-    
-    # 🔁 ІНТЕГРОВАНО: Розумне динамічне очікування обробки контейнера Meta
-    # Для відео даємо до ~3 хвилин (18 спроб по 10 сек), для фото менше (5 спроб по 3 сек)
-    max_retries = 18 if media_type == "video" else 5
-    check_delay = 10 if media_type == "video" else 3
-    
-    print(f"⏳ Запущено моніторинг готовності медіа-контейнера ID: {ig_creation_id}...")
-    is_ready = wait_for_instagram_media(ig_creation_id, META_ACCESS_TOKEN, max_retries=max_retries, delay=check_delay)
-    
-    if not is_ready:
-        raise ValueError("❌ Медіафайл не готовий до публікації в Instagram за лімітом часу (Таймаут).")
-        
-    # Фінальна публікація виконується тільки після успішного FINISHED статусу
-    ig_pub_res = requests.post(
-        f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish", 
-        data={"creation_id": ig_creation_id, "access_token": META_ACCESS_TOKEN}
-    ).json()
-    
-    if "id" not in ig_pub_res:
-        raise ValueError(f"❌ Помилка фінальної публікації в Instagram: {ig_pub_res}")
-        
-    print(f"✅ [Instagram] Успішно в ефірі! ID: {ig_pub_res['id']}")
-
-    # --- БЛОК ФЕЙСБУКУ ---
-    if not is_story:
-        print("📤 Дублювання поста на Сторінку Facebook...")
-        if media_type == "video":
-            fb_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
-            fb_payload = {
-                "file_url": media_url,
-                "description": caption, # Для відео залишається description
-                "access_token": META_ACCESS_TOKEN
-            }
-        else:
-            fb_url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
-            fb_payload = {
-                "url": media_url,
-                "caption": caption,   # ВИПРАВЛЕНО: саме 'caption' замість 'message' для /photos
-                "access_token": META_ACCESS_TOKEN
-            }
-            
-        try:
-            fb_res = requests.post(fb_url, data=fb_payload).json()
-            if "id" in fb_res or "post_id" in fb_res:
-                print(f"✅ [Facebook Page] Пост успішно продубльовано! ID: {fb_res.get('id', fb_res.get('post_id'))}")
-            else:
-                print(f"⚠️ [Facebook Page] Сервер повернув дивну відповідь (перевірте тип токена!): {fb_res}")
-        except Exception as e:
-            print(f"❌ Не вдалося надіслати пост у Facebook: {e}")
-
-    else:
-        # Безпечно пропускаємо Facebook для Сторіз, оскільки Meta API не підтримує цей функціонал для сторонніх додатків
-        print("ℹ️ [Facebook] Публікація Сторіз через API обмежена політикою Meta. Пропускаємо цей крок.")
-
-def main():
-    # 1. Швидка перевірка кількості аргументів
-    if len(sys.argv) < 3:
-        print("❌ Помилка: Відсутні обов'язкові аргументи.")
-        print("\n📋 ПРАВИЛЬНИЙ ФОРМАТ ЗАПУСКУ:")
-        print("  python publish_content.py [mode] \"[sheet_name]\"")
-        print("\n💡 Доступні режими [mode]:")
-        print("  post  - публікація згенерованого поста у стрічку")
-        print("  story - оптимізація та публікація у Сторіс")
-
-        # Динамічно показуємо список аркушів із вашої таблиці
-        try:
-            _, sheets = get_services()
-            spreadsheet = sheets.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
-            available_sheets = [
-                f'"{sheet["properties"]["title"]}"' 
-                for sheet in spreadsheet.get('sheets', [])
-                if "налаштування" not in sheet["properties"]["title"].lower()
-            ]
-            if available_sheets:
-                print(f"\n📁 Можливі назви аркушів [sheet_name] у вашій таблиці:")
-                print(f"  {', '.join(available_sheets)}")
-                print(f"\nПриклад запуску: python publish_content.py post {available_sheets[0]}")
-        except Exception:
-            print("\nПриклад запуску: python publish_content.py post \"Назва_Аркуша\"")
-        return
-        
-    mode = sys.argv[1].lower()
-    tab_name = sys.argv[2]
-    counter_col_idx = 3 if mode == 'post' else 4
-    
-    drive, sheets = get_services()
-    
-    res = sheets.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"'{tab_name}'!A2:E").execute()
-    rows = res.get('values', [])
-    if not rows: 
-        print(f"ℹ️ Немає даних на аркуші '{tab_name}'")
-        return
-        
-    valid_rows = []
-    for i, r in enumerate(rows):
-        if len(r) >= 3:
-            while len(r) < 5: r.append("0")
-            try:
-                r[3], r[4] = (int(r[3]) if r[3] else 0), (int(r[4]) if r[4] else 0)
-                valid_rows.append({"row_idx": i + 2, "data": r})
-            except ValueError: continue
-
-    if not valid_rows:
-        print("ℹ️ Немає валідних рядків для обробки.")
-        return
-
-    # 📊 Знаходимо мінімальну кількість публікацій та формуємо пул кандидатів
-    min_count = min(r["data"][counter_col_idx] for r in valid_rows)
-    min_pool = [r for r in valid_rows if r["data"][counter_col_idx] == min_count]
-    
-    selected_item = None
-
-    if "мебл" in tab_name.lower():
-        selected_item = min_pool[0]
-        print(f"🪑 Режим Меблів: календарні правила пропущено. Обрано файл з пулу мінімальних публікацій.")
-    else:
-        active_categories = get_active_rules_ordered()
-        for category in active_categories:
-            match_files = [item for item in min_pool if item["data"][2] == category]
-            if match_files:
-                selected_item = match_files[0]
-                print(f"📅 Режим Календаря: знайдено збіг за категорією '{category}'")
+    if not matched_special:
+        for key, names_dict in config.COMPANIES_DB.items():
+            if key in cat_lower:
+                real_manufacturer = names_dict.get(lang_idx, names_dict.get(0, category))
                 break
+
+    if not gemini_key:
+        return pref.get("no_gemini_caption", "Професійна якість та увага до деталей!")
+
+    # Актуальний список моделей (рекомендовано починати з нових 2.5 або 2.0 Flash)
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    
+    lang_instructions = {
+        0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1-2 доречних емодзі.",
+        1: "Write the text exclusively in ENGLISH. You may include 1-2 relevant emojis.",
+        2: "Schreibe den Text ausschließlich auf DEUTSCH. Du darfst 1-2 passende Emojis hinzufügen."
+    }
+    
+    prompt = (
+        f"Ти — досвідчений копірайтер із тонким почуттям гумору та експертний меблевий конструктор.\n"
+        f"Подивись на це зображення (або кадр з відео) і придумай ОДНУ коротку, влучну та чіпляючу фразу "
+        f"(максимум 1-2 речення) для Instagram Stories. Текст буде нанесено прямо поверх медіафайлу.\n\n"
+        f"🎯 ТОН ТА СТИЛІСТИКА:\n"
+        f"- Будь живим та іронічним. Якщо на foto робочий процес, пил, креслення чи інструменти — "
+        f"пожартуй про залаштунки, перфекціонізм, каву на тирсі чи складні технічні вузли.\n"
+        f"- Якщо на фото готовий виріб — пиши про естетику, меблеву філософію, ергономіку або «білямеблеві» теми "
+        f"(домашній затишок, ідеальні зазори, радість від завершеного проєкту).\n"
+        f"- Уникай банальних штампів: 'найкраща якість', 'купуйте у нас', 'індивідуальний підхід'.\n\n"
+        f"📋  КОНТЕКСТ ДЛЯ АНАЛІЗУ:\n"
+        f"Категорія/Бренд: '{real_manufacturer}'. Рік зйомки: {year}.  Локація: {resolved_loc if resolved_loc else 'Меблеве виробництво'}.\n\n"
+        f"⚠️ СУВОРІ ОБМЕЖЕННЯ:\n"
+        f"1. {lang_instructions.get(lang_idx, lang_instructions[0])}\n"
+        f"2. Поверни ЛИШЕ фінальний текст підпису. Без лапок, без вступних слів, без хэштегів та пояснень копірайтера.\n"
+        f"3. Роби речення короткими, щоб вони легко читалися на екрані телефону."
+    )
+
+    try:
+        # Ініціалізація клієнта (автоматично бере GEMINI_API_KEY з os.environ)
+        client = genai.Client()
         
-        if not selected_item: 
-            selected_item = min_pool[0]
-            
-    file_id = selected_item["data"][0]
-    orig_name = selected_item["data"][1]
-    category_name = selected_item["data"][2]
-    row_line = selected_item["row_idx"]
-    
-    lower_name = orig_name.lower()
-    if lower_name.endswith(DOCUMENT_EXTENSIONS):
-        print(f"📄 Знайдено текстовий документ/книгу ({orig_name}). Пропускаємо публікацію.")
-        log_unsupported_to_service(sheets, category_name, orig_name, reason="Знайдено текстовий документ/книгу (PDF/DOC/DJVU)")
-        return
+        # Готуємо набір контенту для передачі моделі (текстовий промпт йде першим)
+        contents_payload = [prompt]
         
-    if not lower_name.endswith(VALID_MEDIA_EXTENSIONS):
-        print(f"❌ Невідомий формат файлу: {orig_name}.")
-        log_unsupported_to_service(sheets, category_name, orig_name, reason="Непідтримуваний формат медіа")
-        return
-
-    os.makedirs('temp_media', exist_ok=True)
-    local_path = os.path.join('temp_media', orig_name)
-    
-    print(f"📥 Завантажуємо медіа з Google Диску: {orig_name}...")
-    request = drive.files().get_media(fileId=file_id)
-    with open(local_path, 'wb') as fh:
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while not done: _, done = downloader.next_chunk()
-
-    mime_type = "image/jpeg" if lower_name.endswith(('.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp')) else "video/mp4"
-    final_upload_path = local_path
-    
-    if lower_name.endswith('.gif'):
-        mp4_path = os.path.join('temp_media', orig_name.rsplit('.', 1)[0] + '_gif.mp4')
-        subprocess.run(['ffmpeg', '-y', '-i', local_path, '-movflags', 'faststart', '-pix_fmt', 'yuv420p', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', mp4_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        final_upload_path = mp4_path
-        mime_type = "video/mp4"
-    elif lower_name.endswith(('.heic', '.heif')):
-        jpg_path = os.path.join('temp_media', orig_name.rsplit('.', 1)[0] + '.jpg')
-        with Image.open(local_path) as img: img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
-        final_upload_path = jpg_path
-        mime_type = "image/jpeg"
-
-    # 🔥 Пул файлів для публікації (за замовчуванням один файл)
-    files_to_publish = [final_upload_path]
-
-    # ОПТИМІЗАЦІЯ ПРОПОРЦІЙ ДЛЯ ЗВИЧАЙНИХ ПОСТІВ
-    if mode == 'post' and mime_type == "image/jpeg":
-        try:
-            with Image.open(final_upload_path) as img:
-                img = img.convert('RGB')
-                w, h = img.size
-                ratio = w / h
-                
-                if ratio < 0.8 or ratio > 1.91:
-                    print(f"📐 Оптимізація Поста: Пропорції картинки ({ratio:.2f}) неприпустимі для стрічки. Коригуємо...")
-                    padded_post_path = os.path.join('temp_media', 'post_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
-                    
-                    if ratio < 0.8:
-                        new_w = int(h * 0.8)
-                        new_h = h
-                    else:
-                        new_w = w
-                        new_h = int(w / 1.91)
+        for img_path in image_paths:
+            if os.path.exists(img_path):
+                try:
+                    with PILImage.open(img_path) as img:
+                        if img.mode in ("RGBA", "P"):
+                            img = img.convert("RGB")
                         
-                    canvas = Image.new('RGB', (new_w, new_h), (255, 255, 255))
-                    paste_x = (new_w - w) // 2
-                    paste_y = (new_h - h) // 2
+                        img.thumbnail((1024, 1024))
+                        buffer = io.BytesIO()
+                        img.save(buffer, format="JPEG", quality=82, optimize=True)
+                        image_bytes = buffer.getvalue()
                     
-                    canvas.paste(img, (paste_x, paste_y))
-                    canvas.save(padded_post_path, 'JPEG', quality=95)
-                    
-                    if final_upload_path != local_path and os.path.exists(final_upload_path):
-                        os.remove(final_upload_path)
-                    final_upload_path = padded_post_path
-                    files_to_publish = [padded_post_path]
-                    print(f"✅ Стрічка: картинку вписано в безпечні рамки {new_w}x{new_h}.")
-        except Exception as e:
-            print(f"⚠️ Помилка калібрування геометрії поста: {e}")
+                    # Використовуємо офіційну структуру SDK для передачі байтів
+                    contents_payload.append(
+                        types.Part.from_bytes(
+                            data=image_bytes,
+                            mime_type="image/jpeg"
+                        )
+                    )
+                except Exception as img_err:
+                    print(f"⚠️ Не вдалося оптимізувати зображення {img_path}: {img_err}")
 
-    # ОПТИМІЗАЦІЯ ФОТО ПІД СТОРІС (1080x1920)
-    if mode == 'story' and mime_type == "image/jpeg":
-        print("📐 Режим Сторіс: вписуємо зображення у формат 1080x1920...")
-        story_path = os.path.join('temp_media', 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
-        try:
-            with Image.open(final_upload_path) as img:
-                img = img.convert('RGB')
-                orig_w, orig_h = img.size
-                target_w, target_h = 1080, 1920
-                canvas = Image.new('RGB', (target_w, target_h), (20, 20, 20))
-                
-                scale = min(target_w / orig_w, target_h / orig_h)
-                new_w = int(orig_w * scale)
-                new_h = int(orig_h * scale)
-                
-                resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                paste_x = (target_w - new_w) // 2
-                paste_y = (target_h - new_h) // 2
-                canvas.paste(resized_img, (paste_x, paste_y))
-                canvas.save(story_path, 'JPEG', quality=95)
-                
-            if final_upload_path != local_path and os.path.exists(final_upload_path):
-                os.remove(final_upload_path)
-                
-            final_upload_path = story_path
-            files_to_publish = [story_path]
-        except Exception as e:
-            print(f"⚠️ Не вдалося відформатувати Сторіс: {e}. Буде надіслано оригінал.")
+        # Каскадний перебір моделей за допомогою правильного методу generate_content
+        for model in models_to_try:
+            print(f"🚀 Спроба генерації підпису через {model}...")
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents_payload
+                )
+                if response and response.text:
+                    return response.text.strip()
+                else:
+                    print(f"⚠️ Модель {model} повернула порожню відповідь.")
+            except Exception as model_err:
+                print(f"⚠️ Помилка моделі {model}: {model_err}. Переходимо до наступної.")
+                continue
 
-    # 🔥 РОЗУМНА НАРІЗКА ВІДЕО НА ЧАСТИНИ ПО 50 СЕКУНД ДЛЯ СТОРІС
-    elif mode == 'story' and mime_type == "video/mp4":
-        print("📐 Режим Сторіс для ВІДЕО: інтелектуально нарізаємо на частини по 50 секунд під 1080x1920...")
-        segment_pattern = os.path.join('temp_media', 'story_part_' + orig_name.rsplit('.', 1)[0] + '_%03d.mp4')
+    except Exception as general_err:
+        print(f"⚠️ Загальний збій блоку ШІ-генерації: {general_err}")
         
-        # Налаштування ffmpeg з використанням сегментного муксера
-        ffmpeg_cmd = [
-            'ffmpeg', '-y', '-i', final_upload_path,
-            '-f', 'segment',
-            '-segment_time', '50',          # Розрізаємо рівно по 50 секунд
-            '-reset_timestamps', '1',       # ⚡ КРИТИЧНО: обнуляємо таймштампи для кожної частини, щоб Meta API не падала
-            '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black',
-            '-c:v', 'libx264', 
-            '-profile:v', 'high',         
-            '-level', '4.2',
-            '-crf', '23',                 
-            '-preset', 'fast',
-            '-g', '60',                   
-            '-keyint_min', '60',
-            '-sc_threshold', '0',         
-            '-r', '30',                   
-            '-c:a', 'aac', 
-            '-b:a', '128k',
-            '-ar', '44100',               
-            '-movflags', 'faststart',     
-            '-pix_fmt', 'yuv420p',
-            segment_pattern
-        ]
-        
-        result = subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if result.returncode == 0:
-            # Збираємо всі створені файли-сегменти
-            prefix = 'story_part_' + orig_name.rsplit('.', 1)[0] + '_'
-            generated_parts = sorted([
-                os.path.join('temp_media', f) 
-                for f in os.listdir('temp_media') 
-                if f.startswith(prefix) and f.endswith('.mp4')
-            ])
-            if generated_parts:
-                files_to_publish = generated_parts
-                print(f"✅ Відео успішно розрізано на {len(files_to_publish)} частин(и) під Сторіс!")
-                # Видаляємо проміжний оригінал, якщо він не потрібен
-                if final_upload_path != local_path and os.path.exists(final_upload_path):
-                    os.remove(final_upload_path)
-            else:
-                print("⚠️ Файли сегментів не знайдені. Спробуємо надіслати єдиний оригінал.")
-        else:
-            print("⚠️ Не вдалося нарізати відео через ffmpeg, спробуємо надіслати оригінал.")
-
-    # ГЕНЕРАЦІЯ ОПИСУ ШІ (Тільки для постів стрічки)
-    caption_text = ""
-    if mode == 'post':
-        analysis_image = files_to_publish[0]
-        if mime_type == "video/mp4":
-            analysis_image = os.path.join('temp_media', 'video_frame.jpg')
-            subprocess.run(['ffmpeg', '-y', '-i', files_to_publish[0], '-ss', '00:00:01', '-vframes', '1', analysis_image], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-        print("👁️ ШІ аналізує візуальний вміст файлу...")
-        caption_text = generate_multimodal_caption(analysis_image, category_name, tab_name)
-        if os.path.exists(os.path.join('temp_media', 'video_frame.jpg')): 
-            os.remove(os.path.join('temp_media', 'video_frame.jpg'))
-
-    # 🔥 ЦИКЛ ПОСЛІДОВНОЇ ПУБЛІКАЦІЇ ВСІХ ПІДГОТОВЛЕНИХ ЧАСТИН
-    success_count = 0
+    return pref.get("fallback_caption", "Створюємо меблі з точним розрахунком!")
     
-    for idx, current_file in enumerate(files_to_publish):
-        part_info = f" (Частина {idx + 1}/{len(files_to_publish)})" if len(files_to_publish) > 1 else ""
-        print(f"🚀 Початок публікації файлу{part_info}: {current_file}")
-        
-        ik_file_id = None
+def wait_for_meta_container(container_id, access_token):
+    check_url = f"https://graph.facebook.com/v19.0/{container_id}"
+    params = {"fields": "status_code,status", "access_token": access_token}
+    for _ in range(30):
         try:
-            # Отримуємо хмарне посилання для поточної частини
-            public_url, ik_file_id = get_google_drive_direct_url(file_id, local_file_path=current_file)
-            print(f"🔗 Згенеровано посилання для буфера: {public_url}")
-            
-            # Публікуємо у Meta
-            publish_to_meta_platforms(
-                public_url, 
-                "video" if mime_type == "video/mp4" else "image", 
-                is_story=(mode == 'story'), 
-                caption=caption_text,
-                local_file_path=current_file
-            )
-            success_count += 1
-            print(f"✅ Файл{part_info} успішно опубліковано в Instagram!")
-            
-            # Невелика пауза між завантаженнями частин, щоб вони гарантовано встали в хронологічному порядку
-            if len(files_to_publish) > 1 and idx < len(files_to_publish) - 1:
-                print("⏳ Очікуємо 6 секунд перед надсиланням наступної частини для збереження хронології...")
-                time.sleep(6)
-                
-        except Exception as e:
-            print(f"❌ Критична помилка під час публікації файлу{part_info}: {e}")
-        finally:
-            # Очищення хмари ImageKit для поточного шматка
-            if ik_file_id:
-                delete_from_imagekit(ik_file_id)
-            # Видаляємо поточний тимчасовий шматок з локального диску
-            if current_file != local_path and os.path.exists(current_file):
-                os.remove(current_file)
-
-    # Оновлюємо лічильник в Google Таблиці, якщо хоча б одна частина вийшла в ефір
-    if success_count > 0:
-        new_counter = selected_item["data"][counter_col_idx] + 1
-        col_letter = "D" if mode == 'post' else "E"
-        sheets.spreadsheets().values().update(
-            spreadsheetId=SPREADSHEET_ID, range=f"'{tab_name}'!{col_letter}{row_line}",
-            valueInputOption='RAW', body={'values': [[new_counter]]}
-        ).execute()
-        print(f"📊 Лічильник оновлено на +1 для аркуша '{tab_name}' (Рядок {row_line}). Опубліковано шматків: {success_count}")
-    else:
-        print("❌ Жодна з частин медіа не була опублікована через помилки. Лічильник залишено без змін.")
-        sys.exit(1)
-
-    # Остаточне очищення завантаженого з Драйву оригіналу
-    if os.path.exists(local_path): 
-        os.remove(local_path)
-    print("🧹 Всі локальні тимчасові файли повністю видалено. Роботу завершено!")
-
-if __name__ == '__main__':
-    main()
+            r = requests.get(check_url, params=params).json()
+            status = r.get("status_code", "").upper()
+            if status == "FINISHED": return True
+            elif status == "ERROR": return False
+            print(f"⏳ Очікування обробки медіафайлу в Meta... Статус: {status}")
+        except: pass
+        time.sleep(5)
+    return False
