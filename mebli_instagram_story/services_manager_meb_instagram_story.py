@@ -47,6 +47,35 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
         }
         
+        # 0️⃣ GitHub Репозиторій (Основний супер-стабільний варіант)
+        github_repo = os.environ.get("GITHUB_REPOSITORY")  # Змінна автоматично надається GitHub Actions
+        if github_repo:
+            print(f"🐙 [GitHub] Завантажуємо тимчасовий медіафайл {filename} у репозиторій...")
+            try:
+                target_dir = os.path.join("docs", "temp_media")
+                os.makedirs(target_dir, exist_ok=True)
+                github_local_path = os.path.join(target_dir, filename)
+                
+                import shutil
+                shutil.copy(local_file_path, github_local_path)
+                
+                # Автоматичне налаштування профілю Git в середовищі Actions
+                subprocess.run(["git", "config", "user.name", "github-actions[bot]"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                # Робимо pull з ребейзом, щоб уникнути конфліктів, якщо обробляється кілька файлів підряд
+                subprocess.run(["git", "pull", "origin", "main", "--rebase"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["git", "add", github_local_path], check=True)
+                subprocess.run(["git", "commit", "-m", f"⚡ Наживо: {filename}"], check=True)
+                subprocess.run(["git", "push", "origin", "main"], check=True)
+                
+                # Формуємо сире пряме посилання, яке працює МИТТЄВО
+                raw_url = f"https://raw.githubusercontent.com/{github_repo}/main/docs/temp_media/{filename}"
+                print(f"✅ Файл успішно опубліковано на GitHub: {raw_url}")
+                return raw_url, "github_skip"
+            except Exception as git_err:
+                print(f"⚠️ Збій GitHub-хостингу: {git_err}. Переходимо до резервних хмар...")
+
         # 1️⃣ Catbox.moe
         print(f"☁️ Завантажуємо сторіс-файл {filename} на Catbox.moe...")
         try:
@@ -66,7 +95,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         # 2️⃣ ImageKit.io
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
         if imagekit_key:
-            print(f"☁️ Завантажуємо сторіс-файл {filename} на ImageKit.io...")
+            print(f"☁️ Завантажуємо сторіс-файл {filename} on ImageKit.io...")
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
