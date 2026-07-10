@@ -111,7 +111,7 @@ def generate_multimodal_caption(image_path, category, tab_name):
             raise FileNotFoundError(f"Файл {image_path} не знайдено.")
             
         try:
-            with PILImage.open(image_path) as img:
+            with Image.open(image_path) as img:
                 if img.mode in ("RGBA", "P"):
                     img = img.convert("RGB")
                 
