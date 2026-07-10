@@ -81,79 +81,103 @@ def get_active_rules_ordered():
     return active_rules
 
 def generate_multimodal_caption(image_path, category, tab_name):
-    """ШІ аналізує зображення та генерує гострий тематичний опис трьома мовами"""
+    """
+    ШІ аналізує зображення та генерує гострий тематичний опис трьома мовами.
+    Оптимізовано: новий SDK (genai.Client), PIL-компресія медіа, структурований промпт.
+    """
     gemini_key = os.environ.get("GEMINI_API_KEY")
+    is_furniture = "мебл" in tab_name.lower()
     
-    # 1. Перевірка наявності ключа
+    # 1️⃣ Швидкий дефолт, якщо немає ключа API (економимо час без обробки фото)
     if not gemini_key:
-        if "мебл" in tab_name.lower():
+        if is_furniture:
             return "Трохи меблевого гумору вам у стрічку! Як вам? 👇😂 #меблі #інтерєр #гумор"
-        else:
-            return "Усміхніться! Гарного настрою! 😉 #гумор #розваги #п'ятниця"
+        return "Усміхніться! Гарного настрою! 😉 #гумор #розваги #п_ятниця"
         
     models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
     
-    # 2. Динамічний контекст промпту
+    # 2️⃣ Динамічний контекст промпту
     topic_context = "розважальної сторінки з гострим гумором"
-    if "мебл" in tab_name.lower():
+    if is_furniture:
         topic_context = "популярного пабліку про меблі, дизайн інтер'єрів та запеклі будні меблевиків (майстрів, дизайнерів, збірників)"
 
     try:
-        with open(image_path, "rb") as f:
-            image_bytes = f.read()
+        # 3️⃣ Оптимізація та стиснення зображення (захист від MemoryError та лімітів API)
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Файл {image_path} не знайдено.")
+            
+        try:
+            with PILImage.open(image_path) as img:
+                if img.mode in ("RGBA", "P"):
+                    img = img.convert("RGB")
+                
+                # Обмежуємо розмір до 1024px по довшій стороні та стискаємо якість
+                img.thumbnail((1024, 1024))
+                buffer = io.BytesIO()
+                img.save(buffer, format="JPEG", quality=82, optimize=True)
+                image_bytes = buffer.getvalue()
+        except Exception as img_err:
+            print(f"⚠️ Не вдалося оптимізувати зображення через PIL ({img_err}), пробуємо сире зчитування...")
+            with open(image_path, "rb") as f:
+                image_bytes = f.read()
+
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
         
+        # 4️⃣ Структурований промпт (блокова система покращує дотримання правил ШІ)
         prompt = (
-            f"Ти топ-маркетолог {topic_context}. Подивись на цю картинку/мем. "
-            f"Напиши до неї короткий, влучний і дійсно смішний коментар (або життєву фразу/біль клієнта чи майстра) "
-            f"ТРЬОМА мовами окремими абзацами: спочатку українською, потім англійською, і німецькою. "
-            f"КРИТИЧНО: Це не має бути дослівний нудний переклад! Жарт має бути якісно адаптований (використовуй живий сленг, "
-            f"професійні жарти або зрозумілий контекст для носіїв кожної з мов). "
-            f"Врахуй, що контекст публікації — категорія '{category}' з розділу '{tab_name}'. Додай відповідні емодзі. "
-            f"Не використовуй жодних офіційних вступів чи підписів на кшталт 'Ось ваш жарт'. Формат відповіді строго такий:\n\n"
+            f"Ти топ-маркетолог {topic_context}.\n"
+            f"Подивись на цю картинку/мем і напиши короткий, влучний і дійсно смішний коментар "
+            f"(або життєву фразу/біль клієнта чи майстра) окремо ТРЬОМА мовами.\n\n"
+            f"🎯 ТОН ТА СТИЛІСТИКА:\n"
+            f"- КРИТИЧНО: Це не має бути дослівний нудний переклад! Жарт має бути якісно адаптований під кожну мову.\n"
+            f"- Використовуй живий сленг, професійні жарти або зрозумілий контекст для носіїв кожної з мов.\n"
+            f"- Врахуй контекст публікації — категорія '{category}' з розділу '{tab_name}'.\n"
+            f"- Додай відповідні емодзі.\n\n"
+            f"⚠️ СУВОРІ ОБМЕЖЕННЯ:\n"
+            f"1. Не використовуй жодних офіційних вступів, лапок чи підписів на кшталт 'Ось ваш жарт'.\n"
+            f"2. Без хештегів та додаткових пояснень копірайтера.\n"
+            f"3. Формат відповіді має бути СТРОГО такий (3 абзаци з прапорами):\n\n"
             f"🇺🇦 [Жарт українською]\n\n"
             f"🇬🇧 [Жарт англійською]\n\n"
             f"🇩🇪 [Жарт німецькою]"
         )
         
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inlineData": {  
-                            "mimeType": "image/jpeg",  
-                            "data": base64_image
-                        }
-                    }
-                ]
-            }]
-        }
+        # 5️⃣ Формуємо структуру вхідних даних для нового SDK
+        inputs = [
+            {"type": "text", "text": prompt},
+            {
+                "type": "image",
+                "data": base64_image,
+                "mime_type": "image/jpeg"
+            }
+        ]
         
+        # 6️⃣ Каскадний виклик моделей через офіційний клієнт genai
+        client = genai.Client()
         for model in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
+            print(f"🚀 Спроба генерації мультиязичного підпису через {model}...")
             try:
-                res = requests.post(url, json=payload, timeout=20).json()
-                if 'candidates' in res and res['candidates']:
-                    return res['candidates'][0]['content']['parts'][0]['text']
-            except Exception as e:
-                print(f"⚠️ Модель {model} тимчасово недоступна: {e}. Пробуємо наступну...")
+                interaction = client.interactions.create(
+                    model=model,
+                    input=inputs
+                )
+                if interaction and interaction.output_text:
+                    return interaction.output_text.strip()
+                else:
+                    print(f"⚠️ Модель {model} повернула порожню відповідь.")
+            except Exception as model_err:
+                print(f"⚠️ Помилка моделі {model}: {model_err}. Переходимо до наступної.")
                 continue
                 
-        # 3. Дефолт, якщо жодна модель не відповіла (наприклад, таймаут мережі)
         print("⚠️ Жодна з моделей Gemini не відповіла успішно, активовано дефолт.")
-        if "мебл" in tab_name.lower():
-            return "Трохи меблевого гумору вам у стрічку! Як вам? 👇😂 #меблі #гумор"
-        else:
-            return "Трохи гумору вам у стрічку! Як вам? 👇😂 #гумор #розваги"
-            
-    except Exception as e:
-        # 4. Дефолт на випадок критичної помилки коду (наприклад, битий файл зображення)
-        print(f"⚠️ Помилка обробки запиту до ШІ: {e}")
-        if "мебл" in tab_name.lower():
-            return "Трохи меблевого гумору вам у стрічку! Як вам? 👇😂"
-        else:
-            return "Трохи гумору вам у стрічку! Як вам? 👇😂"
+        
+    except Exception as general_err:
+        print(f"⚠️ Загальний збій блоку ШІ-генерації: {general_err}")
+        
+    # 7️⃣ Залізобетонний дефолт на випадок будь-якого збою в блоці try
+    if is_furniture:
+        return "Трохи меблевого гумору вам у стрічку! Як вам? 👇😂 #меблі #гумор"
+    return "Трохи гумору вам у стрічку! Як вам? 👇😂 #гумор #розваги"
 
 def delete_from_imagekit(file_id: str):
     """Видаляє тимчасовий файл з ImageKit.io за його fileId, щоб не засмічувати хмару"""
