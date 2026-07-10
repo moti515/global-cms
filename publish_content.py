@@ -3,6 +3,7 @@ import sys
 import json
 import time
 import base64
+import io
 import requests
 import subprocess
 from datetime import datetime
@@ -11,6 +12,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from PIL import Image
 from pillow_heif import register_heif_opener
+# Імпортуємо офіційний клієнт Google GenAI
+from google import genai
+from google.genai import types
 
 register_heif_opener()
 
