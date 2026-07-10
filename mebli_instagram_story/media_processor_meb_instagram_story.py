@@ -337,34 +337,53 @@ def get_location_data(lat, lon):
     if lat is None or lon is None: 
         return "", ""
     try:
-        # 🌟 КЛЮЧОВА ЗМІНА: Вилучено параметр accept-language=uk. 
-        # Тепер сервіс повертає назви мовою локації зйомки.
         url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15"
         headers = {'User-Agent': 'FurnitureStories_MetadataBot_2026'}
         res = requests.get(url, headers=headers, timeout=10).json()
         address = res.get('address', {})
         
-        # 1. Точне місце (виробництво, пам'ятка, локальний об'єкт чи назва району/міста)
+        # 1. Точне місце (виробництво, пам'ятка, локальний об'єкт чи назва міста/села)
+        # 🧼 Виключили 'suburb' та 'neighbourhood' з основного списку, щоб великі міста визначалися як міста, а не райони.
         exact_place = (
             address.get('tourism') or 
             address.get('amenity') or 
             address.get('historic') or
-            address.get('suburb') or 
+            address.get('craft') or        # Корисно для меблевих цехів/майстерень
             address.get('city') or 
             address.get('town') or 
-            address.get('village')
+            address.get('village') or
+            address.get('municipality') or # Для німецьких громад (Gemeinde)
+            address.get('hamlet')          # Для зовсім маленьких хуторів
         )
+        
+        # 🔍 Аварійний фолбек: якщо взагалі жодного населеного пункту не знайдено,
+        # тільки тоді беремо мікрорайон або область.
+        if not exact_place:
+            exact_place = (
+                address.get('suburb') or 
+                address.get('neighbourhood') or 
+                address.get('county') or 
+                address.get('state')
+            )
+            
         country = address.get('country')
         display_location = f"{exact_place}, {country}" if exact_place and country else country
         
         # 2. Стабільне місто/регіон для кластеризації
-        group_place = address.get('city') or address.get('town') or address.get('village') or address.get('county')
+        group_place = (
+            address.get('city') or 
+            address.get('town') or 
+            address.get('village') or 
+            address.get('municipality') or
+            address.get('hamlet') or
+            address.get('county')
+        )
         group_location = f"{group_place}, {country}" if group_place and country else country
         
         return display_location, group_location
     except Exception as e:
         print(f"⚠️ Помилка геокодування OSM: {e}")
-    return "", ""
+        return "", ""
 
 def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
     if now_time is None:
