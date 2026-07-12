@@ -58,12 +58,26 @@ def main():
     
     # --- ВАРІАНТ 1: ПЕРЕВІРКА ГАРЯЧОЇ ПАПКИ ---
     print(f"🔍 Перевірка наявності файлів у гарячій папці [{config.HOT_FOLDER_ID}]...")
+    
+    # ⏰ Часовий вибір стратегії
+    # GitHub Actions працює за UTC (влітку це на 2 години менше від нашого локального часу)
+    current_hour = datetime.now().hour
+    print(f"🕒 Системна година на сервері (UTC): {current_hour}:00")
+
+    # Якщо запуск вечірній (наприклад, після 16:00 за UTC, що є 18:00+ за нашим часом)
+    # 💡 Підстав сюди годину, яка відповідає твоєму останньому запуску в cron
+    if current_hour >= 16:  
+        order_by_param = "createdTime desc"
+        print("✨ [Стратегія: ВЕЧІР] Публікуємо СВІЖІ матеріали (Нові -> Старі).")
+    else:
+        order_by_param = "createdTime"
+        print("📦 [Стратегія: РАНОК/ДЕНЬ] Розгрібаємо меблевий АРХІВ (Старі -> Нові).")
     try:
         hot_query = f"'{config.HOT_FOLDER_ID}' in parents and trashed = false"
         hot_res = drive.files().list(
             q=hot_query,
             fields="nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size)",
-            orderBy="createdTime",
+            orderBy=order_by_param,
             pageSize=50
         ).execute()
         hot_files = hot_res.get('files', [])
