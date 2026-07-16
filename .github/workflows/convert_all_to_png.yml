@@ -27,7 +27,7 @@ jobs:
         GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
         GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
         GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-      run: python convert_pdf_to_png.py --scan
+      run: python convert_all_to_png.py --scan
 
     - name: Встановлення LibreOffice для офісних документів
       if: steps.scan_step.outputs.has_office == 'true'
