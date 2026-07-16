@@ -8,6 +8,7 @@ import textwrap
 from datetime import datetime
 import requests
 from PIL import Image, ImageOps, ImageDraw, ImageFont  # Додано ImageDraw та ImageFont
+Image.MAX_IMAGE_PIXELS = None
 from config_tiktok import FINAL_FPS, MUSIC_FALLBACK_PATH
 
 def get_video_duration(input_path):
