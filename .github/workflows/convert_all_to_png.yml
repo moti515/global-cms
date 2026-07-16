@@ -29,6 +29,13 @@ jobs:
         GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
       run: python convert_pdf_to_png.py --scan
 
+    - name: Встановлення LibreOffice для офісних документів
+      if: steps.scan_step.outputs.has_office == 'true'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libreoffice
+        libreoffice --version
+
     - name: Збірка легкого конвертера LibreDWG з коду
       if: steps.scan_step.outputs.has_dwg == 'true'
       run: |
@@ -41,29 +48,24 @@ jobs:
         ./autogen.sh
         ./configure --disable-bindings --disable-json
         
-        # Компілюємо ТІЛЬКИ ядро (src) та консольні утиліти (programs)
         make -j$(nproc) -C src
         make -j$(nproc) -C programs
         
-        # Встановлюємо лише їх, минаючи зламану папку examples
         sudo make -C src install
         sudo make -C programs install
         sudo ldconfig
-        
-        # Перевіряємо, що все на місці й працює
         dwg2dxf --version
 
-    # Бібліотеки для CAD ставимо лише за наявності dxf або dwg файлів
-    - name: Встановлення CAD бібліотек Python
-      if: steps.scan_step.outputs.has_dxf == 'true' || steps.scan_step.outputs.has_dwg == 'true'
+    # Бібліотеки для CAD та TIFF
+    - name: Встановлення Графічних та CAD бібліотек Python
+      if: steps.scan_step.outputs.has_dxf == 'true' || steps.scan_step.outputs.has_dwg == 'true' || steps.scan_step.outputs.has_office == 'true' || steps.scan_step.outputs.has_tif == 'true'
       run: pip install ezdxf matplotlib pillow
 
-    # Модуль для PDF ставимо лише за наявності pdf файлів
+    # PDF та Офісні формати потребують PyMuPDF
     - name: Встановлення PDF бібліотек Python
-      if: steps.scan_step.outputs.has_pdf == 'true'
+      if: steps.scan_step.outputs.has_pdf == 'true' || steps.scan_step.outputs.has_office == 'true'
       run: pip install pymupdf
 
-    # Запуск основного процесу (обробить лише те, для чого встановилися пакети)
     - name: Запуск скрипту конвертації
       env:
         GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
