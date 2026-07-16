@@ -12,10 +12,12 @@ FOLDER_ID = '1NW5iKh6fkzXhvrHUmVVjJL5YJTmHGA7E'
 TEMP_DIR = "temp_processing"
 
 # Класифікація розширень файлів
-OFFICE_EXTS = ['.doc', '.docx', '.mhtml', '.ods', '.odt', '.txt', '.xls', '.xlsx', '.csv']
+OFFICE_EXTS = ['.doc', '.docx', '.ods', '.odt', '.txt', '.xls', '.xlsx', '.csv']
+MHTML_EXTS = ['.mhtml', '.mht']
 TIFF_EXTS = ['.tif', '.tiff']
 CAD_EXTS = ['.dxf', '.dwg']
-MULTI_PAGE_EXTS = ['.pdf'] + OFFICE_EXTS + TIFF_EXTS
+# MHTML конвертується в PDF, а потім нарізається як багатосторінковий документ
+MULTI_PAGE_EXTS = ['.pdf'] + OFFICE_EXTS + TIFF_EXTS + MHTML_EXTS
 
 def get_drive_service():
     """Авторизація через особистий OAuth2 Refresh Token."""
@@ -28,6 +30,54 @@ def get_drive_service():
     )
     creds.refresh(Request())
     return build('drive', 'v3', credentials=creds)
+
+def get_chrome_path():
+    """Шукає доступний виконуваний файл Chrome/Chromium на сервері."""
+    for cmd in ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"]:
+        if subprocess.run(["which", cmd], capture_output=True).returncode == 0:
+            return cmd
+    return None
+
+def convert_mhtml_to_pdf(input_path, out_dir):
+    """
+    Конвертує MHTML у PDF за допомогою headless Google Chrome.
+    Це єдиний надійний спосіб зберегти стилі, картинки та розмітку MHTML.
+    """
+    chrome_cmd = get_chrome_path()
+    if not chrome_cmd:
+        print("  [Помилка]: Google Chrome або Chromium не знайдено в системі!")
+        return None
+        
+    try:
+        print(f"  -> Конвертація MHTML у PDF через headless Chrome ({chrome_cmd})...")
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        expected_pdf = os.path.join(out_dir, f"{base_name}.pdf")
+        
+        abs_input = os.path.abspath(input_path)
+        abs_output = os.path.abspath(expected_pdf)
+        
+        # Chrome найкраще зчитує локальні файли через протокол file://
+        input_url = f"file://{abs_input}"
+        
+        cmd = [
+            chrome_cmd,
+            "--headless=new",
+            "--no-sandbox",
+            "--disable-gpu",
+            f"--print-to-pdf={abs_output}",
+            input_url
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        
+        if os.path.exists(expected_pdf) and os.path.getsize(expected_pdf) > 0:
+            return expected_pdf
+        else:
+            print(f"  [Помилка Chrome]: PDF не створено. Код повернення: {result.returncode}. Лог: {result.stderr}")
+            return None
+    except Exception as e:
+        print(f"  [Помилка виклику Chrome]: {e}")
+        return None
 
 def convert_office_to_pdf(input_path, out_dir):
     """Конвертує будь-який офісний документ у PDF за допомогою LibreOffice."""
@@ -172,9 +222,10 @@ def main():
     need_dwg = False
     need_office = False
     need_tif = False
+    need_mhtml = False
     valid_files = []
 
-    all_supported_exts = ['.pdf'] + CAD_EXTS + OFFICE_EXTS + TIFF_EXTS
+    all_supported_exts = ['.pdf'] + CAD_EXTS + OFFICE_EXTS + TIFF_EXTS + MHTML_EXTS
 
     for f in all_files:
         base_name, ext = os.path.splitext(f['name'].lower())
@@ -187,9 +238,10 @@ def main():
                 elif ext == '.dwg': need_dwg = True
                 elif ext in OFFICE_EXTS: need_office = True
                 elif ext in TIFF_EXTS: need_tif = True
+                elif ext in MHTML_EXTS: need_mhtml = True
 
     if is_scan_mode:
-        print(f"Потребують обробки: PDF={need_pdf}, DXF={need_dxf}, DWG={need_dwg}, Office={need_office}, TIFF={need_tif}")
+        print(f"Потребують обробки: PDF={need_pdf}, DXF={need_dxf}, DWG={need_dwg}, Office={need_office}, TIFF={need_tif}, MHTML={need_mhtml}")
         if 'GITHUB_OUTPUT' in os.environ:
             with open(os.environ['GITHUB_OUTPUT'], 'a') as github_output:
                 github_output.write(f"has_pdf={str(need_pdf).lower()}\n")
@@ -197,6 +249,7 @@ def main():
                 github_output.write(f"has_dwg={str(need_dwg).lower()}\n")
                 github_output.write(f"has_office={str(need_office).lower()}\n")
                 github_output.write(f"has_tif={str(need_tif).lower()}\n")
+                github_output.write(f"has_mhtml={str(need_mhtml).lower()}\n")
         return
 
     if not valid_files:
@@ -226,14 +279,21 @@ def main():
         if ext == '.pdf':
             process_pdf_pages(temp_input_path, base_name, FOLDER_ID, service, mod_time_str)
 
-        # --- СЦЕНАРІЙ 2: ОФІСНІ ДОКУМЕНТИ ТА ТЕКСТ (DOC, DOCX, XLSX, CSV, MHTML тощо) ---
+        # --- СЦЕНАРІЙ 2: ОФІСНІ ДОКУМЕНТИ ТА ТЕКСТ (DOC, DOCX, XLSX, CSV тощо) ---
         elif ext in OFFICE_EXTS:
             generated_pdf = convert_office_to_pdf(temp_input_path, TEMP_DIR)
             if generated_pdf:
                 process_pdf_pages(generated_pdf, base_name, FOLDER_ID, service, mod_time_str)
                 os.remove(generated_pdf)
 
-        # --- СЦЕНАРІЙ 3: БАГАТОСТОРІНКОВІ ТА ЗВИЧАЙНІ TIFF ---
+        # --- СЦЕНАРІЙ 3: ВЕБ-АРХІВИ MHTML / MHT ---
+        elif ext in MHTML_EXTS:
+            generated_pdf = convert_mhtml_to_pdf(temp_input_path, TEMP_DIR)
+            if generated_pdf:
+                process_pdf_pages(generated_pdf, base_name, FOLDER_ID, service, mod_time_str)
+                os.remove(generated_pdf)
+
+        # --- СЦЕНАРІЙ 4: БАГАТОСТОРІНКОВІ ТА ЗВИЧАЙНІ TIFF ---
         elif ext in TIFF_EXTS:
             from PIL import Image, ImageSequence
             try:
@@ -255,7 +315,7 @@ def main():
             except Exception as e:
                 print(f"  [Помилка обробки TIFF]: {e}")
 
-        # --- СЦЕНАРІЙ 4: CAD ФАЙЛИ (DXF / DWG) ---
+        # --- СЦЕНАРІЙ 5: CAD ФАЙЛИ (DXF / DWG) ---
         elif ext in CAD_EXTS:
             dxf_to_render = temp_input_path
             original_dwg_path = temp_input_path if ext == '.dwg' else None
