@@ -61,9 +61,9 @@ jobs:
       if: steps.scan_step.outputs.has_dxf == 'true' || steps.scan_step.outputs.has_dwg == 'true' || steps.scan_step.outputs.has_office == 'true' || steps.scan_step.outputs.has_tif == 'true'
       run: pip install ezdxf matplotlib pillow
 
-    # PDF та Офісні формати потребують PyMuPDF
+    # PDF, Офісні формати та MHTML потребують PyMuPDF для нарізки PDF сторінок
     - name: Встановлення PDF бібліотек Python
-      if: steps.scan_step.outputs.has_pdf == 'true' || steps.scan_step.outputs.has_office == 'true'
+      if: steps.scan_step.outputs.has_pdf == 'true' || steps.scan_step.outputs.has_office == 'true' || steps.scan_step.outputs.has_mhtml == 'true'
       run: pip install pymupdf
 
     - name: Запуск скрипту конвертації
@@ -71,4 +71,4 @@ jobs:
         GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
         GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
         GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-      run: python convert_pdf_to_png.py
+      run: python convert_all_to_png.py
