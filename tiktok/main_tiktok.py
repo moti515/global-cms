@@ -374,6 +374,7 @@ def main():
                         break
 
         temp_clips = []
+        successful_items = set()  # Відстежуємо унікальні ID успішно оброблених файлів
         
         # Для загального опису беремо display_location першого елемента збірки
         main_text_info = generate_ai_metadata(selected_items[0]['local_path'], date, selected_items[0]['display_location'])
@@ -406,6 +407,22 @@ def main():
                 
             if success and os.path.exists(part_out):
                 temp_clips.append(part_out)
+                successful_items.add(item['id'])  # Фіксуємо успішну обробку за ID файлу на Drive
+            else:
+                print(f"❌ Помилка рендерингу файлу: {item['name']}")
+
+        # --- КРИТИЧНИЙ КОНТРОЛЬ ЦІЛІСНОСТІ (FAIL-SAFE) ---
+        expected_unique_ids = {i['id'] for i in selected_items}
+        
+        if len(successful_items) < len(expected_unique_ids):
+            # Видаляємо вже створені тимчасові кліпи, щоб не засмічувати диск
+            for tc in temp_clips:
+                if os.path.exists(tc): 
+                    os.remove(tc)
+            sys.exit(
+                f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Обробка деяких файлів збірки провалилася ({len(successful_items)} з {len(expected_unique_ids)} успішно). "
+                f"Для запобігання публікації неповного ролика процес зупинено. Файли на Google Диску НЕ видалено."
+            )
 
         if not temp_clips:
             sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося підготувати жодного фрагмента для збірки.")
