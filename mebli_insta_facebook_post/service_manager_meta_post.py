@@ -3,6 +3,7 @@ import json
 import base64
 import requests
 import io
+import time
 from PIL import Image as PILImage
 from google import genai
 from datetime import datetime
@@ -60,6 +61,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 if res.status_code == 200 and res.text.strip().startswith('http'):
                     direct_url = res.text.strip()
                     print(f"🔗 Посилання від Litterbox: {direct_url}")
+                    time.sleep(3)  # ⏱️ Даємо 3 секунди, щоб файл точно став доступним у мережі
                     return direct_url, None
                 else:
                     print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text[:100]}")
