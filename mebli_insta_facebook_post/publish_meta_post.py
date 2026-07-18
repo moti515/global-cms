@@ -259,13 +259,25 @@ def main():
             print(f"🖼️ Публікація фото-альбому ({len(cloud_urls)} шт.) у Facebook...")
             attached_media = []
             for url in cloud_urls:
-                photo_res = requests.post(f"https://graph.facebook.com/v19.0/{config.FB_PAGE_ID}/photos", data={
-                    "url": url, "published": "false", "access_token": config.META_ACCESS_TOKEN
-                }).json()
-                if "id" not in photo_res:
-                    print(f"❌ Не вдалося завантажити під-елемент photo: {photo_res}")
+                photo_id = None
+                
+                for attempt in range(3):  # 🔄 До 3 спроб на кожне фото
+                    photo_res = requests.post(f"https://graph.facebook.com/v19.0/{config.FB_PAGE_ID}/photos", data={
+                        "url": url, "published": "false", "access_token": config.META_ACCESS_TOKEN
+                    }).json()
+                    
+                    if "id" in photo_res:
+                        photo_id = photo_res["id"]
+                        break
+                    else:
+                        print(f"⚠️ Спроба {attempt + 1}/3 невдала для фото. Meta API: {photo_res}")
+                        time.sleep(5)  # Чекаємо 5 секунд перед наступною спробою
+                
+                if not photo_id:
+                    print(f"❌ Не вдалося завантажити під-елемент photo після 3 спроб: {url}")
                     clean_up_local_files(local_files); sys.exit(1)
-                attached_media.append({"media_fbid": photo_res["id"]})
+                    
+                attached_media.append({"media_fbid": photo_id})
             
             fb_url = f"https://graph.facebook.com/v19.0/{config.FB_PAGE_ID}/feed"
             payload = {"message": full_caption, "attached_media": json.dumps(attached_media), "access_token": config.META_ACCESS_TOKEN}
@@ -286,18 +298,27 @@ def main():
                 payload = {param_type: url, "is_carousel_item": "true", "access_token": config.META_ACCESS_TOKEN}
                 if is_vid: payload["media_type"] = "VIDEO"
                 
-                item_res = requests.post(f"https://graph.facebook.com/v19.0/{config.IG_USER_ID}/media", data=payload).json()
-                if "id" not in item_res:
-                    print(f"❌ Помилка створення контейнера каруселі: {item_res}")
+                item_id = None
+                for attempt in range(3):  # 🔄 До 3 спроб на кожен елемент каруселі
+                    item_res = requests.post(f"https://graph.facebook.com/v19.0/{config.IG_USER_ID}/media", data=payload).json()
+                    if "id" in item_res:
+                        item_id = item_res["id"]
+                        break
+                    else:
+                        print(f"⚠️ Спроба {attempt + 1}/3 створення контейнера каруселі невдала. Meta API: {item_res}")
+                        time.sleep(5)
+                
+                if not item_id:
+                    print(f"❌ Помилка створення контейнера каруселі після спроб за лінком: {url}")
                     clean_up_local_files(local_files); sys.exit(1)
                     
-                item_id = item_res["id"]
                 if is_vid and not wait_for_meta_container(item_id, config.META_ACCESS_TOKEN):
                     print(f"❌ Відео-контейнер {item_id} зафейлився."); clean_up_local_files(local_files); sys.exit(1)
                 container_ids.append(item_id)
             
             carousel_payload = {"media_type": "CAROUSEL", "children": json.dumps(container_ids), "caption": full_caption, "access_token": config.META_ACCESS_TOKEN}
             res = requests.post(f"https://graph.facebook.com/v19.0/{config.IG_USER_ID}/media", data=carousel_payload).json()
+        
         else:
             print("🖼️ Створення одиничного контейнера в Instagram...")
             is_vid = uploaded_media[0]["is_video"]
@@ -305,8 +326,20 @@ def main():
             payload = {param_type: cloud_urls[0], "caption": full_caption, "access_token": config.META_ACCESS_TOKEN}
             if is_vid: payload["media_type"] = "VIDEO"
             
-            res = requests.post(f"https://graph.facebook.com/v19.0/{config.IG_USER_ID}/media", data=payload).json()
-            if res and "id" in res and is_vid:
+            res = None
+            for attempt in range(3):  # 🔄 До 3 спроб на одиничний медіафайл
+                res = requests.post(f"https://graph.facebook.com/v19.0/{config.IG_USER_ID}/media", data=payload).json()
+                if res and "id" in res:
+                    break
+                else:
+                    print(f"⚠️ Спроба {attempt + 1}/3 створення одиничного контейнера невдала. Meta API: {res}")
+                    time.sleep(5)
+            
+            if not res or "id" not in res:
+                print(f"❌ КРИТИЧНА ПОМИЛКА: Не вдалося створити одиничний контейнер в Instagram після спроб: {res}")
+                clean_up_local_files(local_files); sys.exit(1)
+
+            if is_vid:
                 if not wait_for_meta_container(res["id"], config.META_ACCESS_TOKEN):
                     print("❌ Одиничний відео-контейнер зафейлився."); clean_up_local_files(local_files); sys.exit(1)
 
