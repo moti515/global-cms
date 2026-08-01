@@ -202,7 +202,7 @@ def main():
                 clean_up_local_files(local_files)
                 sys.exit(1)
 
-        # Передаємо safe_local_name, щоб утиліта䪱 оптимізації геометрії теж зберегла файл без кирилиці
+        # Передаємо safe_local_name, щоб утиліта оптимізації геометрії теж зберегла файл без кирилиці
         optimized_path = media_processor.optimize_media_geometry(final_path, safe_local_name, mime_type)
         if optimized_path != final_path and optimized_path != local_path:
             local_files.append(optimized_path)
@@ -320,11 +320,15 @@ def main():
             res = requests.post(f"https://graph.facebook.com/v19.0/{config.IG_USER_ID}/media", data=carousel_payload).json()
         
         else:
-            print("🖼️ Створення одиничного контейнера в Instagram...")
+            print("🎬 Створення одиничного відео/фото контейнера в Instagram...")
             is_vid = uploaded_media[0]["is_video"]
             param_type = "video_url" if is_vid else "image_url"
             payload = {param_type: cloud_urls[0], "caption": full_caption, "access_token": config.META_ACCESS_TOKEN}
-            if is_vid: payload["media_type"] = "VIDEO"
+            
+            # 🌟 ОНОВЛЕНО: Для поодиноких відео в Instagram замість застарілого media_type="VIDEO" використовуємо "REELS"
+            if is_vid: 
+                payload["media_type"] = "REELS"
+                payload["share_to_feed"] = "true"  # Публікуємо також у головну стрічку профілю
             
             res = None
             for attempt in range(3):  # 🔄 До 3 спроб на одиничний медіафайл
@@ -345,7 +349,7 @@ def main():
 
         if res and "id" in res:
             creation_id = res["id"]
-            print("🚀 Фінальна публікація контейнера в Instagram стрічку...")
+            print("🚀 Фінальна публікація контейнера в Instagram...")
             published_successfully = False
             
             for attempt in range(6):
