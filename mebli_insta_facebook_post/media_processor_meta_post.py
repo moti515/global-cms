@@ -11,8 +11,8 @@ register_heif_opener()
 
 def optimize_media_geometry(local_path, filename, mime_type):
     """
-    Оптимізує пропорції зображень (додає білі поля) та обов'язково 
-    конвертує формати HEIC/PNG/WEBP у стандартний JPEG під вимоги Meta API.
+    Оптимізує пропорції зображень (додає білі поля) та ОБОВ'ЯЗКОВО 
+    нормалізує всі зображення у стандартний RGB Baseline JPEG для сумісності з Meta API.
     """
     if not os.path.exists(local_path):
         return local_path
@@ -25,39 +25,41 @@ def optimize_media_geometry(local_path, filename, mime_type):
 
     try:
         with Image.open(local_path) as img:
+            # Примусово конвертуємо колірний режим (CMYK, RGBA, P) у чистий RGB
             img = img.convert('RGB')
             w, h = img.size
             ratio = w / h
             
-            is_jpeg = lower_name.endswith(('.jpg', '.jpeg'))
             needs_padding = ratio < 0.8 or ratio > 1.91
             
-            # Якщо медіа не є JPEG або виходить за межі пропорцій Meta — робимо оптимізацію
-            if needs_padding or not is_jpeg:
-                new_filename = filename.rsplit('.', 1)[0] + '.jpg'
-                os.makedirs('temp_mebli', exist_ok=True)
-                optimized_path = os.path.join('temp_mebli', 'post_ready_' + new_filename)
+            # Формуємо ім'я для гарантовано нормалізованого файлу
+            base_name = filename.rsplit('.', 1)[0]
+            new_filename = f"post_ready_{base_name}.jpg" if not base_name.startswith('post_ready_') else f"{base_name}.jpg"
                 
-                if needs_padding:
-                    print(f"📐 Оптимізація геометрії ({ratio:.2f}) та конвертація для: {filename}")
-                    if ratio < 0.8:
-                        new_w = int(h * 0.8)
-                        new_h = h
-                    else:
-                        new_w = w
-                        new_h = int(w / 1.91)
-                        
-                    canvas = Image.new('RGB', (new_w, new_h), (255, 255, 255))
-                    paste_x = (new_w - w) // 2
-                    paste_y = (new_h - h) // 2
-                    
-                    canvas.paste(img, (paste_x, paste_y))
-                    canvas.save(optimized_path, 'JPEG', quality=95)
+            os.makedirs('temp_mebli', exist_ok=True)
+            optimized_path = os.path.join('temp_mebli', new_filename)
+
+            if needs_padding:
+                print(f"📐 Оптимізація геометрії ({ratio:.2f}) та нормалізація для: {filename}")
+                if ratio < 0.8:
+                    new_w = int(h * 0.8)
+                    new_h = h
                 else:
-                    print(f"🔄 Конвертація {filename} у JPEG для сумісності з Meta API...")
-                    img.save(optimized_path, 'JPEG', quality=95)
+                    new_w = w
+                    new_h = int(w / 1.91)
                     
-                return optimized_path
+                canvas = Image.new('RGB', (new_w, new_h), (255, 255, 255))
+                paste_x = (new_w - w) // 2
+                paste_y = (new_h - h) // 2
+                
+                canvas.paste(img, (paste_x, paste_y))
+                canvas.save(optimized_path, 'JPEG', quality=95, progressive=False)
+            else:
+                print(f"🔄 Обов'язкова нормалізація {filename} у стандартний RGB JPEG...")
+                img.save(optimized_path, 'JPEG', quality=95, progressive=False)
+                
+            return optimized_path
+
     except Exception as e:
         print(f"⚠️ Помилка калібрування геометрії або конвертації поста: {e}")
 
