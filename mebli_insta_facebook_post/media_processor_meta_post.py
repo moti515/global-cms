@@ -11,7 +11,7 @@ register_heif_opener()
 
 def optimize_media_geometry(local_path, filename, mime_type):
     """
-    Оптимізує пропорції зображень (додає білі поля) та ОБОВ'ЯЗКОВО 
+    Оптимізує пропорції зображень (додає чорні поля) та ОБОВ'ЯЗКОВО 
     нормалізує всі зображення у стандартний RGB Baseline JPEG для сумісності з Meta API.
     """
     if not os.path.exists(local_path):
@@ -48,7 +48,7 @@ def optimize_media_geometry(local_path, filename, mime_type):
                     new_w = w
                     new_h = int(w / 1.91)
                     
-                canvas = Image.new('RGB', (new_w, new_h), (255, 255, 255))
+                canvas = Image.new('RGB', (new_w, new_h), (0, 0, 0))
                 paste_x = (new_w - w) // 2
                 paste_y = (new_h - h) // 2
                 
