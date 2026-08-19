@@ -32,11 +32,12 @@ jobs:
         python-version: '3.12'
         cache: 'pip'
 
-    - name: Install System Dependencies (FFmpeg, ImageMagick & Fonts)
+        - name: Install System Dependencies (FFmpeg, ImageMagick & Fonts)
+      env:
+        DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo apt-get update
-        # Додано fonts-dejavu, щоб гарантувати наявність DejaVuSans-Bold.ttf
-        sudo apt-get install -y ffmpeg imagemagick fonts-dejavu
+        sudo apt-get update -y
+        sudo apt-get install -y --no-install-recommends ffmpeg imagemagick fonts-dejavu
         sudo sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@\*"/g' /etc/ImageMagick-*/policy.xml || true
         sudo sed -i 's/domain="coder" rights="none" pattern="PDF"/domain="coder" rights="read|write" pattern="PDF"/' /etc/ImageMagick-*/policy.xml || true
 
