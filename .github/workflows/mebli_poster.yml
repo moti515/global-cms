@@ -31,8 +31,8 @@ jobs:
 
     - name: Встановлення системних залежностей (FFmpeg та шрифти)
       run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg fonts-dejavu-core
+        sudo apt-get update -o Acquire::ForceIPv4=true -o Acquire::Retries=3
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends fonts-dejavu-core
 
     - name: Встановлення бібліотек Python
       run: |
