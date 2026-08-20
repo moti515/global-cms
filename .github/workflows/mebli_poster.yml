@@ -29,7 +29,10 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Встановлення системних залежностей (FFmpeg та шрифти)
+    - name: Налаштування FFmpeg
+      uses: FedericoCarboni/setup-ffmpeg@v3
+
+    - name: Встановлення системних шрифтів
       run: |
         sudo apt-get update -o Acquire::ForceIPv4=true -o Acquire::Retries=3
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends fonts-dejavu-core
