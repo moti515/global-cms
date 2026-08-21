@@ -99,7 +99,6 @@ def main():
         final_dt, lat, lon = get_intellectual_date(local_path, f['name'], f, now)
         file_date = final_dt.strftime('%d.%m.%Y')
         
-        # Ініціалізуємо порожніми рядками, щоб уникнути дублювання груп, якщо OSM недоступний
         display_loc, group_loc = "", ""
         if lat and lon:
             time.sleep(1)  # Захист від блокування лімітів OSM
@@ -136,28 +135,28 @@ def main():
             'mime': mime_type,
             'local_path': local_path,
             'date': file_date,
-            'display_location': display_loc,  # Точна назва для ШІ та титрів
-            'group_location': group_loc        # Назва для об'єднання в одну папку/ролик
+            'display_location': display_loc,
+            'group_location': group_loc
         })
 
     # --- ГРУПУВАННЯ ТА МОНТАЖ ---
     groups = {}
     for item in processed_items:
-        # Тепер групуємо за елементом 'group_location'
         key = (item['date'], item['group_location'])
         if key not in groups:
             groups[key] = []
         groups[key].append(item)
         
     # Константи під ліміти
-    MIN_DURATION = 4      # Мінімальна тривалість роликів (Варіанти 1, 2, 3)
-    MAX_DURATION = 40     # Максимальна тривалість роликів (Варіанти 4, 5)
-    PHOTO_DURATION = 4.0  # Кожне фото тепер строго 4 секунди
+    MIN_DURATION = 4           # Мінімальна тривалість роликів (Варіанти 1, 2, 3)
+    MAX_DURATION = 40          # Максимальна тривалість для групового монтажу (Варіант 4)
+    PHOTO_DURATION = 4.0       # Кожне фото строго 4 секунди
+    MAX_SINGLE_DURATION = 120  # 2 хвилини (120 секунд) - поріг для нарізання поодинокого відео
 
     for (date, loc), items in groups.items():
         print(f"🎬 Знайдено групу для монтажу: Дата {date} | Локація групування: {loc or 'Невідомо'}. Всього файлів: {len(items)}")
         
-        # Крок 1: Валідація та збір метаданих тривалості (Враховуємо фото як 4 сек)
+        # Крок 1: Валідація та збір метаданих тривалості
         valid_items = []
         for item in items:
             mime = item['mime']
@@ -178,7 +177,7 @@ def main():
                             continue
                     print(f"⏩ Пропускаємо пошкоджений файл '{item['name']}'.")
             elif 'image' in mime:
-                item['duration'] = PHOTO_DURATION  # Варіант 3: Кожне фото рахується як 4 сек
+                item['duration'] = PHOTO_DURATION
                 valid_items.append(item)
 
         if not valid_items:
@@ -192,11 +191,9 @@ def main():
         else:
             accumulated_duration = 0
             for item in valid_items:
-                # Якщо перший файл у черзі вже більше 40 сек
                 if item['duration'] > MAX_DURATION and len(selected_items) == 0:
                     selected_items = [item]
                     break
-                # ВАРІАНТ 4: Обмежуємо групу, щоб сумарна тривалість вихідного ролика була менше 40 секунд
                 if accumulated_duration + item['duration'] <= MAX_DURATION:
                     selected_items.append(item)
                     accumulated_duration += item['duration']
@@ -212,14 +209,11 @@ def main():
             single_item = selected_items[0]
             current_file_path = single_item['local_path']
             
-            # ВАРІАНТ 1: В відібраній групі 1 фото
+            # ВАРІАНТ 1: Поодиноке фото
             if 'image' in single_item['mime']:
                 print(f"📸 Варіант 1: Поодиноке фото. Створюємо відео тривалістю {PHOTO_DURATION} сек.")
                 
-                # Передаємо точну display_location замість застарілого loc
                 text_info = generate_ai_metadata(current_file_path, date, single_item['display_location'])
-                
-                # Безпечне створення опису та хештегу
                 raw_loc = text_info[2].split(',')[0].strip().replace(' ', '') if text_info[2] else ""
                 loc_hashtag = f" #{raw_loc}" if raw_loc else ""
                 tiktok_description = f"{text_info[0]} 🌍 #travel{loc_hashtag}"
@@ -233,15 +227,13 @@ def main():
                         sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: TikTok відхилив публікацію фото-відео.")
                 return
 
-            # ВАРІАНТ 2: В групі одне відео < 4 сек
+            # ВАРІАНТ 2: Коротке відео < 4 сек
             elif 'video' in single_item['mime'] and single_item['duration'] < MIN_DURATION:
                 print(f"🔄 Варіант 2: Коротке відео ({single_item['duration']:.2f} сек). Зациклюємо...")
                 loops = int(sorted([1, math.ceil(MIN_DURATION / single_item['duration']) - 1, 10])[1])
                 total_t = single_item['duration'] * (loops + 1)
                 
-                # Передаємо точну display_location
                 text_info = generate_ai_metadata(current_file_path, date, single_item['display_location'])
-                
                 raw_loc = text_info[2].split(',')[0].strip().replace(' ', '') if text_info[2] else ""
                 loc_hashtag = f" #{raw_loc}" if raw_loc else ""
                 tiktok_description = f"{text_info[0]} 🌍 #travel{loc_hashtag}"
@@ -255,17 +247,16 @@ def main():
                         sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: TikTok відхилив публікацію короткого відео.")
                 return
 
-            # ВАРІАНТ 5: Один відеофайл тривалістю більше 40 секунд (ОНОВЛЕНО)
-            elif 'video' in single_item['mime'] and single_item['duration'] > MAX_DURATION:
+            # ВАРІАНТ 5: Один відеофайл тривалістю більше 2 хвилин (120 секунд)
+            elif 'video' in single_item['mime'] and single_item['duration'] > MAX_SINGLE_DURATION:
                 total_dur = single_item['duration']
-                num_parts = int(math.ceil(total_dur / MAX_DURATION))
+                num_parts = int(math.ceil(total_dur / MAX_SINGLE_DURATION))
                 chunk_length = total_dur / num_parts
-                print(f"✂️ Варіант 5: Велике відео ({total_dur:.1f} сек). Нарізаємо на {num_parts} частин...")
+                print(f"✂️ Варіант 5: Велике відео ({total_dur:.1f} сек > 2 хв). Нарізаємо на {num_parts} частин (до 2 хв кожна)...")
                 
                 all_parts_success = True
                 generated_files = []
                 
-                # Побажання 1: Накладаємо музику на ВЕСЬ великий файл до нарізки, щоб вона тривала безперервно
                 full_video_with_music = current_file_path.replace(".mp4", "_full_music.mp4")
                 music_already_applied = False
                 
@@ -280,7 +271,6 @@ def main():
                     source_for_slicing = current_file_path
                     print("⏩ Не вдалося додати фонову музику. Ріжемо оригінал із власним звуком.")
 
-                # Отримуємо базові метадані для накладання статичних титрів на відео
                 base_text_info = generate_ai_metadata(current_file_path, date, single_item['display_location'])
                 base_trending_text, year, location_name = base_text_info
                 
@@ -292,7 +282,6 @@ def main():
                     print(f"📦 Рендеринг частини {part_num}/{num_parts} ({start:.1f}s - {start+chunk_length:.1f}s)")
                     modified_text_info = (f"{base_trending_text} (Ч. {part_num})", year, location_name)
                     
-                    # Нарізаємо відео (вже з безперервною музикою, якщо вона наклалася)
                     success = process_video_item(
                         source_for_slicing, part_output, modified_text_info, 
                         ss=start, t=chunk_length
@@ -301,7 +290,6 @@ def main():
                     if success and os.path.exists(part_output):
                         generated_files.append(part_output)
                         
-                        # Побажання 2: Генеруємо унікальний (живий) опис для конкретного шматочка відео
                         print(f"🤖 ШІ аналізує та генерує унікальний опис для частини {part_num}...")
                         part_text_info = generate_ai_metadata(part_output, date, single_item['display_location'])
                         part_trending_text, _, part_location_name = part_text_info
@@ -309,12 +297,9 @@ def main():
                         raw_loc = part_location_name.split(',')[0].strip().replace(" ", "") if part_location_name else ""
                         loc_hashtag = f" #{raw_loc}" if raw_loc else ""
                         
-                        # Специфічний живий опис + збереження нумерації частин для опису TikTok
                         part_description = f"{part_trending_text} (Частина {part_num}) 🌍 #travel{loc_hashtag}"
                         
-                        # Публікація
                         if music_already_applied:
-                            # Оскільки музика вже всередині відеопотоку, використовуємо чистий uploader
                             uploaded = upload_to_tiktok(part_output, part_description)
                         else:
                             uploaded = upload_with_music_wrapper(part_output, part_description)
@@ -326,7 +311,6 @@ def main():
                         all_parts_success = False
                         break
                 
-                # Видаляємо тимчасовий великий файл із вшитою музикою, якщо він створювався
                 if os.path.exists(full_video_with_music): 
                     os.remove(full_video_with_music)
                     
@@ -340,11 +324,10 @@ def main():
                     sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Публікація однієї з частин серіалу провалилася.")
                 return
 
-            # Одиночне стандартне відео від 4 до 40 секунд
-            elif 'video' in single_item['mime'] and MIN_DURATION <= single_item['duration'] <= MAX_DURATION:
-                print(f"🎥 Поодиноке стандартне відео ({single_item['duration']:.2f} сек). Обробка...")
+            # Одиночне стандартне відео від 4 секунд до 2 хвилин (120 секунд)
+            elif 'video' in single_item['mime'] and MIN_DURATION <= single_item['duration'] <= MAX_SINGLE_DURATION:
+                print(f"🎥 Поодиноке стандартне відео ({single_item['duration']:.2f} сек <= 2 хв). Обробка...")
                 
-                # Передаємо точну display_location
                 text_info = generate_ai_metadata(current_file_path, date, single_item['display_location'])
                 
                 raw_loc = text_info[2].split(',')[0].strip().replace(' ', '') if text_info[2] else ""
@@ -359,6 +342,7 @@ def main():
                     else:
                         sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: TikTok відхилив публікацію стандартного відео.")
                 return
+
         # ВАРІАНТ 3 та 4: В групі багато файлів (монтаж склеюванням)
         print("🎬 Варіанти 3/4: Монтаж стандартної групи медіафайлів.")
         
@@ -374,9 +358,8 @@ def main():
                         break
 
         temp_clips = []
-        successful_items = set()  # Відстежуємо унікальні ID успішно оброблених файлів
+        successful_items = set()
         
-        # Для загального опису беремо display_location першого елемента збірки
         main_text_info = generate_ai_metadata(selected_items[0]['local_path'], date, selected_items[0]['display_location'])
         
         raw_loc = main_text_info[2].split(',')[0].strip().replace(' ', '') if main_text_info[2] else ""
@@ -389,7 +372,6 @@ def main():
             part_out = os.path.join('downloaded', f"processed_part_{idx}_{int(time.time())}.mp4")
             success = False
             
-            # Кожен окремий фрагмент підписуємо його власною точною локацією display_location
             item_text_info = generate_ai_metadata(current_file_path, date, item['display_location'])
             
             if 'video' in mime:
@@ -407,7 +389,7 @@ def main():
                 
             if success and os.path.exists(part_out):
                 temp_clips.append(part_out)
-                successful_items.add(item['id'])  # Фіксуємо успішну обробку за ID файлу на Drive
+                successful_items.add(item['id'])
             else:
                 print(f"❌ Помилка рендерингу файлу: {item['name']}")
 
@@ -415,7 +397,6 @@ def main():
         expected_unique_ids = {i['id'] for i in selected_items}
         
         if len(successful_items) < len(expected_unique_ids):
-            # Видаляємо вже створені тимчасові кліпи, щоб не засмічувати диск
             for tc in temp_clips:
                 if os.path.exists(tc): 
                     os.remove(tc)
@@ -427,7 +408,6 @@ def main():
         if not temp_clips:
             sys.exit("❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося підготувати жодного фрагмента для збірки.")
 
-        # Швидке склеювання
         fast_concat_videos(temp_clips, final_file)
         
         if os.path.exists(final_file):
