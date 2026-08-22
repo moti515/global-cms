@@ -219,6 +219,9 @@ def main():
     
     local_files_to_clean = []
     success_published_any = False
+    
+    # 🆕 Накопичувач підписів для поточної групи/черги, щоб уникнути повторів
+    previous_captions = []
 
     # --- ЗАГАЛЬНИЙ БЛОК ОБРОБКИ ТА ПУБЛІКАЦІЇ ---
     for idx_item, item in enumerate(selected_queue):
@@ -279,9 +282,20 @@ def main():
                 ai_media_snapshot = frame_path
                 local_files_to_clean.append(frame_path)
 
-        # 1. ШІ Генерація підпису
-        story_caption_text = generate_story_caption([ai_media_snapshot], item["category"], item["date"], lang_idx, item["location"])
+        # 1. ШІ Генерація підпису (передаємо накопичені підписи previous_captions)
+        story_caption_text = generate_story_caption(
+            [ai_media_snapshot], 
+            item["category"], 
+            item["date"], 
+            lang_idx, 
+            item["location"],
+            previous_captions=previous_captions  # 👈 Оновлено
+        )
         print(f"💬 Сгенерований текст: \"{story_caption_text}\"")
+
+        # 🆕 Зберігаємо новий підпис до списку використаних
+        if story_caption_text:
+            previous_captions.append(story_caption_text)
 
         # Використовуємо хелпери для парсингу параметрів
         year_variable = parse_year(item["date"])
