@@ -123,9 +123,12 @@ def delete_from_imagekit(file_id: str):
     except: 
         pass
 
-def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc):
+def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc, previous_captions=None):
     gemini_key = os.environ.get("GEMINI_API_KEY")
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
+    
+    if previous_captions is None:
+        previous_captions = []
     
     pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
     
@@ -166,27 +169,42 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
     
     lang_instructions = {
-        0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1-2 доречних емодзі.",
-        1: "Write the text exclusively in ENGLISH. You may include 1-2 relevant emojis.",
-        2: "Schreibe den Text ausschließlich auf DEUTSCH. Du darfst 1-2 passende Emojis hinzufügen."
+        0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1 емодзі.",
+        1: "Write the text exclusively in ENGLISH. You may include 1 emoji.",
+        2: "Schreibe den Text ausschließlich auf DEUTSCH. Du darfst 1 Emoji hinzufügen."
     }
     
+    # 🚫 Формуємо блок заборони повторів
+    prev_captions_block = ""
+    if previous_captions:
+        formatted_list = "\n".join([f'• "{cap}"' for cap in previous_captions])
+        prev_captions_block = (
+            f"\n\n🚫 СУВОРЕ ОБМЕЖЕННЯ (ЗАБОРОНА ПОВТОРІВ):\n"
+            f"У цій серії Stories ВЖЕ були опубліковані наступні підписи:\n"
+            f"{formatted_list}\n"
+            f"👉 КАТЕГОРИЧНО ЗАБОРОНЕНО повторювати ці ж думки, жарти, метафори, тези чи ключові слова. "
+            f"Зміни ракурс, вибери іншу деталь на фото або інший контекст!"
+        )
+
+    # 🧠 Оптимізований та розширений промт
     prompt = (
-        f"Ти — досвідчений копірайтер із тонким почуттям гумору та експертний меблевий конструктор.\n"
-        f"Подивись на це зображення (або кадр з відео) і придумай ОДНУ коротку, влучну та чіпляючу фразу "
-        f"(максимум 1-2 речення) для Instagram Stories. Текст буде нанесено прямо поверх медіафайлу.\n\n"
-        f"🎯 ТОН ТА СТИЛІСТИКА:\n"
-        f"- Будь живим та іронічним. Якщо на foto робочий процес, пил, креслення чи інструменти — "
-        f"пожартуй про залаштунки, перфекціонізм, каву на тирсі чи складні технічні вузли.\n"
-        f"- Якщо на фото готовий виріб — пиши про естетику, меблеву філософію, ергономіку або «білямеблеві» теми "
-        f"(домашній затишок, ідеальні зазори, радість від завершеного проєкту).\n"
-        f"- Уникай банальних штампів: 'найкраща якість', 'купуйте у нас', 'індивідуальний підхід'.\n\n"
-        f"📋  КОНТЕКСТ ДЛЯ АНАЛІЗУ:\n"
-        f"Категорія/Бренд: '{real_manufacturer}'. Рік зйомки: {year}.  Локація: {resolved_loc if resolved_loc else 'Меблеве виробництво'}.\n\n"
-        f"⚠️ СУВОРІ ОБМЕЖЕННЯ:\n"
+        f"Ти — досвідчений меблевий конструктор, майстер виробництва та іронічний копірайтер для Instagram Stories.\n"
+        f"Проаналізуй це зображення (або кадр з відео) і придумай ОДНУ коротку, влучну та чіпляючу фразу (1-2 короткі речення) "
+        f"для нанесення поверх медіафайлу.\n\n"
+        f"🎯 ВИЗНАЧ КОНТЕКСТ МЕДІА ТА ОБЕРИ ВІДПОВІДНИЙ ТОН:\n"
+        f"- Готові меблі / Виставки: естетика, ергономіка, відчуття затишку, геометрія, ідеальні зазори.\n"
+        f"- Цех / Виробництво / Монтаж: залаштунки, тирса, кава, звук фрезера, складні вузли, перфекціонізм.\n"
+        f"- Заміри / Креслення / Документи / Специфікації: стіни 89°, кути не під 90°, крива підлога, «заміри на око», конструкторська магія, рахунки.\n"
+        f"- Суміжники / Брак / «Похабне ставлення»: перли від електриків та сантехніків, як НЕ треба робити, ремонтні фейли, захист меблів від варварів.\n"
+        f"- Доставка / Логістика: вузькі сходи, пакування, квест з ліфтом, «головне не подряпати».\n"
+        f"- Гумор / Приколи / Меми / Працівники: жива самоіронія, меблевий сленг, робочі моменти, філософія цеху.\n\n"
+        f"📋 ДОДАТКОВИЙ КОНТЕКСТ:\n"
+        f"Бренд/Категорія: '{real_manufacturer}'. Рік: {year}. Локація: {resolved_loc if resolved_loc else 'Меблеве виробництво'}.\n"
+        f"{prev_captions_block}\n\n"
+        f"⚠️ СУВОРІ ВИМОГИ:\n"
         f"1. {lang_instructions.get(lang_idx, lang_instructions[0])}\n"
-        f"2. Поверни ЛИШЕ фінальний текст підпису. Без лапок, без вступних слів, без хэштегів та пояснень копірайтера.\n"
-        f"3. Роби речення короткими, щоб вони легко читалися на екрані телефону."
+        f"2. Будь живим, прямим та коротким. Уникай кліше: 'найкраща якість', 'індивідуальний підхід', 'купуйте в нас'.\n"
+        f"3. Поверни ЛИШЕ готовий текст підпису. Без лапок, без вступних слів, без хештегів та пояснень."
     )
 
     try:
@@ -232,7 +250,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     except Exception as general_err:
         print(f"⚠️ Загальний збій блоку ШІ-генерації: {general_err}")
         
-    return pref.get("fallback_caption", "Створюємо меблі з точним розрахунком!")
+    return pref.get("fallback_caption", "Точний розрахунок та увага до кожної деталі!")
     
 def wait_for_meta_container(container_id, access_token):
     check_url = f"https://graph.facebook.com/v19.0/{container_id}"
