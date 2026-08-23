@@ -271,8 +271,14 @@ def main():
                     source_for_slicing = current_file_path
                     print("⏩ Не вдалося додати фонову музику. Ріжемо оригінал із власним звуком.")
 
-                base_text_info = generate_ai_metadata(current_file_path, date, single_item['display_location'])
+                part_captions_history = []  # Створюємо список для збереження історії серії
+
+                base_text_info = generate_ai_metadata(
+                    current_file_path, date, single_item['display_location'], 
+                    previous_captions=part_captions_history
+                )
                 base_trending_text, year, location_name = base_text_info
+                part_captions_history.append(base_trending_text)
                 
                 for part_idx in range(num_parts):
                     start = part_idx * chunk_length
@@ -291,8 +297,15 @@ def main():
                         generated_files.append(part_output)
                         
                         print(f"🤖 ШІ аналізує та генерує унікальний опис для частини {part_num}...")
-                        part_text_info = generate_ai_metadata(part_output, date, single_item['display_location'])
+                        # Передаємо накопичену історію попередніх описів
+                        part_text_info = generate_ai_metadata(
+                            part_output, date, single_item['display_location'], 
+                            previous_captions=part_captions_history
+                        )
                         part_trending_text, _, part_location_name = part_text_info
+                        
+                        # Записуємо згенерований опис у список
+                        part_captions_history.append(part_trending_text)
                         
                         raw_loc = part_location_name.split(',')[0].strip().replace(" ", "") if part_location_name else ""
                         loc_hashtag = f" #{raw_loc}" if raw_loc else ""
@@ -360,19 +373,30 @@ def main():
         temp_clips = []
         successful_items = set()
         
-        main_text_info = generate_ai_metadata(selected_items[0]['local_path'], date, selected_items[0]['display_location'])
+        group_captions_history = []  # Накопичувач для описів у межах групи
+
+        main_text_info = generate_ai_metadata(
+            selected_items[0]['local_path'], date, selected_items[0]['display_location'],
+            previous_captions=group_captions_history
+        )
+        group_captions_history.append(main_text_info[0])
         
         raw_loc = main_text_info[2].split(',')[0].strip().replace(' ', '') if main_text_info[2] else ""
         loc_hashtag = f" #{raw_loc}" if raw_loc else ""
         tiktok_description = f"{main_text_info[0]} 🌍 #travel{loc_hashtag}"
-
+        
         for idx, item in enumerate(final_items_to_render):
             current_file_path = item['local_path']
             mime = item['mime']
             part_out = os.path.join('downloaded', f"processed_part_{idx}_{int(time.time())}.mp4")
             success = False
             
-            item_text_info = generate_ai_metadata(current_file_path, date, item['display_location'])
+            # Передаємо історію та додаємо новий опис
+            item_text_info = generate_ai_metadata(
+                current_file_path, date, item['display_location'],
+                previous_captions=group_captions_history
+            )
+            group_captions_history.append(item_text_info[0])
             
             if 'video' in mime:
                 dur = item['duration']
