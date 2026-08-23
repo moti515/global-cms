@@ -12,10 +12,7 @@ on:
           - fb_post
           - ig_post
           - ig_story
-    
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-  
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -29,13 +26,10 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Налаштування FFmpeg
-      uses: FedericoCarboni/setup-ffmpeg@v3
-
-    - name: Встановлення системних шрифтів
+    - name: Встановлення системних залежностей (FFmpeg та шрифти)
       run: |
         sudo apt-get update -o Acquire::ForceIPv4=true -o Acquire::Retries=3
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends fonts-dejavu-core
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
 
     - name: Встановлення бібліотек Python
       run: |
@@ -53,7 +47,7 @@ jobs:
         IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
         IG_USER_ID: ${{ secrets.MEBLI_IG_USER_ID }}
         FB_PAGE_ID: ${{ secrets.MEBLI_FB_PAGE_ID }}
-        META_ACCESS_TOKEN: ${{ secrets.MEBLI_META_ACCESS_TOKEN }}
+        META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
       run: |
         echo "📋 [Система] Режим: [${{ github.event.inputs.forced_mode }}]"
         python publish_meta_post.py ${{ github.event.inputs.forced_mode }} "Меблі"
@@ -69,6 +63,6 @@ jobs:
         IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
         IG_USER_ID: ${{ secrets.MEBLI_IG_USER_ID }}
         FB_PAGE_ID: ${{ secrets.MEBLI_FB_PAGE_ID }}
-        META_ACCESS_TOKEN: ${{ secrets.MEBLI_META_ACCESS_TOKEN }}
+        META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
       run: |
         python publish_content_mebli_storys.py ${{ github.event.inputs.forced_mode }} "Меблі"
