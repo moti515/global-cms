@@ -68,7 +68,7 @@ COMPANIES_DB = {
     },
     "solovey": {
         "names": {0: "Студія меблів «Соловей»", 1: "Solovey Furniture Studio", 2: "Möbelstudio Solovey"},
-        "links": ["📸 Instagram: instagr.am/mebelsolovei"],
+        "links": ["📸 Instagram: instagr.am/meblisolovei"],
         "ig_handle": "@mebelsolovei"
     },
     "furniture park": {
