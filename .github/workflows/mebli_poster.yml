@@ -36,7 +36,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install google-genai requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow pillow-heif pytz pyyaml pilmoji
 
-    # --- КРОК 1: ЗАПУСК ЗВИЧАЙНИХ ПОСТІВ (Тепер працює в окремій папці) ---
+    # --- КРОК 1: ЗАПУСК ЗВИЧАЙНИХ ПОСТІВ ---
     - name: Запуск публікатора постів (FB / IG Post)
       if: github.event.inputs.forced_mode != 'ig_story'
       working-directory: mebli_insta_facebook_post
@@ -47,12 +47,12 @@ jobs:
         IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
         IG_USER_ID: ${{ secrets.MEBLI_IG_USER_ID }}
         FB_PAGE_ID: ${{ secrets.MEBLI_FB_PAGE_ID }}
-        META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+        META_ACCESS_TOKEN: ${{ secrets.MEBLI_META_ACCESS_TOKEN }}
       run: |
         echo "📋 [Система] Режим: [${{ github.event.inputs.forced_mode }}]"
         python publish_meta_post.py ${{ github.event.inputs.forced_mode }} "Меблі"
 
-    # --- КРОК 2: ЗАПУСК СТОРІС (Аналог команди cd + запуск скрипта сторіс) ---
+    # --- КРОК 2: ЗАПУСК СТОРІС ---
     - name: Запуск публікатора сторіс (IG Story)
       if: github.event.inputs.forced_mode == 'ig_story'
       working-directory: mebli_instagram_story
@@ -63,6 +63,6 @@ jobs:
         IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
         IG_USER_ID: ${{ secrets.MEBLI_IG_USER_ID }}
         FB_PAGE_ID: ${{ secrets.MEBLI_FB_PAGE_ID }}
-        META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+        META_ACCESS_TOKEN: ${{ secrets.MEBLI_META_ACCESS_TOKEN }}
       run: |
         python publish_content_mebli_storys.py ${{ github.event.inputs.forced_mode }} "Меблі"
