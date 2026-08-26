@@ -136,7 +136,15 @@ def generate_ai_metadata(file_path, date_str, location_geo, previous_captions=No
         "4. Формат відповідає TikTok: видай ЛИШЕ готовий текст підпису без лапок та пояснень."
     )
 
-    models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+    models_to_try = [
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite"
+        ]
     trending_text = "Краса в простих деталях"
 
     if target_image_path and os.path.exists(target_image_path):
