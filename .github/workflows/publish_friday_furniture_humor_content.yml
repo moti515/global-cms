@@ -1,0 +1,104 @@
+name: Publish Social Content
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_project:
+        description: 'Оберіть проєкт / аркуш для публікації'
+        required: true
+        default: 'furniture'
+        type: choice
+        options:
+          - furniture
+          - friday
+          - both
+      forced_mode:
+        description: 'Режим публікації (post або story)'
+        required: true
+        default: 'post'
+        type: choice
+        options:
+          - post
+          - story
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  PYTHONUNBUFFERED: "1"
+  PYTHONPATH: "friday_furniture_humor"
+
+jobs:
+  publish-furniture:
+    name: 🪑 Публікація (Меблевий гумор)
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.target_project == 'furniture' || github.event.inputs.target_project == 'both' }}
+
+    steps:
+      - name: Перевірка коду репозиторію
+        uses: actions/checkout@v4
+
+      - name: Налаштування Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Встановлення системних залежностей (FFmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Встановлення бібліотек Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow pillow-heif pytz google-genai
+
+      - name: Запуск публікатора [Меблевий гумор]
+        env:
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
+          IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
+          # Секрети Меблевий гумор:
+          IG_USER_ID: ${{ secrets.FURNITURE_H_IG_USER_ID }}
+          FB_PAGE_ID: ${{ secrets.FURNITURE_H_FB_PAGE_ID }}
+          META_ACCESS_TOKEN: ${{ secrets.FURNITURE_H_META_ACCESS_TOKEN }}
+          MODE: ${{ github.event.inputs.forced_mode }}
+        run: |
+          python friday_furniture_humor/main.py "$MODE" "Меблевий гумор"
+
+  publish-friday:
+    name: 🎉 Публікація (П'ятниця)
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.target_project == 'friday' || github.event.inputs.target_project == 'both' }}
+
+    steps:
+      - name: Перевірка коду репозиторію
+        uses: actions/checkout@v4
+
+      - name: Налаштування Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Встановлення системних залежностей (FFmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Встановлення бібліотек Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow pillow-heif pytz google-genai
+
+      - name: Запуск публікатора [П'ятниця]
+        env:
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
+          IMAGEKIT_PRIVATE_KEY: ${{ secrets.IMAGEKIT_PRIVATE_KEY }}
+          # Секрети П'ятниця:
+          IG_USER_ID: ${{ secrets.FRIDAY_IG_USER_ID }}
+          FB_PAGE_ID: ${{ secrets.FRIDAY_FB_PAGE_ID }}
+          META_ACCESS_TOKEN: ${{ secrets.FRIDAY_META_ACCESS_TOKEN }}
+          MODE: ${{ github.event.inputs.forced_mode }}
+        run: |
+          python friday_furniture_humor/main.py "$MODE" "П'ятниця"
