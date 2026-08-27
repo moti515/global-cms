@@ -1,42 +1,127 @@
 import os
 import io
 import base64
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from PIL import Image
 from google import genai
 
 from config import GEMINI_API_KEY, GEMINI_MODELS
 
 
+def get_orthodox_easter(year: int) -> date:
+    """Обчислює дату Православної Пасхи для заданого року."""
+    a = year % 4
+    b = year % 7
+    c = year % 19
+    d = (19 * c + 15) % 30
+    e = (2 * a + 4 * b - d + 34) % 7
+    month = (d + e + 114) // 31
+    day = ((d + e + 114) % 31) + 1
+    julian_easter = date(year, month, day)
+    return julian_easter + timedelta(days=13)
+
+
 def get_active_rules_ordered():
-    """Визначає актуальні календарні свята та день тижня для підбору відповідної категорії."""
+    """
+    Визначає актуальні календарні свята, сезони, місяці та день тижня.
+    Правила впорядковано строго від найконкретніших дат до найзагальніших.
+    """
     now = datetime.now()
+    today = now.date()
     day_of_week = now.strftime('%A')
     day_month = now.strftime('%d.%m')
+    month = now.month
+    day = now.day
     
     days_map = {
-        'Monday': 'Понеділок', 'Tuesday': 'Вівторок', 'Wednesday': 'Середа',
-        'Thursday': 'Четвер', 'Friday': "П'ятниця", 'Saturday': 'Субота', 'Sunday': 'Неділя'
+        'Monday': 'Понеділок', 
+        'Tuesday': 'Вівторок', 
+        'Wednesday': 'Середа',
+        'Thursday': 'Четвер', 
+        'Friday': "П'ятниця", 
+        'Saturday': 'Субота', 
+        'Sunday': 'Неділя'
     }
     
     active_rules = []
-    if "22.12" <= day_month <= "31.12" or "01.01" == day_month: active_rules.append("Новий рік")
-    if "01.04" <= day_month <= "02.04": active_rules.append("1 квітня")
-    if "22.02" <= day_month <= "23.02": active_rules.append("23 лютого")
-    if day_month == "08.03": active_rules.append("8 Березня")
-    if day_month == "03.09": active_rules.append("3 вересня")
-    if "31.05" <= day_month <= "15.06": active_rules.append("31 травня")
-    if now.month == 11 and 23 <= now.day <= 30: active_rules.append("Чорна п'ятниця")
     
+    # -------------------------------------------------------------
+    # 1. ТОЧНІ СВЯТА ТА КОНКРЕТНІ ДАТИ (Найвищий пріоритет)
+    # -------------------------------------------------------------
+    # Новий рік (30.12 - 01.01)
+    if day_month in ["30.12", "31.12", "01.01"]:
+        active_rules.append("Новий рік")
+        
+    # Різдво (23.12 - 25.12)
+    if "23.12" <= day_month <= "25.12":
+        active_rules.append("Різдво")
+        
+    # Конкретні дні року
+    if day_month == "14.02":
+        active_rules.append("14 лютого")
+    if day_month == "23.02":
+        active_rules.append("23 лютого")
+    if day_month == "07.03":
+        active_rules.append("7 березня")
+    if day_month == "08.03":
+        active_rules.append("8 березня")    
+    if day_month == "12.04":
+        active_rules.append("12 квітня")
+    if day_month == "03.09":
+        active_rules.append("3 вересня")
+
+    # Пасха (Страсна П'ятниця, Великодня Субота, Великдень)
+    easter_date = get_orthodox_easter(now.year)
+    if (easter_date - timedelta(days=2)) <= today <= easter_date:
+        active_rules.append("Пасха")
+
+    # Спеціальні п'ятниці
     if day_of_week == 'Friday':
-        if now.day == 13: active_rules.append("П'ятниця 13-те")
-        elif now.day == 12: active_rules.append("П'ятниця 12-те")
+        if day == 13:
+            active_rules.append("П'ятниця 13-те")
+        elif day == 12:
+            active_rules.append("П'ятниця 12-те")
             
+        # Чорна п'ятниця (будь-яка п'ятниця між 11.11 та 30.11)
+        if "11.11" <= day_month <= "30.11":
+            active_rules.append("Чорна п'ятниця")
+
+    # -------------------------------------------------------------
+    # 2. МІСЯЦІ ТА СЕЗОНИ (Середній пріоритет)
+    # -------------------------------------------------------------
+    # Місяці
+    if month == 2:
+        active_rules.append("Лютий")
+    elif month == 4:
+        active_rules.append("Квітень")
+    elif month == 6:
+        active_rules.append("Червень")
+    elif month == 9:
+        active_rules.append("Вересень")
+
+    # Пори року
+    if month in [12, 1, 2]:
+        active_rules.append("Зима")
+    if month in [4, 5, 6]:
+        active_rules.append("Весна")
+    if month in [6, 7, 8]:
+        active_rules.append("Літо")
+    if month in [9, 10, 11]:
+        active_rules.append("Осінь")
+
+    # -------------------------------------------------------------
+    # 3. ДНІ ТИЖНЯ ТА ВИХІДНІ (Загальний пріоритет)
+    # -------------------------------------------------------------
     if day_of_week in ['Saturday', 'Sunday']:
         active_rules.append("Weekend")
-    
+
     active_rules.append(days_map[day_of_week])
+    
+    # -------------------------------------------------------------
+    # 4. ФОЛБЕК
+    # -------------------------------------------------------------
     active_rules.append("Різне")
+    
     return active_rules
 
 
