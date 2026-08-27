@@ -98,7 +98,16 @@ def generate_multimodal_caption(image_path, category, tab_name):
             return "Трохи меблевого гумору вам у стрічку! Як вам? 👇😂 #меблі #інтерєр #гумор"
         return "Усміхніться! Гарного настрою! 😉 #гумор #розваги #п_ятниця"
         
-    models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+    # Пул актуальних та стабільних моделей для генерації контенту
+    models_to_try = [
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite"
+        ]
     
     # 2️⃣ Динамічний контекст промпту
     topic_context = "розважальної сторінки з гострим гумором"
