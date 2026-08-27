@@ -17,6 +17,25 @@ from media_processor import (
 from meta_publisher import publish_to_meta_platforms
 
 
+def download_file_with_retry(drive, file_id, local_path, max_retries=3, initial_delay=3):
+    """
+    Виконує завантаження файлу з Google Drive із повторними спробами при помилках доступу/мережі.
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            download_file_from_drive(drive, file_id, local_path)
+            return True
+        except Exception as e:
+            print(f"⚠️ Спроба {attempt}/{max_retries} завантажити файл з Google Drive не вдалася: {e}")
+            if attempt < max_retries:
+                delay = initial_delay * (2 ** (attempt - 1))
+                print(f"⏳ Чекаємо {delay} сек. перед повторною спробою...")
+                time.sleep(delay)
+            else:
+                print("❌ Вичерпано всі спроби завантаження з Google Drive.")
+                raise e
+
+
 def main():
     if len(sys.argv) < 3:
         print("❌ Помилка: Відсутні обов'язкові аргументи.")
@@ -39,7 +58,7 @@ def main():
                 print(f"  {', '.join(available_sheets)}")
         except Exception:
             pass
-        return
+        sys.exit(1)
 
     mode = sys.argv[1].lower()
     tab_name = sys.argv[2]
@@ -88,7 +107,13 @@ def main():
 
     os.makedirs(TEMP_MEDIA_DIR, exist_ok=True)
     local_path = os.path.join(TEMP_MEDIA_DIR, orig_name)
-    download_file_from_drive(drive, file_id, local_path)
+
+    # Повторні спроби завантаження файлу
+    try:
+        download_file_with_retry(drive, file_id, local_path)
+    except Exception as e:
+        print(f"❌ Помилка завантаження файлу з Google Drive: {e}")
+        sys.exit(1)
 
     files_to_publish, mime_type = convert_and_format_media(local_path, orig_name, mode)
 
@@ -138,6 +163,8 @@ def main():
         update_sheet_counter(sheets, tab_name, row_line, mode, selected_item["data"][counter_col_idx])
     else:
         print("❌ Жодна з частин не була опублікована. Лічильник залишено без змін.")
+        if os.path.exists(local_path): 
+            os.remove(local_path)
         sys.exit(1)
 
     if os.path.exists(local_path): 
