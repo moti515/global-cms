@@ -2,7 +2,7 @@
     "access_token": "act.bcXJYRlXygyWkftB1PtSwuiUcmyRQuBv6Mlr5XpgJyfpzGbH0D6jQDnbkBih!5254.e1",
     "expires_in": 86400,
     "open_id": "-000o2uRlckMbQL8Bz2jssk1j8QJq5XVukaS",
-    "refresh_expires_in": 24717161,
+    "refresh_expires_in": 24659451,
     "refresh_token": "rft.2qfxNfRJ13fxhr8Vpi9CUcJGPRw1O06MbXhl2EKr24t5WWei9osfiC5wK9C0!5217.e1",
     "scope": "video.upload,user.info.basic,video.publish",
     "token_type": "Bearer"
