@@ -101,7 +101,7 @@ def optimize_image_story(final_upload_path, orig_name):
             img = ImageOps.exif_transpose(img)
             img = img.convert('RGB')
             if img.width > 8192 or img.height > 8192:
-                img.thumbnail((8192, 8192), Image.Resampling.BIBIC)
+                img.thumbnail((8192, 8192), Image.Resampling.BICUBIC)
             orig_w, orig_h = img.size
             
             target_w, target_h = 1080, 1920
