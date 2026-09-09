@@ -8,6 +8,8 @@ from datetime import datetime
 from PIL import Image, ImageDraw, ImageOps, ImageFont
 from PIL.ExifTags import TAGS, GPSTAGS
 
+Image.MAX_IMAGE_PIXELS = None
+
 # 🎨 ГЕНЕРАЦІЯ ЄДИНОГО ПРОЗОРОГО PNG-ОВЕРЛЕЮ З ТЕКСТОМ ТА ЕМОДЗІ
 def generate_story_overlay(base_name, text, year=None, location=None):
     """
@@ -98,6 +100,8 @@ def optimize_image_story(final_upload_path, orig_name):
         with Image.open(final_upload_path) as img:
             img = ImageOps.exif_transpose(img)
             img = img.convert('RGB')
+            if img.width > 8192 or img.height > 8192:
+                img.thumbnail((8192, 8192), Image.Resampling.BIBIC)
             orig_w, orig_h = img.size
             
             target_w, target_h = 1080, 1920
