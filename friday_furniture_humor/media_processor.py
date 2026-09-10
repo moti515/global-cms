@@ -165,7 +165,30 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             except Exception as e:
                 print(f"⚠️ Помилка ImageKit: {e}")
 
-        # 3️⃣ ImgBB
+        # 3️⃣ Tmpfiles.org (Резервний варіант для фото та відео до 100MB)
+        print(f"☁️ Завантажуємо файл {filename} на Tmpfiles.org...", flush=True)
+        try:
+            with open(local_file_path, 'rb') as f:
+                res = requests.post(
+                    'https://tmpfiles.org/api/v1/upload',
+                    files={'file': (remote_filename, f, mime_type)},
+                    data={'expire': '86400'},  # Час життя — 24 години (86400 сек)
+                    headers=browser_headers,
+                    timeout=(10, 60)
+                )
+            if res.status_code == 200:
+                res_data = res.json()
+                if res_data.get('status') == 'success':
+                    page_url = res_data.get('data', {}).get('url')
+                    if page_url:
+                        # Перетворюємо URL сторінки на пряме посилання для Meta API (/dl/)
+                        direct_url = page_url.replace('tmpfiles.org/', 'tmpfiles.org/dl/')
+                        print(f"🔗 Отримано пряме посилання від Tmpfiles: {direct_url}", flush=True)
+                        return direct_url, None
+        except Exception as e:
+            print(f"⚠️ Помилка Tmpfiles: {e}")
+
+        # 4️⃣ ImgBB
         if IMGBB_API_KEY and mime_type == "image/jpeg":
             print(f"☁️ Завантажуємо фото {filename} на ImgBB...", flush=True)
             try:
