@@ -91,7 +91,34 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             except Exception as e:
                 print(f"⚠️ Збій завантаження на ImageKit: {e}")
 
-        # 3️⃣ ImgBB API (Тільки для photo)
+        # 3️⃣ Tmpfiles.org (Новий резервний варіант — не потребує API ключів)
+        print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на Tmpfiles.org...")
+        try:
+            with open(local_file_path, 'rb') as f:
+                files = {'file': (remote_filename, f, mime_type)}
+                data = {'expire': '3600'}  # Автовидалення через 1 годину (3600 сек)
+                res = requests.post(
+                    'https://tmpfiles.org/api/v1/upload',
+                    files=files,
+                    data=data,
+                    timeout=30
+                )
+                if res.status_code == 200:
+                    res_data = res.json()
+                    if res_data.get('status') == 'success' and 'data' in res_data and 'url' in res_data['data']:
+                        page_url = res_data['data']['url']
+                        # 🔗 Трансформуємо веб-посилання у пряме посилання для скачування Meta API:
+                        # https://tmpfiles.org/12345/story.jpg -> https://tmpfiles.org/dl/12345/story.jpg
+                        direct_url = page_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+                        return direct_url, None
+                    else:
+                        print(f"⚠️ Tmpfiles відмовив: {res.text[:100]}")
+                else:
+                    print(f"⚠️ Tmpfiles відмовив (Статус {res.status_code}): {res.text[:100]}")
+        except Exception as e:
+            print(f"⚠️ Збій завантаження на Tmpfiles: {e}")
+
+        # 4️⃣ ImgBB API (Тільки для photo)
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and mime_type == "image/jpeg":
             print(f"☁️ Резерв: завантажуємо фото сторіс {filename} на ImgBB API...")
