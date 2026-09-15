@@ -183,8 +183,8 @@ def convert_dxf_to_png(dxf_path, png_path):
 
 def process_pdf_pages(pdf_path, base_name, folder_id, service, mod_time_str):
     """Нарізає PDF-файл на окремі PNG сторінки та завантажує їх."""
-    import fitz
-    doc = fitz.open(pdf_path)
+    import pymupdf
+    doc = pymupdf.open(pdf_path)
     for page_num in range(len(doc)):
         page = doc.load_page(page_num)
         pix = page.get_pixmap(dpi=150)
