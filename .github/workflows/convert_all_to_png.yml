@@ -3,6 +3,9 @@ name: Google Drive all to Images
 on:
   workflow_dispatch:
 
+env:
+  NODE_OPTIONS: "--no-deprecation"
+
 jobs:
   convert-pdfs:
     runs-on: ubuntu-latest
