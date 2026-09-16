@@ -2,8 +2,10 @@ import os
 import io
 import base64
 from datetime import datetime, date, timedelta
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from PIL import Image
 from google import genai
+from google.genai import types
 
 from config import GEMINI_API_KEY, GEMINI_MODELS
 
@@ -151,31 +153,28 @@ def get_rotated_language_template() -> str:
     template_lines = [f"{flag} [Жарт/коментар {name}]" for flag, name in rotated_languages]
     return "\n\n".join(template_lines)
 
-def _call_gemini_api_with_timeout(model: str, inputs: list, api_key: str) -> str:
+def _call_gemini_api_with_timeout(model: str, prompt: str, image_bytes: bytes, api_key: str) -> str:
     """
     Внутрішня функція для виконання запиту до Gemini з таймаутом HTTP-мережі.
     """
     client = genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(timeout=40000)  # Таймаут HTTP-запиту: 40 секунд
+        http_options=types.HttpOptions(timeout=40000)
     )
     
-    if hasattr(client, 'interactions'):
-        interaction = client.interactions.create(
-            model=model,
-            input=inputs
-        )
-        if interaction and hasattr(interaction, 'output_text') and interaction.output_text:
-            return interaction.output_text
-        elif interaction and hasattr(interaction, 'text') and interaction.text:
-            return interaction.text
-    else:
-        response = client.models.generate_content(
-            model=model,
-            contents=inputs
-        )
-        if response and response.text:
-            return response.text
+    # Формуємо вхідні дані через types.Part для надійності SDK
+    inputs = [
+        prompt,
+        types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+    ]
+    
+    response = client.models.generate_content(
+        model=model,
+        contents=inputs
+    )
+    
+    if response and response.text:
+        return response.text
 
     return ""
 
