@@ -153,16 +153,16 @@ def get_rotated_language_template() -> str:
     template_lines = [f"{flag} [Жарт/коментар {name}]" for flag, name in rotated_languages]
     return "\n\n".join(template_lines)
 
-def _call_gemini_api_with_timeout(model: str, prompt: str, image_bytes: bytes, api_key: str) -> str:
+def _call_gemini_api_with_timeout(model: str, prompt: str, image_bytes: bytes) -> str:
     """
     Внутрішня функція для виконання запиту до Gemini з таймаутом HTTP-мережі.
+    Використовує глобальний GEMINI_API_KEY.
     """
     client = genai.Client(
-        api_key=api_key,
+        api_key=GEMINI_API_KEY,
         http_options=types.HttpOptions(timeout=40000)
     )
     
-    # Формуємо вхідні дані через types.Part для надійності SDK
     inputs = [
         prompt,
         types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
