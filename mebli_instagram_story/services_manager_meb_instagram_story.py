@@ -292,11 +292,12 @@ def wait_for_meta_container(container_id, access_token):
     params = {"fields": "status_code,status", "access_token": access_token}
     for _ in range(30):
         try:
-            r = requests.get(check_url, params=params).json()
+            r = requests.get(check_url, params=params, timeout=(10, 120)).json()
             status = r.get("status_code", "").upper()
             if status == "FINISHED": return True
             elif status == "ERROR": return False
             print(f"⏳ Очікування обробки медіафайлу в Meta... Статус: {status}")
-        except: pass
+        except Exception as e:
+            print(f"⚠️ Помилка перевірки статусу контейнера Meta: {e}")
         time.sleep(5)
     return False
