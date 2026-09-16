@@ -23,7 +23,7 @@ register_heif_opener()
 
 def main():
     run_mode = os.environ.get('RUN_MODE', 'manual')
-    print(f"⚙️ Запуск у режимі: {run_mode.upper()}")
+    print(f"⚙️ Запуск основного монтажу у режимі: {run_mode.upper()}")
 
     def upload_with_music_wrapper(file_path, description):
         """Додає музику до файлу (якщо це можливо) і викликає оригінальний аплоадер."""
@@ -37,29 +37,6 @@ def main():
         return upload_to_tiktok(file_path, description)
     
     service = get_gdrive_service()
-    
-    if run_mode == 'cron':
-        print("🔍 Підраховуємо загальну кількість файлів у папці...")
-        total_files = count_total_files(service)
-        
-        berlin_hour = datetime.now(ZoneInfo("Europe/Berlin")).hour
-        print(f"📊 На Диску знайдено файлів: {total_files} | Поточна година в DE: {berlin_hour}")
-        
-        allowed_hours = []
-        if total_files <= 1000:
-            allowed_hours = [11]
-        elif total_files <= 2000:
-            allowed_hours = [11, 17]
-        elif total_files <= 3000:
-            allowed_hours = [5, 11, 17]
-        else:
-            allowed_hours = [5, 11, 17, 23]
-            
-        if berlin_hour not in allowed_hours:
-            print(f"☕ [ШТАТНИЙ ПРОПУСК] Для {total_files} файлів година {berlin_hour} не передбачена графіком.")
-            sys.exit(0)
-            
-        print("✅ Успішно! Умови графіку виконано. Переходимо до відбору та обробки медіа.")
 
     try:
         results = service.files().list(
