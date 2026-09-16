@@ -1,16 +1,58 @@
 import json
 import os
 import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import requests
 
 from auth_tiktok import get_gdrive_service
 from config_tiktok import FOLDER_INPUT_ID, FOLDER_TRASH_ID
+from drive_manager_tiktok import count_total_files
 
 
-def check_gdrive_has_files():
-    """1. Перевіряє наявність файлів у папці Google Drive."""
+def set_github_output(key, value):
+    """Записує змінну у GITHUB_OUTPUT для використання у кроках GitHub Actions."""
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if github_output:
+        with open(github_output, "a", encoding="utf-8") as f:
+            f.write(f"{key}={value}\n")
+
+
+def check_cron_schedule(service, run_mode):
+    """1. Перевіряє розклад публікацій у режимі cron."""
+    if run_mode != "cron":
+        return True
+
+    print("🔍 [PRE-FLIGHT] Перевірка графіку публікації (режим CRON)...")
     try:
-        service = get_gdrive_service()
+        total_files = count_total_files(service)
+        berlin_hour = datetime.now(ZoneInfo("Europe/Berlin")).hour
+        print(f"📊 На Диску знайдено файлів: {total_files} | Поточна година в DE: {berlin_hour}")
+
+        allowed_hours = []
+        if total_files <= 1000:
+            allowed_hours = [11]
+        elif total_files <= 2000:
+            allowed_hours = [11, 17]
+        elif total_files <= 3000:
+            allowed_hours = [5, 11, 17]
+        else:
+            allowed_hours = [5, 11, 17, 23]
+
+        if berlin_hour not in allowed_hours:
+            print(f"☕ [ШТАТНИЙ ПРОПУСК] Для {total_files} файлів година {berlin_hour} не передбачена графіком.")
+            return False
+
+        print("✅ [PRE-FLIGHT] Умови графіку виконано!")
+        return True
+    except Exception as e:
+        print(f"❌ PRE-FLIGHT ERROR: Помилка перевірки графіку: {e}")
+        return False
+
+
+def check_gdrive_has_files(service):
+    """2. Перевіряє наявність файлів у папці Google Drive."""
+    try:
         results = (
             service.files()
             .list(
@@ -20,14 +62,10 @@ def check_gdrive_has_files():
             )
             .execute()
         )
-        files = [
-            f for f in results.get("files", []) if f["id"] != FOLDER_TRASH_ID
-        ]
+        files = [f for f in results.get("files", []) if f["id"] != FOLDER_TRASH_ID]
         if not files:
-            print(
-                "☕ PRE-FLIGHT: Папка Google Диску порожня. Скасовуємо подальше виконання."
-            )
-            sys.exit(0)
+            print("☕ [ШТАТНИЙ ПРОПУСК] Папка Google Диску порожня. Скасовуємо подальше виконання.")
+            return False
         print(f"✅ PRE-FLIGHT: Знайдено файлів у Google Диску: {len(files)}")
         return True
     except Exception as e:
@@ -36,7 +74,7 @@ def check_gdrive_has_files():
 
 
 def get_valid_tiktok_token():
-    """2. Оновлює та повертає валідний access_token TikTok."""
+    """3. Оновлює та повертає валідний access_token TikTok."""
     token_path = "tiktok_tokens.json"
     if not os.path.exists(token_path):
         print("❌ PRE-FLIGHT ERROR: Файл tiktok_tokens.json відсутній!")
@@ -87,14 +125,13 @@ def get_valid_tiktok_token():
 
 
 def test_tiktok_account_privacy_mode(access_token):
-    """3. Перевіряє, чи акаунт TikTok знаходиться в ПРИВАТНОМУ режимі (Dummy Init Check)."""
+    """4. Перевіряє, чи акаунт TikTok знаходиться в ПРИВАТНОМУ режимі."""
     url = "https://open.tiktokapis.com/v2/post/publish/video/init/"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json; charset=UTF-8",
     }
 
-    # Відправляємо тестовий мета-запит на публікацію (1 МБ фейковий розмір)
     dummy_payload = {
         "post_info": {
             "title": "#preflight_test",
@@ -112,32 +149,22 @@ def test_tiktok_account_privacy_mode(access_token):
     }
 
     try:
-        response = requests.post(
-            url, headers=headers, json=dummy_payload, timeout=10
-        )
+        response = requests.post(url, headers=headers, json=dummy_payload, timeout=10)
         res_data = response.json()
 
         error_info = res_data.get("error", {})
         error_code = error_info.get("code")
 
         if error_code == "unaudited_client_can_only_post_to_private_accounts":
-            print(
-                "⚠️ PRE-FLIGHT CANCELLED: Акаунт TikTok зараз у ПУБЛІЧНОМУ режимі!"
-            )
-            print(
-                "👉 Переключіть акаунт у приватний режим у додатку TikTok (Налаштування -> Конфіденційність -> Приватний акаунт), щоб дозволити завантаження."
-            )
+            print("⚠️ PRE-FLIGHT CANCELLED: Акаунт TikTok зараз у ПУБЛІЧНОМУ режимі!")
+            print("👉 Переключіть акаунт у приватний режим у додатку TikTok.")
             return False
 
         if response.status_code == 200 and error_code == "ok":
-            print(
-                "✅ PRE-FLIGHT: Акаунт TikTok у приватній формі! Публікація дозволена."
-            )
+            print("✅ PRE-FLIGHT: Акаунт TikTok у приватній формі! Публікація дозволена.")
             return True
 
-        print(
-            f"❌ PRE-FLIGHT ERROR: TikTok відхилив тестовий запит (Код: {error_code}): {error_info.get('message')}"
-        )
+        print(f"❌ PRE-FLIGHT ERROR: TikTok відхилив тестовий запит (Код: {error_code}): {error_info.get('message')}")
         return False
 
     except Exception as e:
@@ -146,26 +173,41 @@ def test_tiktok_account_privacy_mode(access_token):
 
 
 def main():
-    print("🔍 [PRE-FLIGHT CHECK] Старт швидкої перевірки умов публікації...")
+    run_mode = os.environ.get("RUN_MODE", "manual")
+    print(f"🔍 [PRE-FLIGHT CHECK] Старт швидкої перевірки умов (режим: {run_mode.upper()})...")
 
-    # 1. Перевірка файлів у Google Drive
-    check_gdrive_has_files()
+    # Авторизація в GDrive
+    try:
+        service = get_gdrive_service()
+    except Exception as e:
+        print(f"❌ PRE-FLIGHT ERROR: Помилка доступу до GDrive: {e}")
+        set_github_output("should_run", "false")
+        sys.exit(1)
 
-    # 2. Перевірка токенів TikTok
+    # 1. Швидка перевірка графіку публікацій (якщо CRON)
+    if not check_cron_schedule(service, run_mode):
+        set_github_output("should_run", "false")
+        sys.exit(0)  # Штатний пропуск (зелена галочка в GitHub)
+
+    # 2. Перевірка файлів у Google Drive
+    if not check_gdrive_has_files(service):
+        set_github_output("should_run", "false")
+        sys.exit(0)  # Штатний пропуск (зелена галочка в GitHub)
+
+    # 3. Перевірка та оновлення токенів TikTok
     access_token = get_valid_tiktok_token()
     if not access_token:
-        sys.exit(1)
+        set_github_output("should_run", "false")
+        sys.exit(1)  # Помилка авторизації (червоний хрестик)
 
-    # 3. Перевірка режиму акаунту (Public / Private)
+    # 4. Перевірка режиму акаунту (Public / Private)
     if not test_tiktok_account_privacy_mode(access_token):
-        print(
-            "🛑 Процес зупинено за 3 секунди без скачування та обробки медіафайлів."
-        )
-        sys.exit(1)
+        set_github_output("should_run", "false")
+        sys.exit(1)  # Помилка налаштування акаунту (червоний хрестик)
 
-    print(
-        "🚀 PRE-FLIGHT CHECK успішно пройдено! Переходимо до обробки медіа..."
-    )
+    # Все пройшло успішно -> дозволяємо запуск наступних важких кроків
+    set_github_output("should_run", "true")
+    print("🚀 PRE-FLIGHT CHECK успішно пройдено! Переходимо до обробки медіа...")
 
 
 if __name__ == "__main__":
