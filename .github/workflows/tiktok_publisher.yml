@@ -32,6 +32,24 @@ jobs:
         python-version: '3.12'
         cache: 'pip'
 
+    # КРОК 1: Встановлюємо МІНІМАЛЬНІ залежності для швидкої перевірки (займе 3-5 сек)
+    - name: Install Minimal Pre-flight Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests google-api-python-client google-auth
+
+    # КРОК 2: Швидка перевірка TikTok API та Google Диску (без FFmpeg та системних пакетів)
+    - name: Fast Pre-flight Check (TikTok API & GDrive)
+      env:
+        GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+        CLIENT_KEY_TIKTOK: ${{ secrets.CLIENT_KEY_TIKTOK }}
+        CLIENT_SECRET_TIKTOK: ${{ secrets.CLIENT_SECRET_TIKTOK }}
+        RUN_MODE: ${{ github.event.inputs.run_mode }}
+      run: |
+        cd tiktok
+        python check_preflight.py
+        
+    # КРОК 3: Важкі системні пакети (виконуються ТІЛЬКИ якщо Pre-flight пройшов)
     - name: Install System Dependencies (FFmpeg, ImageMagick & Fonts)
       env:
         DEBIAN_FRONTEND: noninteractive
@@ -41,25 +59,26 @@ jobs:
         sudo sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@\*"/g' /etc/ImageMagick-*/policy.xml || true
         sudo sed -i 's/domain="coder" rights="none" pattern="PDF"/domain="coder" rights="read|write" pattern="PDF"/' /etc/ImageMagick-*/policy.xml || true
 
-    - name: Install Python Dependencies
+    # КРОК 4: Важкі Python-залежності для обробки медіа
+    - name: Install Heavy Python Dependencies
       run: |
-        python -m pip install --upgrade pip
-        # Додано pilmoji для рендерингу емодзі на відео/фото
-        pip install google-api-python-client google-auth requests pillow pillow-heif "moviepy<2.0" pilmoji
-        
+        pip install pillow pillow-heif "moviepy<2.0" pilmoji
+
+    # КРОК 5: Повний завантажувальний та монтажний скрипт
     - name: Run TikTok Automation Script
       env:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         CLIENT_KEY_TIKTOK: ${{ secrets.CLIENT_KEY_TIKTOK }}
         CLIENT_SECRET_TIKTOK: ${{ secrets.CLIENT_SECRET_TIKTOK }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        # Прокидаємо вибраний input у системну змінну для Python
         RUN_MODE: ${{ github.event.inputs.run_mode }}
       run: |
         cd tiktok
         python main_tiktok.py
 
+    # КРОК 6: Збереження оновлених токенів
     - name: Commit and push updated TikTok tokens
+      if: always() # Виконується навіть при помилці, якщо токени було оновлено під час перевірки
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
