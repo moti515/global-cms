@@ -1,6 +1,7 @@
 import os
 import requests
 import subprocess
+import uuid
 from PIL import Image
 from pillow_heif import register_heif_opener
 
@@ -8,23 +9,41 @@ from config import IMAGEKIT_PRIVATE_KEY, IMGBB_API_KEY, TEMP_MEDIA_DIR
 
 register_heif_opener()
 
+def get_safe_filename(orig_name: str, prefix: str = "") -> str:
+    """
+    Генерує безпечне латинське ім'я файлу (ASCII), що повністю усуває
+    помилки Meta/Instagram API через кирилицю, тайську мову, спецсимволи та подвійні розширення.
+    """
+    # Отримуємо розширення файлу
+    ext = os.path.splitext(orig_name)[1].lower()
+    if not ext or ext not in ['.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov', '.avi']:
+        ext = '.jpg'
+        
+    # Генеруємо коротке унікальне латинське ім'я
+    unique_id = uuid.uuid4().hex[:10]
+    if prefix:
+        return f"{prefix}_{unique_id}{ext}"
+    return f"{unique_id}{ext}"
 
 def convert_and_format_media(local_path, orig_name, mode):
     """
-    Конвертує HEIC/GIF та налаштовує пропорції зображень і відео під вимоги Feed / Stories.
+    Конвертує HEIC/GIF та налаштовує пропорції зображень і відео під вимоги Feed / Stories,
+    використовуючи безпечні латинські імена файлів.
     """
     lower_name = orig_name.lower()
     mime_type = "image/jpeg" if lower_name.endswith(('.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp')) else "video/mp4"
     final_upload_path = local_path
     
-    # 1. Конвертація форматів
+    # 1. Конвертація форматів із безпечними іменами
     if lower_name.endswith('.gif'):
-        mp4_path = os.path.join(TEMP_MEDIA_DIR, orig_name.rsplit('.', 1)[0] + '_gif.mp4')
+        safe_gif_name = get_safe_filename(orig_name, prefix="gif_conv")
+        mp4_path = os.path.join(TEMP_MEDIA_DIR, safe_gif_name)
         subprocess.run(['ffmpeg', '-y', '-i', local_path, '-movflags', 'faststart', '-pix_fmt', 'yuv420p', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', mp4_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         final_upload_path = mp4_path
         mime_type = "video/mp4"
     elif lower_name.endswith(('.heic', '.heif')):
-        jpg_path = os.path.join(TEMP_MEDIA_DIR, orig_name.rsplit('.', 1)[0] + '.jpg')
+        safe_jpg_name = get_safe_filename(orig_name, prefix="heic_conv")
+        jpg_path = os.path.join(TEMP_MEDIA_DIR, safe_jpg_name)
         with Image.open(local_path) as img:
             img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
         final_upload_path = jpg_path
@@ -42,7 +61,8 @@ def convert_and_format_media(local_path, orig_name, mode):
                 
                 if ratio < 0.8 or ratio > 1.91:
                     print(f"📐 Оптимізація Поста: Пропорції картинки ({ratio:.2f}) коригуються...")
-                    padded_post_path = os.path.join(TEMP_MEDIA_DIR, 'post_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
+                    safe_post_name = get_safe_filename(orig_name, prefix="post_padded")
+                    padded_post_path = os.path.join(TEMP_MEDIA_DIR, safe_post_name)
                     
                     if ratio < 0.8:
                         new_w, new_h = int(h * 0.8), h
@@ -62,7 +82,8 @@ def convert_and_format_media(local_path, orig_name, mode):
     # 3. Оптимізація та нарізка під Сторіз (1080x1920)
     elif mode == 'story' and mime_type == "image/jpeg":
         print("📐 Режим Сторіс: вписуємо зображення у формат 1080x1920...")
-        story_path = os.path.join(TEMP_MEDIA_DIR, 'story_padded_' + orig_name.rsplit('.', 1)[0] + '.jpg')
+        safe_story_name = get_safe_filename(orig_name, prefix="story_padded")
+        story_path = os.path.join(TEMP_MEDIA_DIR, safe_story_name)
         try:
             with Image.open(final_upload_path) as img:
                 img = img.convert('RGB')
@@ -85,7 +106,8 @@ def convert_and_format_media(local_path, orig_name, mode):
 
     elif mode == 'story' and mime_type == "video/mp4":
         print("📐 Режим Сторіс для ВІДЕО: нарізаємо на частини по 50 сек (1080x1920)...")
-        segment_pattern = os.path.join(TEMP_MEDIA_DIR, 'story_part_' + orig_name.rsplit('.', 1)[0] + '_%03d.mp4')
+        part_prefix = f"story_part_{uuid.uuid4().hex[:8]}"
+        segment_pattern = os.path.join(TEMP_MEDIA_DIR, f"{part_prefix}_%03d.mp4")
         
         ffmpeg_cmd = [
             'ffmpeg', '-y', '-i', final_upload_path,
@@ -99,11 +121,10 @@ def convert_and_format_media(local_path, orig_name, mode):
         
         result = subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if result.returncode == 0:
-            prefix = 'story_part_' + orig_name.rsplit('.', 1)[0] + '_'
             generated_parts = sorted([
                 os.path.join(TEMP_MEDIA_DIR, f) 
                 for f in os.listdir(TEMP_MEDIA_DIR) 
-                if f.startswith(prefix) and f.endswith('.mp4')
+                if f.startswith(part_prefix) and f.endswith('.mp4')
             ])
             if generated_parts:
                 files_to_publish = generated_parts
