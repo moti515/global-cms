@@ -144,20 +144,22 @@ def extract_frame_from_video(video_path):
 def get_google_drive_direct_url(file_id, local_file_path=None):
     """Каскадне завантаження на зовнішні хостинги для отримання прямого посилання (Meta API)."""
     if local_file_path and os.path.exists(local_file_path):
-        filename = os.path.basename(local_file_path)
-        is_video = filename.lower().endswith(('.mp4', '.mov', '.avi'))
+        raw_filename = os.path.basename(local_file_path)
+        is_video = raw_filename.lower().endswith(('.mp4', '.mov', '.avi'))
         mime_type = "video/mp4" if is_video else "image/jpeg"
-        remote_filename = "story.mp4" if is_video else "story.jpg"
+        
+        # 💡 Гарантуємо 100% чисте латинське ім'я для будь-якого завантаження
+        clean_filename = get_safe_filename(raw_filename, prefix="upload")
         browser_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         
         # 1️⃣ Litterbox
-        print(f"☁️ Завантажуємо файл {filename} на Litterbox...", flush=True)
+        print(f"☁️ Завантажуємо файл {clean_filename} на Litterbox...", flush=True)
         try:
             with open(local_file_path, 'rb') as f:
                 res = requests.post(
                     'https://litterbox.catbox.moe/resources/internals/api.php',
                     data={'reqtype': 'fileupload', 'time': '1h'},
-                    files={'fileToUpload': (remote_filename, f, mime_type)},
+                    files={'fileToUpload': (clean_filename, f, mime_type)},
                     headers=browser_headers,
                     timeout=(10, 60)
                 )
@@ -170,14 +172,14 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
 
         # 2️⃣ ImageKit.io
         if IMAGEKIT_PRIVATE_KEY:
-            print(f"☁️ Завантажуємо файл {filename} на ImageKit.io...", flush=True)
+            print(f"☁️ Завантажуємо файл {clean_filename} на ImageKit.io...", flush=True)
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
                         'https://upload.imagekit.io/api/v1/files/upload',
                         auth=(IMAGEKIT_PRIVATE_KEY, ''),
-                        files={'file': (filename, f, mime_type)},
-                        data={'fileName': filename, 'useUniqueFileName': 'true'},
+                        files={'file': (clean_filename, f, mime_type)},
+                        data={'fileName': clean_filename, 'useUniqueFileName': 'true'},
                         timeout=90
                     )
                 if res.status_code in [200, 201]:
@@ -186,14 +188,14 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             except Exception as e:
                 print(f"⚠️ Помилка ImageKit: {e}")
 
-        # 3️⃣ Tmpfiles.org (Резервний варіант для фото та відео до 100MB)
-        print(f"☁️ Завантажуємо файл {filename} на Tmpfiles.org...", flush=True)
+        # 3️⃣ Tmpfiles.org
+        print(f"☁️ Завантажуємо файл {clean_filename} на Tmpfiles.org...", flush=True)
         try:
             with open(local_file_path, 'rb') as f:
                 res = requests.post(
                     'https://tmpfiles.org/api/v1/upload',
-                    files={'file': (remote_filename, f, mime_type)},
-                    data={'expire': '86400'},  # Час життя — 24 години (86400 сек)
+                    files={'file': (clean_filename, f, mime_type)},
+                    data={'expire': '86400'},
                     headers=browser_headers,
                     timeout=(10, 60)
                 )
@@ -202,7 +204,6 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 if res_data.get('status') == 'success':
                     page_url = res_data.get('data', {}).get('url')
                     if page_url:
-                        # Перетворюємо URL сторінки на пряме посилання для Meta API (/dl/)
                         direct_url = page_url.replace('tmpfiles.org/', 'tmpfiles.org/dl/')
                         print(f"🔗 Отримано пряме посилання від Tmpfiles: {direct_url}", flush=True)
                         return direct_url, None
@@ -211,13 +212,13 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
 
         # 4️⃣ ImgBB
         if IMGBB_API_KEY and mime_type == "image/jpeg":
-            print(f"☁️ Завантажуємо фото {filename} на ImgBB...", flush=True)
+            print(f"☁️ Завантажуємо фото {clean_filename} на ImgBB...", flush=True)
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
                         'https://api.imgbb.com/1/upload',
                         data={'key': IMGBB_API_KEY, 'expiration': 86400},
-                        files={'image': (filename, f, mime_type)},
+                        files={'image': (clean_filename, f, mime_type)},
                         timeout=30
                     ).json()
                 if res.get('success'):
