@@ -11,7 +11,7 @@ from config import GEMINI_API_KEY, GEMINI_MODELS
 
 
 def get_orthodox_easter(year: int) -> date:
-    """Обчислює дату Православної Пасхи для заданого року."""
+    """Обчислити дату Православної Пасхи для заданого року."""
     a = year % 4
     b = year % 7
     c = year % 19
@@ -50,15 +50,12 @@ def get_active_rules_ordered():
     # -------------------------------------------------------------
     # 1. ТОЧНІ СВЯТА ТА КОНКРЕТНІ ДАТИ (Найвищий пріоритет)
     # -------------------------------------------------------------
-    # Новий рік (30.12 - 01.01)
     if day_month in ["30.12", "31.12", "01.01"]:
         active_rules.append("Новий рік")
         
-    # Різдво (23.12 - 25.12)
     if "23.12" <= day_month <= "25.12":
         active_rules.append("Різдво")
         
-    # Конкретні дні року
     if day_month == "14.02":
         active_rules.append("14 лютого")
     if day_month == "23.02":
@@ -74,26 +71,22 @@ def get_active_rules_ordered():
     if day_month == "03.09":
         active_rules.append("3 вересня")
 
-    # Пасха (Страсна П'ятниця, Великодня Субота, Великдень)
     easter_date = get_orthodox_easter(now.year)
     if (easter_date - timedelta(days=2)) <= today <= easter_date:
         active_rules.append("Пасха")
 
-    # Спеціальні п'ятниці
     if day_of_week == 'Friday':
         if day == 13:
             active_rules.append("П'ятниця 13-те")
         elif day == 12:
             active_rules.append("П'ятниця 12-те")
             
-        # Чорна п'ятниця (будь-яка п'ятниця між 11.11 та 30.11)
         if "11.11" <= day_month <= "30.11":
             active_rules.append("Чорна п'ятниця")
 
     # -------------------------------------------------------------
     # 2. МІСЯЦІ ТА СЕЗОНИ (Середній пріоритет)
     # -------------------------------------------------------------
-    # Місяці
     if month == 2:
         active_rules.append("Лютий")
     elif month == 4:
@@ -103,7 +96,6 @@ def get_active_rules_ordered():
     elif month == 9:
         active_rules.append("Вересень")
 
-    # Пори року
     if month in [12, 1, 2]:
         active_rules.append("Зима")
     if month in [4, 5, 6]:
@@ -120,22 +112,15 @@ def get_active_rules_ordered():
         active_rules.append("Weekend")
 
     active_rules.append(days_map[day_of_week])
-    
-    # -------------------------------------------------------------
-    # 4. ФОЛБЕК
-    # -------------------------------------------------------------
     active_rules.append("Різне")
     
     return active_rules
+
 
 def get_rotated_language_template() -> str:
     """
     Повертає шаблон виводу трьох мов, впорядкованих за ротацією (карусель)
     залежно від поточного дня.
-    
-    День 1: 🇺🇦 -> 🇬🇧 -> 🇩🇪
-    День 2: 🇬🇧 -> 🇩🇪 -> 🇺🇦
-    День 3: 🇩🇪 -> 🇺🇦 -> 🇬🇧
     """
     today_ordinal = datetime.now().date().toordinal()
     shift = today_ordinal % 3
@@ -146,12 +131,10 @@ def get_rotated_language_template() -> str:
         ("🇩🇪", "німецькою")
     ]
 
-    # Зміщуємо список на shift позицій
     rotated_languages = languages[shift:] + languages[:shift]
-
-    # Формуємо підсказку для промту
     template_lines = [f"{flag} [Жарт/коментар {name}]" for flag, name in rotated_languages]
     return "\n\n".join(template_lines)
+
 
 def _call_gemini_api_with_timeout(model: str, prompt: str, image_bytes: bytes) -> str:
     """
@@ -178,17 +161,15 @@ def _call_gemini_api_with_timeout(model: str, prompt: str, image_bytes: bytes) -
 
     return ""
 
+
 def generate_multimodal_caption(image_path, category, tab_name):
     """
     Аналізує зображення за допомогою Google GenAI SDK та генерує тримовний гумористичний підпис.
     Порядок мов змінюється за принципом каруселі щодня.
     """
     is_furniture = "мебл" in tab_name.lower()
-    
-    # Отримуємо ротований шаблон виводу для сьогоднішнього дня
     lang_format = get_rotated_language_template()
 
-    # 1️⃣ Швидкий дефолт, якщо відсутній API-ключ
     if not GEMINI_API_KEY:
         if is_furniture:
             return "Трохи меблевого гумору вам у стрічку! Як вам? 👇😂 #меблі #інтерєр #гумор"
@@ -198,7 +179,6 @@ def generate_multimodal_caption(image_path, category, tab_name):
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Файл {image_path} не знайдено.")
             
-        # Стиснення зображення під ліміти API
         try:
             with Image.open(image_path) as img:
                 if img.mode in ("RGBA", "P"):
@@ -212,11 +192,6 @@ def generate_multimodal_caption(image_path, category, tab_name):
             with open(image_path, "rb") as f:
                 image_bytes = f.read()
 
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
-        
-        # -------------------------------------------------------------
-        # 2️⃣ ПОДІЛ ПРОМТУ НА ДВА ОКРЕМИХ КОНТЕКСТИ (З ДИНАМІЧНОЮ РОТАЦІЄЮ)
-        # -------------------------------------------------------------
         if is_furniture:
             prompt = (
                 f"Ти — експерт з меблевого гумору, майстер меметики та креативний автор пабліку для меблевиків.\n"
@@ -257,24 +232,16 @@ def generate_multimodal_caption(image_path, category, tab_name):
                 f"- Формат відповіді СТРОГО 3 абзаци з відповідними прапорами у ВКАЗАНОМУ ПОРЯДКУ:\n\n"
                 f"{lang_format}"
             )
-        
-        inputs = [
-            {"type": "text", "text": prompt},
-            {
-                "type": "image",
-                "data": base64_image,
-                "mime_type": "image/jpeg"
-            }
-        ]
-        
+
         # -------------------------------------------------------------
-        # 3️⃣ ВИКОНАННЯ ЗАПИТУ З ЖОРСТКИМ ТАЙМАУТОМ В 45 СЕКУНД
+        # ВИКОНАННЯ ЗАПИТУ З ЖОРСТКИМ ТАЙМАУТОМ В 45 СЕКУНД
         # -------------------------------------------------------------
         for model in GEMINI_MODELS:
-            print(f"🚀 Спроба генерації підпису через {model} (таймаут 45с)...")
+            print(f"🚀 Спроба генерації підпису через {model} (таймаут 45с)...", flush=True)
             try:
                 with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_call_gemini_api_with_timeout, model, inputs, GEMINI_API_KEY)
+                    # Передаємо строго 3 аргументи для 3 параметрів функції:
+                    future = executor.submit(_call_gemini_api_with_timeout, model, prompt, image_bytes)
                     result_text = future.result(timeout=45)
                     
                     if result_text and result_text.strip():
