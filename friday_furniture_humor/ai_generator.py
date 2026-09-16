@@ -151,6 +151,34 @@ def get_rotated_language_template() -> str:
     template_lines = [f"{flag} [Жарт/коментар {name}]" for flag, name in rotated_languages]
     return "\n\n".join(template_lines)
 
+def _call_gemini_api_with_timeout(model: str, inputs: list, api_key: str) -> str:
+    """
+    Внутрішня функція для виконання запиту до Gemini з таймаутом HTTP-мережі.
+    """
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=40000)  # Таймаут HTTP-запиту: 40 секунд
+    )
+    
+    if hasattr(client, 'interactions'):
+        interaction = client.interactions.create(
+            model=model,
+            input=inputs
+        )
+        if interaction and hasattr(interaction, 'output_text') and interaction.output_text:
+            return interaction.output_text
+        elif interaction and hasattr(interaction, 'text') and interaction.text:
+            return interaction.text
+    else:
+        response = client.models.generate_content(
+            model=model,
+            contents=inputs
+        )
+        if response and response.text:
+            return response.text
+
+    return ""
+
 def generate_multimodal_caption(image_path, category, tab_name):
     """
     Аналізує зображення за допомогою Google GenAI SDK та генерує тримовний гумористичний підпис.
@@ -240,18 +268,23 @@ def generate_multimodal_caption(image_path, category, tab_name):
             }
         ]
         
-        client = genai.Client()
+        # -------------------------------------------------------------
+        # 3️⃣ ВИКОНАННЯ ЗАПИТУ З ЖОРСТКИМ ТАЙМАУТОМ В 45 СЕКУНД
+        # -------------------------------------------------------------
         for model in GEMINI_MODELS:
-            print(f"🚀 Спроба генерації підпису через {model}...")
+            print(f"🚀 Спроба генерації підпису через {model} (таймаут 45с)...")
             try:
-                interaction = client.interactions.create(
-                    model=model,
-                    input=inputs
-                )
-                if interaction and interaction.output_text:
-                    return interaction.output_text.strip()
-                else:
-                    print(f"⚠️ Модель {model} повернула порожню відповідь.")
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_call_gemini_api_with_timeout, model, inputs, GEMINI_API_KEY)
+                    result_text = future.result(timeout=45)
+                    
+                    if result_text and result_text.strip():
+                        return result_text.strip()
+                    else:
+                        print(f"⚠️ Модель {model} повернула порожню відповідь.")
+
+            except TimeoutError:
+                print(f"⏱️ ТАЙМАУТ: Модель {model} не відповіла за 45 секунд! Переходимо до наступної.")
             except Exception as model_err:
                 print(f"⚠️ Помилка моделі {model}: {model_err}. Переходимо до наступної.")
                 continue
