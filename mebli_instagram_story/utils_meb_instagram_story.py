@@ -65,7 +65,14 @@ def publish_story_to_meta(ig_user_id, meta_access_token, pub_url, is_video):
     }
     
     try:
-        res = requests.post(f"https://graph.facebook.com/v19.0/{ig_user_id}/media", data=payload).json()
+        # Додано timeout=(10, 120)
+        response = requests.post(
+            f"https://graph.facebook.com/v19.0/{ig_user_id}/media", 
+            data=payload, 
+            timeout=(10, 120)
+        )
+        res = response.json()
+        
         if not res or "id" not in res:
             return False, f"Помилка створення контейнера сторіз: {res}"
             
@@ -73,15 +80,23 @@ def publish_story_to_meta(ig_user_id, meta_access_token, pub_url, is_video):
         if not wait_for_meta_container(creation_id, meta_access_token):
             return False, "Контейнер медіафайлу не перейшов у стан готовності (Таймаут)."
             
-        publish_res = requests.post(f"https://graph.facebook.com/v19.0/{ig_user_id}/media_publish", data={
-            "creation_id": creation_id, 
-            "access_token": meta_access_token
-        }).json()
+        # Додано timeout=(10, 120)
+        pub_response = requests.post(
+            f"https://graph.facebook.com/v19.0/{ig_user_id}/media_publish", 
+            data={
+                "creation_id": creation_id, 
+                "access_token": meta_access_token
+            },
+            timeout=(10, 120)
+        )
+        publish_res = pub_response.json()
         
         if "id" in publish_res:
             return True, publish_res["id"]
         else:
             return False, f"Помилка публікації сторіз в Meta API: {publish_res}"
             
+    except requests.exceptions.Timeout:
+        return False, "Перевищено час очікування відповіді від Meta API (Timeout)."
     except Exception as e:
         return False, f"Критичний збій під час запиту до Meta API: {e}"
