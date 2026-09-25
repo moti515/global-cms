@@ -251,7 +251,7 @@ def delete_from_imagekit(file_id: str):
         print(f"🗑️ Тимчасовий файл {file_id} видалено з ImageKit.")
     except Exception as e:
         print(f"⚠️ Помилка видалення з ImageKit: {e}")
- if res.status_code == 200:
+    if res.status_code == 200:
                 res_data = res.json()
                 if res_data.get('status') == 'success':
                     page_url = res_data.get('data', {}).get('url')
