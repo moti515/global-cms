@@ -9,17 +9,18 @@ from config import IMAGEKIT_PRIVATE_KEY, IMGBB_API_KEY, TEMP_MEDIA_DIR
 
 register_heif_opener()
 
-def get_safe_filename(orig_name: str, prefix: str = "") -> str:
+def get_safe_filename(orig_name: str, prefix: str = "", target_ext: str = None) -> str:
     """
     Генерує безпечне латинське ім'я файлу (ASCII), що повністю усуває
-    помилки Meta/Instagram API через кирилицю, тайську мову, спецсимволи та подвійні розширення.
+    помилки Meta/Instagram API через кирилицю, спецсимволи та подвійні розширення.
     """
-    # Отримуємо розширення файлу
-    ext = os.path.splitext(orig_name)[1].lower()
-    if not ext or ext not in ['.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov', '.avi']:
-        ext = '.jpg'
+    if target_ext:
+        ext = target_ext.lower() if target_ext.startswith('.') else f".{target_ext.lower()}"
+    else:
+        ext = os.path.splitext(orig_name)[1].lower()
+        if not ext or ext not in ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.mp4', '.mov', '.avi']:
+            ext = '.jpg'
         
-    # Генеруємо коротке унікальне латинське ім'я
     unique_id = uuid.uuid4().hex[:10]
     if prefix:
         return f"{prefix}_{unique_id}{ext}"
@@ -34,15 +35,26 @@ def convert_and_format_media(local_path, orig_name, mode):
     mime_type = "image/jpeg" if lower_name.endswith(('.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp')) else "video/mp4"
     final_upload_path = local_path
     
-    # 1. Конвертація форматів із безпечними іменами
+    # 1. Конвертація форматів із безпечними іменами та правильними розширеннями
     if lower_name.endswith('.gif'):
-        safe_gif_name = get_safe_filename(orig_name, prefix="gif_conv")
+        # Примусово задаємо target_ext='.mp4' для конвертованого GIF
+        safe_gif_name = get_safe_filename(orig_name, prefix="gif_conv", target_ext=".mp4")
         mp4_path = os.path.join(TEMP_MEDIA_DIR, safe_gif_name)
-        subprocess.run(['ffmpeg', '-y', '-i', local_path, '-movflags', 'faststart', '-pix_fmt', 'yuv420p', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', mp4_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        ffmpeg_cmd = [
+            'ffmpeg', '-y', '-i', local_path,
+            '-movflags', '+faststart',
+            '-pix_fmt', 'yuv420p',
+            '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+            '-c:v', 'libx264',
+            mp4_path
+        ]
+        subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         final_upload_path = mp4_path
         mime_type = "video/mp4"
+
     elif lower_name.endswith(('.heic', '.heif')):
-        safe_jpg_name = get_safe_filename(orig_name, prefix="heic_conv")
+        safe_jpg_name = get_safe_filename(orig_name, prefix="heic_conv", target_ext=".jpg")
         jpg_path = os.path.join(TEMP_MEDIA_DIR, safe_jpg_name)
         with Image.open(local_path) as img:
             img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
@@ -61,7 +73,7 @@ def convert_and_format_media(local_path, orig_name, mode):
                 
                 if ratio < 0.8 or ratio > 1.91:
                     print(f"📐 Оптимізація Поста: Пропорції картинки ({ratio:.2f}) коригуються...")
-                    safe_post_name = get_safe_filename(orig_name, prefix="post_padded")
+                    safe_post_name = get_safe_filename(orig_name, prefix="post_padded", target_ext=".jpg")
                     padded_post_path = os.path.join(TEMP_MEDIA_DIR, safe_post_name)
                     
                     if ratio < 0.8:
@@ -82,7 +94,7 @@ def convert_and_format_media(local_path, orig_name, mode):
     # 3. Оптимізація та нарізка під Сторіз (1080x1920)
     elif mode == 'story' and mime_type == "image/jpeg":
         print("📐 Режим Сторіс: вписуємо зображення у формат 1080x1920...")
-        safe_story_name = get_safe_filename(orig_name, prefix="story_padded")
+        safe_story_name = get_safe_filename(orig_name, prefix="story_padded", target_ext=".jpg")
         story_path = os.path.join(TEMP_MEDIA_DIR, safe_story_name)
         try:
             with Image.open(final_upload_path) as img:
@@ -115,7 +127,7 @@ def convert_and_format_media(local_path, orig_name, mode):
             '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black',
             '-c:v', 'libx264', '-profile:v', 'high', '-level', '4.2', '-crf', '23', '-preset', 'fast',
             '-g', '60', '-keyint_min', '60', '-sc_threshold', '0', '-r', '30',
-            '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-movflags', 'faststart', '-pix_fmt', 'yuv420p',
+            '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-movflags', '+faststart', '-pix_fmt', 'yuv420p',
             segment_pattern
         ]
         
@@ -148,8 +160,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         is_video = raw_filename.lower().endswith(('.mp4', '.mov', '.avi'))
         mime_type = "video/mp4" if is_video else "image/jpeg"
         
-        # 💡 Гарантуємо 100% чисте латинське ім'я для будь-якого завантаження
-        clean_filename = get_safe_filename(raw_filename, prefix="upload")
+        clean_filename = raw_filename  # Файл вже має гарантовано безпечне ім'я
         browser_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         
         # 1️⃣ Litterbox
@@ -206,6 +217,40 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                     if page_url:
                         direct_url = page_url.replace('tmpfiles.org/', 'tmpfiles.org/dl/')
                         print(f"🔗 Отримано пряме посилання від Tmpfiles: {direct_url}", flush=True)
+                        return direct_url, None
+        except Exception as e:
+            print(f"⚠️ Помилка Tmpfiles: {e}")
+
+        # 4️⃣ ImgBB
+        if IMGBB_API_KEY and mime_type == "image/jpeg":
+            print(f"☁️ Завантажуємо фото {clean_filename} на ImgBB...", flush=True)
+            try:
+                with open(local_file_path, 'rb') as f:
+                    res = requests.post(
+                        'https://api.imgbb.com/1/upload',
+                        data={'key': IMGBB_API_KEY, 'expiration': 86400},
+                        files={'image': (clean_filename, f, mime_type)},
+                        timeout=30
+                    ).json()
+                if res.get('success'):
+                    return res['data']['url'], None
+            except Exception as e:
+                print(f"⚠️ Помилка ImgBB: {e}")
+
+    return f"https://docs.google.com/uc?export=download&id={file_id}", None
+
+
+def delete_from_imagekit(file_id: str):
+    """Видаляє тимчасовий файл з ImageKit.io."""
+    if not file_id or not IMAGEKIT_PRIVATE_KEY:
+        return
+    url = f"https://api.imagekit.io/v1/files/{file_id}"
+    try:
+        requests.delete(url, auth=(IMAGEKIT_PRIVATE_KEY, ''), timeout=20)
+        print(f"🗑️ Тимчасовий файл {file_id} видалено з ImageKit.")
+    except Exception as e:
+        print(f"⚠️ Помилка видалення з ImageKit: {e}")
+                     print(f"🔗 Отримано пряме посилання від Tmpfiles: {direct_url}", flush=True)
                         return direct_url, None
         except Exception as e:
             print(f"⚠️ Помилка Tmpfiles: {e}")
