@@ -1,7 +1,7 @@
 name: Publish Furniture Content
 
 on:
-  workflow_dispatch:      # Запуск повністю передано в руки зовнішніх API-запитів
+  workflow_dispatch:
     inputs:
       forced_mode:
         description: 'Режим публікації'
@@ -16,6 +16,7 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # ⏱️ Автоматично зупинить workflow, якщо він висить понад 15 хвилин
 
     steps:
     - name: Перевірка коду репозиторію
@@ -41,6 +42,7 @@ jobs:
       if: github.event.inputs.forced_mode != 'ig_story'
       working-directory: mebli_insta_facebook_post
       env:
+        PYTHONUNBUFFERED: "1"  # ⚡ Вивід логів без затримок у реальному часі
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
@@ -57,6 +59,7 @@ jobs:
       if: github.event.inputs.forced_mode == 'ig_story'
       working-directory: mebli_instagram_story
       env:
+        PYTHONUNBUFFERED: "1"  # ⚡ Вивід логів без затримок у реальному часі
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
