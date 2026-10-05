@@ -56,7 +56,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                     data=data,
                     files=files,
                     headers=headers,
-                    timeout=30
+                    timeout=15
                 )
                 if res.status_code == 200 and res.text.strip().startswith('http'):
                     direct_url = res.text.strip()
@@ -78,7 +78,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                         auth=(config.IMAGEKIT_PRIVATE_KEY, ''),
                         files={'file': (filename, f, mime_type)},
                         data={'fileName': filename, 'useUniqueFileName': 'true'},
-                        timeout=60
+                        timeout=40
                     )
                     if res.status_code in [200, 201]:
                         res_data = res.json()
@@ -98,7 +98,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                         'https://api.imgbb.com/1/upload',
                         data={'key': config.IMGBB_API_KEY, 'expiration': 86400},
                         files={'image': (filename, img_bytes, mime_type)},
-                        timeout=30
+                        timeout=25
                     ).json()
                     if res.get('success'):
                         print(f"🔗 Посилання від ImgBB: {res['data']['url']}")
@@ -143,14 +143,14 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
 
     # Пул актуальних та стабільних моделей для генерації контенту
     models_to_try = [
-            "gemini-3.7-flash",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite"
-        ]
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite"
+    ]
     
     lang_instructions = {
         0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1-2 доречних емоїз.",
@@ -175,42 +175,33 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
     )
 
     try:
-        # Ініціалізація нового клієнта через офіційний google-genai SDK
+        # Ініціалізація офіційного SDK google-genai
         client = genai.Client(api_key=config.GEMINI_API_KEY)
-        inputs = [{"type": "text", "text": prompt}]
         
-        # Обробка та стиснення медіафайлів для ШІ за допомогою Pillow
+        # Готуємо списки контенту (текстовий промпт + відкриті PIL зображення)
+        contents = [prompt]
+        
         for img_path in image_paths:
             if os.path.exists(img_path):
                 try:
-                    with PILImage.open(img_path) as img:
-                        if img.mode in ("RGBA", "P"):
-                            img = img.convert("RGB")
-                        
-                        img.thumbnail((1024, 1024))
-                        buffer = io.BytesIO()
-                        img.save(buffer, format="JPEG", quality=82, optimize=True)
-                        image_bytes = buffer.getvalue()
-                    
-                    base64_image = base64.b64encode(image_bytes).decode('utf-8')
-                    inputs.append({
-                        "type": "image",
-                        "data": base64_image,
-                        "mime_type": "image/jpeg"
-                    })
+                    img = PILImage.open(img_path)
+                    if img.mode in ("RGBA", "P"):
+                        img = img.convert("RGB")
+                    img.thumbnail((1024, 1024))
+                    contents.append(img)
                 except Exception as img_err:
-                    print(f"⚠️ Не вдалося оптимізувати зображення {img_path}: {img_err}")
+                    print(f"⚠️ Не вдалося відкрити зображення {img_path}: {img_err}")
         
-        # Почерговий запит до моделей у разі тимчасової недоступності квот
+        # Почерговий запит до моделей
         for model in models_to_try:
             print(f"🚀 Спроба генерації підпису через {model}...")
             try:
-                interaction = client.interactions.create(
+                response = client.models.generate_content(
                     model=model,
-                    input=inputs
+                    contents=contents
                 )
-                if interaction and interaction.output_text:
-                    return interaction.output_text.strip()
+                if response and response.text:
+                    return response.text.strip()
                 else:
                     print(f"⚠️ Модель {model} повернула порожню відповідь.")
             except Exception as model_err:
