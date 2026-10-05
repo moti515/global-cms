@@ -193,23 +193,13 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     if not gemini_key:
         return pref.get("no_gemini_caption", "Професійна якість та увага до деталей!")
 
-    models_to_try = [
-            "gemini-3.7-flash",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite"
-        ]
-    
     lang_instructions = {
         0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1 емодзі.",
         1: "Write the text exclusively in ENGLISH. You may include 1 emoji.",
         2: "Schreibe den Text ausschließlich auf DEUTSCH. Du darfst 1 Emoji hinzufügen."
     }
     
-    # 🚫 Формуємо блок заборони повторів
+    # 🚫 Блок заборони повторів
     prev_captions_block = ""
     if previous_captions:
         formatted_list = "\n".join([f'• "{cap}"' for cap in previous_captions])
@@ -221,7 +211,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
             f"Зміни ракурс, вибери іншу деталь на фото або інший контекст!"
         )
 
-    # 🧠 Оптимізований та розширений промт
+    # 🧠 Промт (без змін)
     prompt = (
         f"Ти — досвідчений меблевий конструктор, майстер виробництва та іронічний копірайтер для Instagram Stories.\n"
         f"Проаналізуй це зображення (або кадр з відео) і придумай ОДНУ коротку, влучну та чіпляючу фразу (1-2 короткі речення) "
@@ -236,54 +226,79 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         f"📋 ДОДАТКОВИЙ КОНТЕКСТ:\n"
         f"Бренд/Категорія: '{real_manufacturer}'. Рік: {year}. Локація: {resolved_loc if resolved_loc else 'Меблеве виробництво'}.\n"
         f"{prev_captions_block}\n\n"
-        f"⚠️ СУВОРІ ВИМОГИ:\n"
+        f"⚠️ СУВОРЕ ВИМОГИ:\n"
         f"1. {lang_instructions.get(lang_idx, lang_instructions[0])}\n"
         f"2. Будь живим, прямим та коротким. Уникай кліше: 'найкраща якість', 'індивідуальний підхід', 'купуйте в нас'.\n"
         f"3. Поверни ЛИШЕ готовий текст підпису. Без лапок, без вступних слів, без хештегів та пояснень."
     )
 
     try:
+        # Ініціалізація офіційного SDK (автоматично бере GEMINI_API_KEY з os.environ)
         client = genai.Client()
-        inputs = [{"type": "text", "text": prompt}]
+        
+        # Готуємо масив contents
+        contents = [prompt]
         
         for img_path in image_paths:
             if os.path.exists(img_path):
                 try:
-                    with PILImage.open(img_path) as img:
-                        if img.mode in ("RGBA", "P"):
-                            img = img.convert("RGB")
-                        
-                        img.thumbnail((1024, 1024))
-                        buffer = io.BytesIO()
-                        img.save(buffer, format="JPEG", quality=82, optimize=True)
-                        image_bytes = buffer.getvalue()
+                    img = PILImage.open(img_path)
+                    if img.mode in ("RGBA", "P"):
+                        img = img.convert("RGB")
                     
-                    base64_image = base64.b64encode(image_bytes).decode('utf-8')
-                    inputs.append({
-                        "type": "image",
-                        "data": base64_image,
-                        "mime_type": "image/jpeg"
-                    })
+                    img.thumbnail((1024, 1024))
+                    # В офіційному google-genai об'єкт PIL.Image передається напряму
+                    contents.append(img)
                 except Exception as img_err:
-                    print(f"⚠️ Не вдалося оптимізувати зображення {img_path}: {img_err}")
+                    print(f"⚠️ Не вдалося обробити зображення {img_path}: {img_err}")
 
-        for model in models_to_try:
-            print(f"🚀 Спроба генерації підпису через {model}...")
+        # 🔍 Автоматично отримуємо та фільтруємо тільки потрібні текстуальні Flash-моделі
+        models_to_try = []
+        try:
+            excluded_keywords = ["image", "tts", "live", "transcribe", "translate", "audio", "veo", "lyria", "embedding", "robotics"]
+            for m in client.models.list():
+                model_name = m.name.replace("models/", "").lower()
+                
+                # Шукаємо саме мультимодальні flash моделі
+                if "flash" in model_name and not any(kw in model_name for kw in excluded_keywords):
+                    models_to_try.append(m.name.replace("models/", ""))
+            
+            # Сортуємо у зворотному порядку, щоб найновіші версії (3.8 -> 3.7 -> 3.6...) були першими
+            models_to_try.sort(reverse=True)
+        except Exception as list_err:
+            print(f"⚠️ Не вдалося автоматично завантажити перелік моделей: {list_err}")
+
+        # Запасний точний список моделей згідно з актуальною документацією Gemini 3
+        if not models_to_try:
+            models_to_try = [
+                "gemini-3.8-flash",
+                "gemini-3.7-flash",
+                "gemini-3.6-flash",
+                "gemini-3.5-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-flash-lite",
+                "gemini-flash-latest"
+            ]
+
+        # Перебираємо моделі до першої успішної відповіді
+        for model_id in models_to_try:
+            print(f"🚀 Генерація підпису через модель {model_id}...")
             try:
-                interaction = client.interactions.create(
-                    model=model,
-                    input=inputs
+                # Офіційний та правильний виклик в google-genai SDK
+                response = client.models.generate_content(
+                    model=model_id,
+                    contents=contents
                 )
-                if interaction and interaction.output_text:
-                    return interaction.output_text.strip()
+                if response and response.text:
+                    return response.text.strip()
                 else:
-                    print(f"⚠️ Модель {model} повернула порожню відповідь.")
+                    print(f"⚠️ Модель {model_id} повернула порожню відповідь.")
             except Exception as model_err:
-                print(f"⚠️ Помилка моделі {model}: {model_err}. Переходимо до наступної.")
+                print(f"⚠️ Помилка моделі {model_id}: {model_err}")
                 continue
 
     except Exception as general_err:
-        print(f"⚠️ Загальний збій блоку ШІ-генерації: {general_err}")
+        print(f"⚠️ Загальна помилка генерації: {general_err}")
         
     return pref.get("fallback_caption", "Точний розрахунок та увага до кожної деталі!")
     
