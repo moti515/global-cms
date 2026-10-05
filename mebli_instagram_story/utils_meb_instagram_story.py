@@ -1,9 +1,9 @@
 """
 ========================================================================================
- 🛠 УТИЛІТИ ТА ХЕЛПЕРІ ПРОЄКТУ (utils_meb_instagram_story.py)
+🛠 УТИЛІТИ ТА ХЕЛПЕРІ ПРОЄКТУ (utils_meb_instagram_story.py)
 ========================================================================================
  Набір допоміжних функцій: валідація файлових імен, ротація мов, парсинг дат/локацій,
- взаємодія з Meta API та безпечне очищення тимчасових директорій.
+ збереження стану мови в Google Sheets, публікація в Meta API та очищення кешу.
 ========================================================================================
 """
 
@@ -14,6 +14,8 @@ import json
 import shutil
 import requests
 from datetime import datetime
+
+import config_meb_insta_story as config
 
 # Імпорт перевірки контейнера з менеджера сервісів
 try:
@@ -37,17 +39,53 @@ def sanitize_filename(filename: str) -> str:
     return f"{sanitized_name}{ext.lower()}"
 
 
-def rotate_language(lang_value: str):
+def rotate_language(lang_value):
     """
-    Визначає поточний індекс мови та повертає значення для наступного раунду (UK -> EN -> DE -> UK).
+    Визначає поточний індекс мови (0: UK, 1: EN, 2: DE) та повертає (lang_idx, next_lang_code).
+    Гнучко приймає як текстові коди ("UK", "EN", "DE"), так і цифри (0, 1, 2).
     """
     lang_clean = str(lang_value).strip().upper()
-    if any(x in lang_clean for x in ["EN", "ENG", "АНГЛ", "ENGLISH"]):
+    
+    if lang_clean in ["1", "EN", "ENG", "АНГЛ", "ENGLISH"]:
         return 1, "DE"
-    elif any(x in lang_clean for x in ["DE", "GER", "НІМ", "DEUTSCH"]):
+    elif lang_clean in ["2", "DE", "GER", "НІМ", "DEUTSCH"]:
         return 2, "UK"
     else:
         return 0, "EN"
+
+
+def get_saved_language(sheets_service) -> str:
+    """
+    Зчитує поточну мову публікації з комірки H2 службового аркуша.
+    """
+    target_cell = "'⚙️ Налаштування Папок'!H2"
+    try:
+        res = sheets_service.spreadsheets().values().get(
+            spreadsheetId=config.SPREADSHEET_ID, range=target_cell
+        ).execute()
+        rows = res.get('values', [])
+        if rows and rows[0] and rows[0][0]:
+            return rows[0][0].strip().upper()
+    except Exception as e:
+        print(f"⚠️ Помилка зчитування мови з комірки H2: {e}")
+    return "UK"
+
+
+def update_saved_language(sheets_service, next_lang_code: str):
+    """
+    Записує мову для наступного запуску в комірку H2 службового аркуша.
+    """
+    target_cell = "'⚙️ Налаштування Папок'!H2"
+    try:
+        sheets_service.spreadsheets().values().update(
+            spreadsheetId=config.SPREADSHEET_ID,
+            range=target_cell,
+            valueInputOption='RAW',
+            body={'values': [[next_lang_code]]}
+        ).execute()
+        print(f"🔄 Мову для НАСТУПНОГО запуску (H2) збережено: {next_lang_code}")
+    except Exception as e:
+        print(f"⚠️ Не вдалося оновити мову в комірці H2: {e}")
 
 
 def parse_year(date_str: str) -> str:
@@ -80,7 +118,7 @@ def parse_location(location_str: str, lang_idx: int) -> str:
 def publish_story_to_meta(ig_user_id: str, meta_access_token: str, pub_url: str, is_video: bool):
     """
     Відправляє медіафайл у Meta API (Створення контейнера -> Очікування готовності -> Публікація).
-    Використовує актуальну версію Graph API v21.0.
+    Використовує Graph API v21.0.
     Повертає кортеж: (bool_успіх, string_id_або_помилка)
     """
     param_type = "video_url" if is_video else "image_url"
@@ -91,7 +129,7 @@ def publish_story_to_meta(ig_user_id: str, meta_access_token: str, pub_url: str,
     }
     
     try:
-        # 1️⃣ Створення медіа-контейнера в Instagram
+        # 1️⃣ Створення медіа-контейнера
         container_endpoint = f"https://graph.facebook.com/v21.0/{ig_user_id}/media"
         response = requests.post(container_endpoint, data=payload, timeout=(10, 120))
         res = response.json()
@@ -101,11 +139,11 @@ def publish_story_to_meta(ig_user_id: str, meta_access_token: str, pub_url: str,
             
         creation_id = res["id"]
         
-        # 2️⃣ Очікування обробки відео/фото серверами Meta
+        # 2️⃣ Очікування обробки медіа
         if not wait_for_meta_container(creation_id, meta_access_token):
             return False, "Контейнер медіафайлу не перейшов у стан готовності (Таймаут/Помилка Meta)."
             
-        # 3️⃣ Фінальна публікація контейнера
+        # 3️⃣ Фінальна публікація
         publish_endpoint = f"https://graph.facebook.com/v21.0/{ig_user_id}/media_publish"
         pub_response = requests.post(
             publish_endpoint, 
@@ -127,7 +165,7 @@ def publish_story_to_meta(ig_user_id: str, meta_access_token: str, pub_url: str,
 
 def cleanup_temp_dir(directory: str = "temp_mebli"):
     """
-    Безпечно видаляє тимчасові файли та очищає робочу папку після завершення роботи скрипта.
+    Безпечно видаляє тимчасові файли та очищає робочу папку після завершення роботи.
     """
     if os.path.exists(directory):
         try:
