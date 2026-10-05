@@ -4,9 +4,13 @@ import json
 import textwrap
 import subprocess
 import requests
+import time
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageOps, ImageFont
 from PIL.ExifTags import TAGS, GPSTAGS
+
+# In-memory кеш для геокодування, щоб не робити повторні запити для однакових координат
+_GEOCODE_CACHE = {}
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -335,59 +339,84 @@ def get_video_metadata(video_path):
 
 def get_location_data(lat, lon):
     """
-    Повертає локалізацію оригінальною мовою місцевості (без примусового accept-language=uk).
+    Повертає локалізацію оригінальною мовою місцевості з підтримкою кешування та обробки лімітів OSM Nominatim.
     Результат: кортеж (КрасиваНазваДляВідео, НазваМістаДляГрупування)
     """
     if lat is None or lon is None: 
         return "", ""
-    try:
-        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15"
-        headers = {'User-Agent': 'FurnitureStories_MetadataBot_2026'}
-        res = requests.get(url, headers=headers, timeout=10).json()
-        address = res.get('address', {})
-        
-        # 1. Точне місце (виробництво, пам'ятка, локальний об'єкт чи назва міста/села)
-        # 🧼 Виключили 'suburb' та 'neighbourhood' з основного списку, щоб великі міста визначалися як міста, а не райони.
-        exact_place = (
-            address.get('tourism') or 
-            address.get('amenity') or 
-            address.get('historic') or
-            address.get('craft') or        # Корисно для меблевих цехів/майстерень
-            address.get('city') or 
-            address.get('town') or 
-            address.get('village') or
-            address.get('municipality') or # Для німецьких громад (Gemeinde)
-            address.get('hamlet')          # Для зовсім маленьких хуторів
-        )
-        
-        # 🔍 Аварійний фолбек: якщо взагалі жодного населеного пункту не знайдено,
-        # тільки тоді беремо мікрорайон або область.
-        if not exact_place:
+    
+    # Округлюємо координати до 4 знаків після коми (~11 метрів), щоб об'єднати сусідні кадри в один кеш
+    cache_key = (round(float(lat), 4), round(float(lon), 4))
+    if cache_key in _GEOCODE_CACHE:
+        return _GEOCODE_CACHE[cache_key]
+
+    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15"
+    headers = {
+        'User-Agent': 'FurnitureStories_Bot/2.0 (furniture_story_publisher)'
+    }
+    
+    for attempt in range(3):
+        try:
+            # Дотримуємося суворого правилу OSM (максимум 1 запит на секунду)
+            time.sleep(1.1)
+            
+            res = requests.get(url, headers=headers, timeout=10)
+            
+            if res.status_code != 200:
+                print(f"⚠️ Помилка OSM HTTP {res.status_code} для координат ({lat}, {lon})")
+                if res.status_code == 429:
+                    time.sleep(2 * (attempt + 1))  # Збільшена затримка при блокуванні rate limit
+                continue
+                
+            res_data = res.json()
+            address = res_data.get('address', {})
+            
+            # 1. Точне місце (виробництво, пам'ятка, локальний об'єкт чи назва міста/села)
             exact_place = (
-                address.get('suburb') or 
-                address.get('neighbourhood') or 
-                address.get('county') or 
-                address.get('state')
+                address.get('tourism') or 
+                address.get('amenity') or 
+                address.get('historic') or
+                address.get('craft') or         # Корисно для меблевих цехів/майстерень
+                address.get('city') or 
+                address.get('town') or 
+                address.get('village') or
+                address.get('municipality') or # Для німецьких громад (Gemeinde)
+                address.get('hamlet')          # Для зовсім маленьких хуторів
             )
             
-        country = address.get('country')
-        display_location = f"{exact_place}, {country}" if exact_place and country else country
-        
-        # 2. Стабільне місто/регіон для кластеризації
-        group_place = (
-            address.get('city') or 
-            address.get('town') or 
-            address.get('village') or 
-            address.get('municipality') or
-            address.get('hamlet') or
-            address.get('county')
-        )
-        group_location = f"{group_place}, {country}" if group_place and country else country
-        
-        return display_location, group_location
-    except Exception as e:
-        print(f"⚠️ Помилка геокодування OSM: {e}")
-        return "", ""
+            if not exact_place:
+                exact_place = (
+                    address.get('suburb') or 
+                    address.get('neighbourhood') or 
+                    address.get('county') or 
+                    address.get('state')
+                )
+                
+            country = address.get('country')
+            display_location = f"{exact_place}, {country}" if exact_place and country else (country or "")
+            
+            # 2. Стабільне місто/регіон для кластеризації
+            group_place = (
+                address.get('city') or 
+                address.get('town') or 
+                address.get('village') or 
+                address.get('municipality') or
+                address.get('hamlet') or
+                address.get('county')
+            )
+            group_location = f"{group_place}, {country}" if group_place and country else (country or "")
+            
+            result = (display_location, group_location)
+            _GEOCODE_CACHE[cache_key] = result
+            return result
+            
+        except json.JSONDecodeError:
+            print(f"⚠️ Отримано некоректну відповідь (HTML/Error) від OSM для координат ({lat}, {lon})")
+        except Exception as e:
+            print(f"⚠️ Помилка геокодування OSM: {e}")
+            
+    _GEOCODE_CACHE[cache_key] = ("", "")
+    return "", ""
 
 def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
     if now_time is None:
