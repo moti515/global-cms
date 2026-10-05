@@ -252,18 +252,26 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 except Exception as img_err:
                     print(f"⚠️ Не вдалося обробити зображення {img_path}: {img_err}")
 
-        # 🔍 Автоматично отримуємо та фільтруємо тільки потрібні текстуальні Flash-моделі
+       # 🔍 Динамічно отримуємо доступні моделі через офіційний API
         models_to_try = []
         try:
-            excluded_keywords = ["image", "tts", "live", "transcribe", "translate", "audio", "veo", "lyria", "embedding", "robotics"]
-            for m in client.models.list():
-                model_name = m.name.replace("models/", "").lower()
-                
-                # Шукаємо саме мультимодальні flash моделі
-                if "flash" in model_name and not any(kw in model_name for kw in excluded_keywords):
-                    models_to_try.append(m.name.replace("models/", ""))
+            # Виключаємо спеціалізовані моделі, які не підходять для текстового/мультимодального копірайтингу
+            excluded_keywords = [
+                "image", "tts", "live", "transcribe", "translate", 
+                "audio", "veo", "lyria", "embedding", "robotics", "omni"
+            ]
             
-            # Сортуємо у зворотному порядку, щоб найновіші версії (3.8 -> 3.7 -> 3.6...) були першими
+            for m in client.models.list():
+                model_name = m.name.replace("models/", "")
+                model_name_lower = model_name.lower()
+                
+                # Перевіряємо підтримку generateContent
+                supported_actions = getattr(m, 'supported_actions', [])
+                if "generateContent" in supported_annotations := supported_actions or not supported_actions:
+                    if "flash" in model_name_lower and not any(kw in model_name_lower for kw in excluded_keywords):
+                        models_to_try.append(model_name)
+            
+            # Сортуємо у зворотному порядку, щоб найновіші версії йшли першими
             models_to_try.sort(reverse=True)
         except Exception as list_err:
             print(f"⚠️ Не вдалося автоматично завантажити перелік моделей: {list_err}")
@@ -280,19 +288,16 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 "gemini-flash-latest"
             ]
 
-        # Перебираємо моделі до першої успішної відповіді
+        # Перебираємо актуальні моделі до першої успішної відповіді
         for model_id in models_to_try:
             print(f"🚀 Генерація підпису через модель {model_id}...")
             try:
-                # Офіційний та правильний виклик в google-genai SDK
                 response = client.models.generate_content(
                     model=model_id,
                     contents=contents
                 )
                 if response and response.text:
                     return response.text.strip()
-                else:
-                    print(f"⚠️ Модель {model_id} повернула порожню відповідь.")
             except Exception as model_err:
                 print(f"⚠️ Помилка моделі {model_id}: {model_err}")
                 continue
