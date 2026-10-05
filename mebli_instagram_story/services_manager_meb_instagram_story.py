@@ -305,7 +305,6 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                     model=model_id,
                     contents=contents,
                     config=gen_config
-                    }
                 )
                 if response and response.text:
                     return response.text.strip()
