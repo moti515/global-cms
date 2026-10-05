@@ -208,6 +208,8 @@ def publish_batch_group(drive_service, sheets_service, batch_items, target_tab="
 
     print(f"\n🚀 РОЗПОЧИНАЄМО ПУБЛІКАЦІЮ СЕРІЇ З {len(batch_items)} СТОРІЗ...")
 
+    current_lang_idx = 0
+
     for idx, item in enumerate(batch_items, 1):
         file_id = item['id']
         raw_file_name = item['raw_name']
@@ -220,17 +222,20 @@ def publish_batch_group(drive_service, sheets_service, batch_items, target_tab="
         print(f"\n--------------------------------------------------")
         print(f"📸 [{idx}/{len(batch_items)}] Обробка {raw_file_name}...")
 
-        # 1. Генерація унікального підпису Gemini API
+        # 1. Генерація унікального підпису Gemini API з ротацією мови
         caption_text = generate_story_caption(
             image_paths=[local_path],
             category=target_tab,
             date_str=date_str,
-            lang_idx=0,
+            lang_idx=current_lang_idx,
             target_loc=display_loc,
             previous_captions=previous_captions
         )
-        print(f"💬 Згенерований текст: \"{caption_text}\"")
+        print(f"💬 Згенерований текст [{current_lang_idx}]: \"{caption_text}\"")
         previous_captions.append(caption_text)
+
+        # Переходимо до наступної мови для наступного сторіс у серії (0 -> 1 -> 2 -> 0)
+        current_lang_idx, _ = rotate_language(str(current_lang_idx))
 
         # 2. Форматування та накладання оверлею (1080x1920)
         lower_name = file_name.lower()
