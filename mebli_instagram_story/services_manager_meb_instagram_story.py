@@ -6,6 +6,7 @@ import requests
 import io
 from PIL import Image as PILImage
 from google import genai
+from google.genai import types
 from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -288,6 +289,14 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 "gemini-flash-latest"
             ]
 
+        # ⚙️ Формуємо конфігурацію з ЕКСПЛІЦИТНИМ ВИМКНЕННЯМ AFC (згідно з Issue #2902)
+        gen_config = types.GenerateContentConfig(
+            temperature=0.7,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=True
+            )
+        )
+
         # Перебираємо актуальні моделі до першої успішної відповіді
         for model_id in models_to_try:
             print(f"🚀 Генерація підпису через модель {model_id}...")
@@ -295,9 +304,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 response = client.models.generate_content(
                     model=model_id,
                     contents=contents,
-                    config={
-                        "temperature": 0.7,
-                        "tools": []  # Вимикаєautomatic function calling для цього запиту
+                    config=gen_config
                     }
                 )
                 if response and response.text:
