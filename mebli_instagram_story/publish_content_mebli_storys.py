@@ -51,6 +51,7 @@ try:
         sanitize_filename,
         publish_story_to_meta,
         cleanup_temp_dir,
+        rotate_language,
     )
 except ImportError:
     from mebli_instagram_story.services_manager_meb_instagram_story import (
