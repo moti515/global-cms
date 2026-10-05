@@ -83,7 +83,7 @@ def fetch_candidate_files(drive_service, hot_folder_id, limit=50):
     - Після 21:00 -> Найновіші файли першими (createdTime desc)
     """
     now_hour = datetime.now().hour
-    is_evening = now_hour >= 21
+    is_evening = now_hour >= 20
     order_by = 'createdTime desc' if is_evening else 'createdTime asc'
     
     print(f"🕒 Поточний час: {datetime.now().strftime('%H:%M')}. Режим вибірки: {'НАЙНОВІШІ (після 21:00)' if is_evening else 'НАЙСТАРІШІ (до 21:00)'}")
