@@ -252,7 +252,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 except Exception as img_err:
                     print(f"⚠️ Не вдалося обробити зображення {img_path}: {img_err}")
 
-       # 🔍 Динамічно отримуємо доступні моделі через офіційний API
+        # 🔍 Динамічно отримуємо доступні моделі через офіційний API
         models_to_try = []
         try:
             # Виключаємо спеціалізовані моделі, які не підходять для текстового/мультимодального копірайтингу
@@ -267,7 +267,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 
                 # Перевіряємо підтримку generateContent
                 supported_actions = getattr(m, 'supported_actions', [])
-                if "generateContent" in supported_annotations := supported_actions or not supported_actions:
+                if "generateContent" in supported_actions or not supported_actions:
                     if "flash" in model_name_lower and not any(kw in model_name_lower for kw in excluded_keywords):
                         models_to_try.append(model_name)
             
