@@ -295,7 +295,10 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 response = client.models.generate_content(
                     model=model_id,
                     contents=contents,
-                    config={"temperature": 0.7}
+                    config={
+                        "temperature": 0.7,
+                        "tools": []  # Вимикаєautomatic function calling для цього запиту
+                    }
                 )
                 if response and response.text:
                     return response.text.strip()
