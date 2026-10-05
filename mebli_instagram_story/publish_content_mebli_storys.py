@@ -1,18 +1,23 @@
 import os
+import sys
 import json
 import time
 import requests
 from datetime import datetime
-from PIL import Image as PILImage
-from google import genai
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
 
 # Централізований конфіг проекту
 import config_meb_insta_story as config
 
-# Імпорт спеціалізованого модуля для обробки медіа, EXIF та геоданих
+# 🛠 Імпорт сервісів (Google, Gemini, Meta API, Хмарні хостинги)
 try:
+    from services_manager_meb_instagram_story import (
+        get_services,
+        log_unsupported_to_service,
+        get_google_drive_direct_url,
+        delete_from_imagekit,
+        generate_story_caption,
+        wait_for_meta_container,
+    )
     from media_processor_meb_instagram_story import (
         optimize_image_story,
         overlay_text_on_image,
@@ -21,8 +26,17 @@ try:
         get_exif_data,
         get_video_metadata,
         get_location_data,
+        get_intellectual_date,
     )
 except ImportError:
+    from mebli_instagram_story.services_manager_meb_instagram_story import (
+        get_services,
+        log_unsupported_to_service,
+        get_google_drive_direct_url,
+        delete_from_imagekit,
+        generate_story_caption,
+        wait_for_meta_container,
+    )
     from mebli_instagram_story.media_processor_meb_instagram_story import (
         optimize_image_story,
         overlay_text_on_image,
@@ -31,304 +45,127 @@ except ImportError:
         get_exif_data,
         get_video_metadata,
         get_location_data,
+        get_intellectual_date,
     )
 
+# =====================================================================
+# 🚀 ОСНОВНА ЛОГІКА ПУБЛІКАЦІЇ СТОРІС В INSTAGRAM / FACEBOOK
+# =====================================================================
 
-def get_services():
-    """Авторизація та отримання сервісів Google Drive та Google Sheets."""
-    key_dict = json.loads(os.environ['GDRIVE_SERVICE_ACCOUNT_KEY'])
-    creds = service_account.Credentials.from_service_account_info(key_dict, scopes=config.SCOPES)
-    return build('drive', 'v3', credentials=creds), build('sheets', 'v4', credentials=creds)
-
-
-def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="непідтримуваний формат"):
-    """Запис системних попереджень та помилок у службову Google Таблицю."""
+def publish_story_item(drive_service, sheets_service, file_info, target_tab="Меблі"):
+    """
+    Основна функція конвеєра: завантажує файл з Google Drive, проводить інтелектуальну обробку,
+    генерує підпис Gemini, накладає оверлей і публікує в Instagram Stories через Meta Graph API.
+    """
+    file_id = file_info['id']
+    file_name = file_info['name']
+    
+    print(f"\n🎬 Обробка файлу з гарячої папки: {file_name} (ID: {file_id})...")
+    
+    # Створюємо робочу директорію для тимчасових файлів
+    os.makedirs('temp_mebli', exist_ok=True)
+    local_path = os.path.join('temp_mebli', file_name)
+    
+    # 1️⃣ Завантаження файлу з Google Drive
     try:
-        res = sheets_service.spreadsheets().values().get(
-            spreadsheetId=config.SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:E"
-        ).execute()
-        rows = res.get('values', [])
-        
-        for idx, row in enumerate(rows):
-            if len(row) > 1 and row[1] == folder_name:
-                range_to_update = f"'⚙️ Налаштування Папок'!E{idx + 2}"
-                sheets_service.spreadsheets().values().update(
-                    spreadsheetId=config.SPREADSHEET_ID, range=range_to_update,
-                    valueInputOption='RAW', body={'values': [[f"⚠️ {reason}: {file_name}"]]}
-                ).execute()
-                print(f"📝 Зафіксовано системне попередження для [{folder_name}] на службовому аркуші.")
-                break
-    except Exception as e:
-        print(f"❌ Не вдалося записати помилку на службовий аркуш: {e}")
+        request = drive_service.files().get_media(fileId=file_id)
+        with open(local_path, 'wb') as f:
+            f.write(request.execute())
+    except Exception as download_err:
+        print(f"❌ Не вдалося завантажити файл з Google Drive: {download_err}")
+        return False
 
+    # 2️⃣ Аналіз дат, EXIF та геолокації через media_processor
+    dt, lat, lon = get_intellectual_date(local_path, file_name, file_info)
+    date_str = dt.strftime('%d.%m.%Y')
+    
+    display_loc, group_loc = get_location_data(lat, lon)
+    
+    # 3️⃣ Генерація опису/підпису через services_manager (Gemini API)
+    caption_text = generate_story_caption(
+        image_paths=[local_path],
+        category=target_tab,
+        date_str=date_str,
+        lang_idx=0,  # За замовчуванням українська
+        target_loc=display_loc
+    )
+    print(f"💬 Згенерований текст: \"{caption_text}\"")
 
-def get_google_drive_direct_url(file_id, local_file_path=None):
-    """
-    Завантажує файл на тимчасовий публічний хостинг (Litterbox, ImageKit, Tmpfiles, ImgBB)
-    для надання прямого URL Meta Graph API.
-    """
-    if local_file_path and os.path.exists(local_file_path):
-        filename = os.path.basename(local_file_path)
-        lower_name = filename.lower()
-        is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
-        mime_type = "video/mp4" if is_video else "image/jpeg"
-        remote_filename = "story.mp4" if is_video else "story.jpg"
+    # 4️⃣ Оптимізація та накладання оверлею на медіафайл
+    lower_name = file_name.lower()
+    is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
+    
+    processed_files = []
+    if is_video:
+        processed_files = optimize_video_story(local_path, file_name, caption_text, year=dt.year, location=display_loc)
+    else:
+        padded_img_path = optimize_image_story(local_path, file_name)
+        overlay_text_on_image(padded_img_path, caption_text, year=dt.year, location=display_loc)
+        processed_files = [padded_img_path]
+
+    # 5️⃣ Завантаження обробленого медіафайлу на тимчасовий публічний хостинг
+    for ready_file in processed_files:
+        direct_url, imagekit_id = get_google_drive_direct_url(file_id, local_file_path=ready_file)
         
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        if not direct_url:
+            print("🚨 Не вдалося отримати пряме посилання для Meta API. Пропускаємо публікацію.")
+            log_unsupported_to_service(sheets_service, target_tab, file_name, "Помилка генерації URL")
+            return False
+
+        # 6️⃣ Публікація в Instagram Stories через Meta Graph API
+        access_token = os.environ.get("META_ACCESS_TOKEN")
+        ig_user_id = os.environ.get("INSTAGRAM_ACCOUNT_ID")
+        
+        if not access_token or not ig_user_id:
+            print("⚠️ Відсутні ключі META_ACCESS_TOKEN або INSTAGRAM_ACCOUNT_ID у змінних оточення.")
+            return False
+
+        print("📡 Надсилання сторіз в Meta API...")
+        media_type = "VIDEO" if is_video else "IMAGE"
+        param_key = "video_url" if is_video else "image_url"
+        
+        container_url = f"https://graph.facebook.com/v21.0/{ig_user_id}/media"
+        container_payload = {
+            'media_type': 'STORIES',
+            param_key: direct_url,
+            'access_token': access_token
         }
 
-        # 1️⃣ Litterbox (Тимчасове сховище — 1 година)
-        print(f"☁️ Завантажуємо сторіс-файл {filename} на Litterbox.moe (1h)...")
         try:
-            with open(local_file_path, 'rb') as f:
-                files = {'fileToUpload': (remote_filename, f, mime_type)}
-                data = {'reqtype': 'fileupload', 'time': '1h'}
-                res = requests.post(
-                    'https://litterbox.catbox.moe/resources/internals/api.php',
-                    data=data, files=files, headers=headers, timeout=30
-                )
-                if res.status_code == 200 and res.text.strip().startswith('http'):
-                    return res.text.strip(), None
-                else:
-                    print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text[:100]}")
-        except Exception as e:
-            print(f"⚠️ Збій завантаження на Litterbox: {e}")
-
-        # 2️⃣ ImageKit.io (Бізнес-резерв)
-        imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
-        if imagekit_key:
-            print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на ImageKit.io...")
-            try:
-                with open(local_file_path, 'rb') as f:
-                    res = requests.post(
-                        'https://upload.imagekit.io/api/v1/files/upload',
-                        auth=(imagekit_key, ''),
-                        files={'file': (filename, f, mime_type)},
-                        data={'fileName': filename, 'useUniqueFileName': 'true'}, timeout=60
-                    )
-                    if res.status_code in [200, 201]:
-                        res_data = res.json()
-                        return res_data.get('url'), res_data.get('fileId')
-            except Exception as e:
-                print(f"⚠️ Збій завантаження на ImageKit: {e}")
-
-        # 3️⃣ Tmpfiles.org (Резерв без API-ключа)
-        print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на Tmpfiles.org...")
-        try:
-            with open(local_file_path, 'rb') as f:
-                files = {'file': (remote_filename, f, mime_type)}
-                data = {'expire': '3600'}
-                res = requests.post(
-                    'https://tmpfiles.org/api/v1/upload',
-                    files=files, data=data, timeout=30
-                )
-                if res.status_code == 200:
-                    res_data = res.json()
-                    if res_data.get('status') == 'success' and 'data' in res_data and 'url' in res_data['data']:
-                        page_url = res_data['data']['url']
-                        direct_url = page_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-                        return direct_url, None
-                    else:
-                        print(f"⚠️ Tmpfiles відмовив: {res.text[:100]}")
-                else:
-                    print(f"⚠️ Tmpfiles відмовив (Статус {res.status_code}): {res.text[:100]}")
-        except Exception as e:
-            print(f"⚠️ Збій завантаження на Tmpfiles: {e}")
-
-        # 4️⃣ ImgBB API (Тільки для фото)
-        imgbb_key = os.environ.get("IMGBB_API_KEY")
-        if imgbb_key and mime_type == "image/jpeg":
-            print(f"☁️ Резерв: завантажуємо фото сторіс {filename} на ImgBB API...")
-            try:
-                with open(local_file_path, 'rb') as f:
-                    img_bytes = f.read()
-                if img_bytes:
-                    res = requests.post(
-                        'https://api.imgbb.com/1/upload',
-                        data={'key': imgbb_key, 'expiration': 86400},
-                        files={'image': (filename, img_bytes, mime_type)},
-                        timeout=30
-                    ).json()
-                    if res.get('success'):
-                        return res['data']['url'], None
-            except Exception as e:
-                print(f"⚠️ Збій завантаження на ImgBB: {e}")
-
-    # Аварійний фолбек
-    print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
-    return f"https://docs.google.com/uc?export=download&id={file_id}", None
-
-
-def delete_from_imagekit(file_id: str):
-    """Видаляє файл з ImageKit після публікації."""
-    if not file_id:
-        return
-    imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
-    if not imagekit_key:
-        return
-    try: 
-        requests.delete(f"https://api.imagekit.io/v1/files/{file_id}", auth=(imagekit_key, ''), timeout=15)
-    except Exception: 
-        pass
-
-
-def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc, previous_captions=None):
-    """Генерує короткий влучний підпис для сторіс через Google Gemini API."""
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
-    
-    if previous_captions is None:
-        previous_captions = []
-    
-    pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
-    
-    resolved_loc = ""
-    if target_loc:
-        try:
-            loc_json = json.loads(target_loc)
-            if isinstance(loc_json, dict):
-                resolved_loc = loc_json.get(str(lang_idx), loc_json.get("0", ""))
-            else:
-                resolved_loc = str(target_loc)
-        except (json.JSONDecodeError, TypeError):
-            resolved_loc = str(target_loc)
-
-    invalid_markers = ["невідоме місце", "невідомо", "unknown", "unbekannt", "-", "none", "null", "невідоме місто"]
-    if any(marker in resolved_loc.lower() for marker in invalid_markers):
-        resolved_loc = ""
-
-    cat_lower = category.lower()
-    real_manufacturer = category
-    matched_special = False
-    
-    for spec_key, spec_translation in pref.get("categories", {}).items():
-        if spec_key in cat_lower:
-            real_manufacturer = spec_translation
-            matched_special = True
-            break
+            res = requests.post(container_url, data=container_payload, timeout=30).json()
+            container_id = res.get('id')
             
-    if not matched_special:
-        for key, names_dict in config.COMPANIES_DB.items():
-            if key in cat_lower:
-                real_manufacturer = names_dict.get(lang_idx, names_dict.get(0, category))
-                break
-
-    if not gemini_key:
-        return pref.get("no_gemini_caption", "Професійна якість та увага до деталей!")
-
-    lang_instructions = {
-        0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1 емодзі.",
-        1: "Write the text exclusively in ENGLISH. You may include 1 emoji.",
-        2: "Schreibe den Text ausschließlich auf DEUTSCH. Du darfst 1 Emoji hinzufügen."
-    }
-    
-    prev_captions_block = ""
-    if previous_captions:
-        formatted_list = "\n".join([f'• "{cap}"' for cap in previous_captions])
-        prev_captions_block = (
-            f"\n\n🚫 СУВОРЕ ОБМЕЖЕННЯ (ЗАБОРОНА ПОВТОРІВ):\n"
-            f"У цій серії Stories ВЖЕ були опубліковані наступні підписи:\n"
-            f"{formatted_list}\n"
-            f"👉 КАТЕГОРИЧНО ЗАБОРОНЕНО повторювати ці ж думки, жарти, метафори, тези чи ключові слова. "
-            f"Зміни ракурс, вибери іншу деталь на фото або інший контекст!"
-        )
-
-    prompt = (
-        f"Ти — досвідчений меблевий конструктор, майстер виробництва та іронічний копірайтер для Instagram Stories.\n"
-        f"Проаналізуй це зображення (або кадр з відео) і придумай ОДНУ коротку, влучну та чіпляючу фразу (1-2 короткі речення) "
-        f"для нанесення поверх медіафайлу.\n\n"
-        f"🎯 ВИЗНАЧ КОНТЕКСТ МЕДІА ТА ОБЕРИ ВІДПОВІДНИЙ ТОН:\n"
-        f"- Готові меблі / Виставки: естетика, ергономіка, відчуття затишку, геометрія, ідеальні зазори.\n"
-        f"- Цех / Виробництво / Монтаж: залаштунки, тирса, кава, звук фрезера, складні вузли, перфекціонізм.\n"
-        f"- Заміри / Креслення / Документи / Специфікації: стіни 89°, кути не під 90°, крива підлога, «заміри на око», конструкторська магія, рахунки.\n"
-        f"- Суміжники / Брак / «Похабне ставлення»: перли від електриків та сантехніків, як НЕ треба робити, ремонтні фейли, захист меблів від варварів.\n"
-        f"- Доставка / Логістика: вузькі сходи, пакування, квест з ліфтом, «головне не подряпати».\n"
-        f"- Гумор / Приколи / Меми / Працівники: жива самоіронія, меблевий сленг, робочі моменти, філософія цеху.\n\n"
-        f"📋 ДОДАТКОВИЙ КОНТЕКСТ:\n"
-        f"Бренд/Категорія: '{real_manufacturer}'. Рік: {year}. Локація: {resolved_loc if resolved_loc else 'Меблеве виробництво'}.\n"
-        f"{prev_captions_block}\n\n"
-        f"⚠️ СУВОРЕ ВИМОГИ:\n"
-        f"1. {lang_instructions.get(lang_idx, lang_instructions[0])}\n"
-        f"2. Будь живим, прямим та коротким. Уникай кліше: 'найкраща якість', 'індивідуальний підхід', 'купуйте в нас'.\n"
-        f"3. Поверни ЛИШЕ готовий текст підпису. Без лапок, без вступних слів, без хештегів та пояснень."
-    )
-
-    try:
-        client = genai.Client()
-        contents = [prompt]
-        
-        for img_path in image_paths:
-            if os.path.exists(img_path):
-                try:
-                    img = PILImage.open(img_path)
-                    if img.mode in ("RGBA", "P"):
-                        img = img.convert("RGB")
-                    img.thumbnail((1024, 1024))
-                    contents.append(img)
-                except Exception as img_err:
-                    print(f"⚠️ Не вдалося обробити зображення {img_path}: {img_err}")
-
-        models_to_try = []
-        try:
-            excluded_keywords = ["image", "tts", "live", "transcribe", "translate", "audio", "veo", "lyria", "embedding", "robotics"]
-            for m in client.models.list():
-                model_id = m.name.replace("models/", "")
-                model_id_lower = model_id.lower()
-                supported_actions = getattr(m, 'supported_actions', [])
-                if "generateContent" in supported_actions or not supported_actions:
-                    if "flash" in model_id_lower and not any(kw in model_id_lower for kw in excluded_keywords):
-                        models_to_try.append(model_id)
-            models_to_try.sort(reverse=True)
-        except Exception as list_err:
-            print(f"⚠️ Не вдалося автоматично завантажити перелік моделей: {list_err}")
-
-        fallback_models = [
-            "gemini-2.5-flash",
-            "gemini-1.5-flash",
-            "gemini-flash-latest"
-        ]
-
-        final_models_list = []
-        for m in models_to_try + fallback_models:
-            if m not in final_models_list:
-                final_models_list.append(m)
-
-        for model_id in final_models_list:
-            print(f"🚀 Генерація підпису через модель {model_id}...")
-            try:
-                response = client.models.generate_content(
-                    model=model_id,
-                    contents=contents
-                )
-                if response and response.text:
-                    return response.text.strip()
+            if container_id:
+                if wait_for_meta_container(container_id, access_token):
+                    pub_url = f"https://graph.facebook.com/v21.0/{ig_user_id}/media_publish"
+                    pub_res = requests.post(pub_url, data={'creation_id': container_id, 'access_token': access_token}, timeout=30).json()
+                    
+                    if 'id' in pub_res:
+                        print(f"✅ Фрагмент успішно опубліковано! ID: {pub_res['id']}")
+                    else:
+                        print(f"❌ Помилка публікації контейнера: {pub_res}")
                 else:
-                    print(f"⚠️ Модель {model_id} повернула порожню відповідь.")
-            except Exception as model_err:
-                print(f"⚠️ Помилка моделі {model_id}: {model_err}")
-                continue
+                    print("❌ Контейнер Meta завершився з помилкою або не встиг обробитися.")
+            else:
+                print(f"❌ Помилка створення контейнера Meta: {res}")
+        except Exception as meta_err:
+            print(f"⚠️ Помилка з'єднання з Meta API: {meta_err}")
+            
+        # Видаляємо тимчасовий файл з ImageKit, якщо використовувався бізнес-резерв
+        if imagekit_id:
+            delete_from_imagekit(imagekit_id)
 
-    except Exception as general_err:
-        print(f"⚠️ Загальна помилка генерації: {general_err}")
-        
-    return pref.get("fallback_caption", "Точний розрахунок та увага до кожної деталі!")
+    # 7️⃣ Переміщення вихідного файлу на Google Диску у кошик / архів після успішної публікації
+    try:
+        drive_service.files().update(fileId=file_id, body={'trashed': True}).execute()
+        print(f"🗑️ Файл [{file_name}] переміщено до кошика на Google Диску.")
+    except Exception as e:
+        print(f"⚠️ Не вдалося видалити файл з Google Диску: {e}")
+
+    return True
 
 
-def wait_for_meta_container(container_id, access_token):
-    """Очікує завершення обробки медіа-контейнера на серверах Meta."""
-    check_url = f"https://graph.facebook.com/v19.0/{container_id}"
-    params = {"fields": "status_code,status", "access_token": access_token}
-    for _ in range(30):
-        try:
-            r = requests.get(check_url, params=params, timeout=(10, 120)).json()
-            status = r.get("status_code", "").upper()
-            if status == "FINISHED":
-                return True
-            elif status == "ERROR":
-                return False
-            print(f"⏳ Очікування обробки медіафайлу в Meta... Статус: {status}")
-        except Exception as e:
-            print(f"⚠️ Помилка перевірки статусу контейнера Meta: {e}")
-        time.sleep(5)
-    return False
+if __name__ == "__main__":
+    print("🚀 Запуск модуля публікації сторіс...")
+    drive_s, sheets_s = get_services()
+    print("✅ Сервіси Google успішно авторизовано.")
