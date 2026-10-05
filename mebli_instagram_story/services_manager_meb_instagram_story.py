@@ -294,7 +294,8 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
             try:
                 response = client.models.generate_content(
                     model=model_id,
-                    contents=contents
+                    contents=contents,
+                    config={"temperature": 0.7}
                 )
                 if response and response.text:
                     return response.text.strip()
