@@ -1,487 +1,325 @@
 import os
-import sys
-import subprocess
-import re
+import json
+import time
+import base64
+import requests
+import io
+from PIL import Image as PILImage
+from google import genai
 from datetime import datetime
-from googleapiclient.http import MediaIoBaseDownload
-from PIL import Image
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
-# Імпорт конфігурацій та сервісів
+# Централізований конфіг проекту
 import config_meb_insta_story as config
-from media_processor_meb_instagram_story import *
-from services_manager_meb_instagram_story import *
-# Імпорт винесених утиліт
-from utils_meb_instagram_story import (
-    sanitize_filename, rotate_language, parse_year, parse_location, publish_story_to_meta
-)
 
-TEMP_DIR = 'temp_mebli'
+def get_services():
+    key_dict = json.loads(os.environ['GDRIVE_SERVICE_ACCOUNT_KEY'])
+    creds = service_account.Credentials.from_service_account_info(key_dict, scopes=config.SCOPES)
+    return build('drive', 'v3', credentials=creds), build('sheets', 'v4', credentials=creds)
 
-def download_drive_file(drive_service, file_id: str, local_path: str) -> bool:
-    """Завантажує файл з Google Диску у вказаний локальний шлях."""
-    try:
-        request = drive_service.files().get_media(fileId=file_id)
-        with open(local_path, 'wb') as fh:
-            downloader = MediaIoBaseDownload(fh, request)
-            done = False
-            while not done:
-                _, done = downloader.next_chunk()
-        return True
-    except Exception as e:
-        print(f"❌ Не вдалося завантажити файл [ID: {file_id}] з Drive: {e}")
-        return False
-
-def extract_metadata_from_drive_object(f: dict) -> tuple[str, float | None, float | None]:
-    """
-    Витягує дату та GPS-координати з метаданих Drive API та назви файлу 
-    БЕЗ завантаження самого файлу на диск.
-    """
-    f_name = f.get('name', '')
-    final_date = None
-
-    # 1. Пошук дати у назві файлу (наприклад: 2024-05-20, 20.05.2024, 2024_05_20)
-    date_match = re.search(r'(\d{4})[-_.](\d{2})[-_.](\d{2})', f_name)
-    if date_match:
-        try:
-            final_date = datetime(int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))
-        except ValueError:
-            pass
-
-    if not final_date:
-        date_match_rev = re.search(r'(\d{2})[-_.](\d{2})[-_.](\d{4})', f_name)
-        if date_match_rev:
-            try:
-                final_date = datetime(int(date_match_rev.group(3)), int(date_match_rev.group(2)), int(date_match_rev.group(1)))
-            except ValueError:
-                pass
-
-    # 2. Пошук EXIF метаданих у Google Drive API (без скачування)
-    lat, lon = None, None
-    img_meta = f.get('imageMediaMetadata') or f.get('videoMediaMetadata') or {}
-    if img_meta:
-        if not final_date:
-            time_str = img_meta.get('time')  # Формат: "2024:05:20 14:30:00"
-            if time_str:
-                try:
-                    final_date = datetime.strptime(time_str[:19].replace('T', ' '), '%Y:%m:%d %H:%M:%S')
-                except ValueError:
-                    try:
-                        final_date = datetime.strptime(time_str[:19], '%Y-%m-%d %H:%M:%S')
-                    except ValueError:
-                        pass
-
-        location_data = img_meta.get('location', {})
-        if location_data:
-            lat = location_data.get('latitude')
-            lon = location_data.get('longitude')
-
-    # 3. Якщо дату не знайдено в назві та EXIF — беремо createdTime з Google Drive
-    if not final_date:
-        created_str = f.get('createdTime', '')
-        if created_str:
-            try:
-                final_date = datetime.strptime(created_str[:19], '%Y-%m-%dT%H:%M:%S')
-            except ValueError:
-                final_date = datetime.now()
-        else:
-            final_date = datetime.now()
-
-    date_str = final_date.strftime('%d.%m.%Y')
-    return date_str, lat, lon
-
-def get_hot_folder_queue(drive_service) -> tuple[list, bool]:
-    """
-    Отримує до 100 файлів з гарячої папки, аналізує метадані в пам'яті (без завантаження),
-    групує за (дата, локація), обирає першу групу (до 4 файлів) і завантажує ТІЛЬКИ їх.
-    """
-    current_hour = datetime.now().hour
-    print(f"🕒 Серверний час: {current_hour}:00 (UTC)")
-
-    if current_hour >= 16:
-        order_by_param = "createdTime desc"
-        print("✨ [Стратегія: ВЕЧІР] Отримуємо 100 найновіших матеріалів (Нові -> Старі).")
-    else:
-        order_by_param = "createdTime"
-        print("📦 [Стратегія: РАНОК/ДЕНЬ] Отримуємо 100 найстаріших матеріалів з архіву (Старі -> Нові).")
-
-    try:
-        hot_query = f"'{config.HOT_FOLDER_ID}' in parents and trashed = false"
-        hot_res = drive_service.files().list(
-            q=hot_query,
-            fields="nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size, imageMediaMetadata, videoMediaMetadata)",
-            orderBy=order_by_param,
-            pageSize=100
-        ).execute()
-        hot_files = hot_res.get('files', [])
-    except Exception as e:
-        print(f"❌ ПОМИЛКА під час отримання списку файлів з Google Диску: {e}")
-        return [], True
-
-    if not hot_files:
-        return [], False
-
-    print(f"🔥 Знайдено {len(hot_files)} файлів у гарячій папці. Легкий аналіз метаданих (без завантаження)...")
-    hot_group_items = []
-
-    for f in hot_files:
-        f_id, f_name = f['id'], f['name']
-        lower_name = f_name.lower()
-
-        if not lower_name.endswith(config.VALID_MEDIA_EXTENSIONS):
-            print(f"⚠️ Файл [{f_name}] має непідтримуваний формат для Сторіс. Пропускаємо.")
-            continue
-
-        # Зчитуємо метадані без завантаження самого файлу
-        try:
-            date_str, lat, lon = extract_metadata_from_drive_object(f)
-            display_location, group_location = get_location_data(lat, lon)
-        except Exception as e:
-            print(f"⚠️ Помилка визначення метаданих для {f_name}: {e}")
-            date_str = datetime.now().strftime('%d.%m.%Y')
-            display_location, group_location = "", ""
-
-        detected_company = "Загальне"
-        for key in config.COMPANIES_DB.keys():
-            if key in lower_name:
-                detected_company = key
-                break
-
-        hot_group_items.append({
-            "id": f_id,
-            "name": f_name,
-            "category": detected_company,
-            "date": date_str,
-            "location": display_location,
-            "group_location": group_location,
-            "mode": "hot_folder",
-            "counter_cell": None
-        })
-
-    if not hot_group_items:
-        return [], False
-
-    # Групуємо файли за (дата, група_локації) із збереженням порядку
-    groups = {}
-    for item in hot_group_items:
-        g_key = (item["date"], item["group_location"])
-        groups.setdefault(g_key, []).append(item)
-
-    # Обираємо першу групу за порядком
-    first_key = list(groups.keys())[0]
-    selected_unloaded = groups[first_key][:4]  # Беремо від 1 до 4 файлів першої групи
-
-    print(f"📂 [Гаряча Папка] Сформовано чергу: Дата={first_key[0]}, Локація='{first_key[1]}'. Елементів для завантаження: {len(selected_unloaded)}")
-
-    # ЗАВАНТАЖУЄМО ТІЛЬКИ ФАЙЛИ ОБРАНОЇ ПЕРШОЇ ГРУПИ (до 4 шт.)
-    selected_queue = []
-    for item in selected_unloaded:
-        f_id, f_name = item["id"], item["name"]
-        safe_local_name = sanitize_filename(f"{f_id}_{f_name}")
-        local_path = os.path.join(TEMP_DIR, safe_local_name)
-
-        print(f"📥 Завантажуємо для публікації: {f_name} -> {safe_local_name}...")
-        if download_drive_file(drive_service, f_id, local_path):
-            item["safe_local_name"] = safe_local_name
-            item["local_path"] = local_path
-            selected_queue.append(item)
-        else:
-            print(f"❌ Не вдалося завантажити файл [ID: {f_id}] з Drive.")
-
-    return selected_queue, False
-
-def get_sheet_queue(sheets_service, current_tab: str) -> list:
-    """Формує чергу публікації на основі реєстру Google Таблиці."""
-    print(f"📊 Гаряча папка порожня. Активуємо Сценарій 2 (Реєстр таблиці '{current_tab}')...")
+def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="непідтримуваний формат"):
     try:
         res = sheets_service.spreadsheets().values().get(
-            spreadsheetId=config.SPREADSHEET_ID, range=f"'{current_tab}'!A2:I"
+            spreadsheetId=config.SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:E"
         ).execute()
         rows = res.get('values', [])
+        
+        for idx, row in enumerate(rows):
+            if len(row) > 1 and row[1] == folder_name:
+                range_to_update = f"'⚙️ Налаштування Папок'!E{idx + 2}"
+                sheets_service.spreadsheets().values().update(
+                    spreadsheetId=config.SPREADSHEET_ID, range=range_to_update,
+                    valueInputOption='RAW', body={'values': [[f"⚠️ {reason}: {file_name}"]]}
+                ).execute()
+                print(f"📝 Зафіксовано системне попередження для [{folder_name}] на службовому аркуші.")
+                break
     except Exception as e:
-        print(f"❌ Помилка доступу до Google Sheets: {e}")
-        sys.exit(1)
+        print(f"❌ Не вдалося записати помилку на службовий аркуш: {e}")
 
-    if not rows:
-        print("ℹ️ Реєстр порожній. Публікувати нічого.")
-        return []
+def get_google_drive_direct_url(file_id, local_file_path=None):
+    if local_file_path and os.path.exists(local_file_path):
+        filename = os.path.basename(local_file_path)
+        lower_name = filename.lower()
+        is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
+        mime_type = "video/mp4" if is_video else "image/jpeg"
+        
+        # 🧼 Спрощуємо ім'я файлу для сервера
+        remote_filename = "story.mp4" if is_video else "story.jpg"
+        
+        # 1️⃣ Litterbox (Тимчасове сховище — ідеально для Meta API)
+        print(f"☁️ Завантажуємо сторіс-файл {filename} на Litterbox.moe (1h)...")
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            }
+            with open(local_file_path, 'rb') as f:
+                files = {'fileToUpload': (remote_filename, f, mime_type)}
+                data = {
+                    'reqtype': 'fileupload',
+                    'time': '1h'  # Файл видалиться сам через годину, Meta встигне забрати його за секунди
+                }
+                res = requests.post(
+                    'https://litterbox.catbox.moe/resources/internals/api.php',
+                    data=data,
+                    files=files,
+                    headers=headers,
+                    timeout=30
+                )
+                if res.status_code == 200 and res.text.strip().startswith('http'):
+                    return res.text.strip(), None
+                else:
+                    print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text[:100]}")
+        except Exception as e:
+            print(f"⚠️ Збій завантаження на Litterbox: {e}")
 
-    col_idx, col_letter = 4, "E"
-    valid_rows = []
-
-    for i, r in enumerate(rows):
-        if len(r) >= 3:
-            if r[2].lower() == "temporary":
-                continue
+        # 2️⃣ ImageKit.io (Надійний бізнес-бекэнд — залишається як залізобетонний резерв)
+        imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
+        if imagekit_key:
+            print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на ImageKit.io...")
             try:
-                val = r[col_idx] if len(r) > col_idx and r[col_idx] else "0"
-                counter = int(val)
-                valid_rows.append({"row_idx": i + 2, "data": r, "counter": counter})
-            except ValueError:
-                continue
-
-    if not valid_rows:
-        print("ℹ️️ Немає доступних рядків для публікації.")
-        return []
-
-    min_counter = min(item["counter"] for item in valid_rows)
-    min_pool = [item for item in valid_rows if item["counter"] == min_counter]
-
-    groups = {}
-    for item in min_pool:
-        data = item["data"]
-        group_key = (data[2], data[6] if len(data) > 6 else "", data[8] if len(data) > 8 else "")
-        groups.setdefault(group_key, []).append(item)
-
-    first_key = list(groups.keys())[0]
-    selected_group_items = groups[first_key][:4]
-    category_name, target_date, target_city_json = first_key
-    print(f"📂 Обрано групу з Таблиці: [{category_name}]. Елементів у черзі: {len(selected_group_items)}")
-
-    selected_queue = []
-    for item in selected_group_items:
-        data = item["data"]
-        selected_queue.append({
-            "id": data[0],
-            "name": data[1],
-            "local_path": None,
-            "category": category_name,
-            "date": target_date,
-            "location": target_city_json,
-            "exact_location": data[7] if len(data) > 7 else "",
-            "mode": "sheet",
-            "counter_cell": f"'{current_tab}'!{col_letter}{item['row_idx']}",
-            "counter_val": item["counter"]
-        })
-
-    return selected_queue
-
-def main():
-    # 0. Перевірка вхідних параметрів воркфлоу
-    if len(sys.argv) < 3:
-        print("💡 Запуск: python publish_content_mebli_storys.py ig_story <tab_name>")
-        sys.exit(1)
-
-    mode = sys.argv[1].lower()
-    forced_tab = sys.argv[2]
-    current_tab = forced_tab if forced_tab else config.TAB_NAME
-
-    if mode != "ig_story":
-        print(f"❌ Цей скрипт сконструйовано виключно під 'ig_story'. Передано: {mode}")
-        sys.exit(1)
-
-    ig_user_id = os.environ.get("IG_USER_ID")
-    meta_access_token = os.environ.get("META_ACCESS_TOKEN")
-
-    # 1. Ініціалізація сервісів та каталогу
-    drive, sheets = get_services()
-    os.makedirs(TEMP_DIR, exist_ok=True)
-
-    has_global_failures = False
-
-    # --- ОДЕРЖАННЯ ЧЕРГИ (СЦЕНАРІЙ 1 або 2) ---
-    print(f"🔍 Перевірка наявності файлів у гарячій папці [{config.HOT_FOLDER_ID}]...")
-    selected_queue, hot_folder_error = get_hot_folder_queue(drive)
-    if hot_folder_error:
-        has_global_failures = True
-
-    if not selected_queue:
-        selected_queue = get_sheet_queue(sheets, current_tab)
-
-    if not selected_queue:
-        print("ℹ️ Черга порожня. Публікувати нічого.")
-        return
-
-    # --- НАЛАШТУВАННЯ МОВИ ПУБЛІКАЦІЇ ---
-    target_lang_cell = "'⚙️ Налаштування Папок'!H2"
-    lang_value = "UK"
-    try:
-        lang_res = sheets.spreadsheets().values().get(spreadsheetId=config.SPREADSHEET_ID, range=target_lang_cell).execute()
-        lang_values = lang_res.get('values', [])
-        if lang_values and lang_values[0]:
-            lang_value = lang_values[0][0]
-    except Exception as e:
-        print(f"⚠️ Не вдалося зчитати мову з комірки H2: {e}")
-
-    lang_idx, next_lang_value = rotate_language(lang_value)
-    print(f"🌐 Поточна мова Сторіс: {lang_value} (Індекс: {lang_idx}). Наступна буде: {next_lang_value}")
-
-    local_files_to_clean = []
-    success_published_any = False
-    previous_captions = []
-
-    # --- ЗАГАЛЬНИЙ БЛОК ОБРОБКИ ТА ПУБЛІКАЦІЇ ---
-    for idx_item, item in enumerate(selected_queue):
-        f_id, f_name = item["id"], item["name"]
-        lower_name = f_name.lower()
-
-        if item["mode"] == "sheet":
-            if not lower_name.endswith(config.VALID_MEDIA_EXTENSIONS):
-                log_unsupported_to_service(sheets, item["category"], f_name, reason="непідтримуваний формат для сторіз")
-                continue
-
-            print(f"🔧 [ЛОГ] Джерело: Реєстр Таблиці | ID: {f_id} | Назва: {f_name}")
-            safe_local_name = sanitize_filename(f"{f_id}_{f_name}")
-            local_path = os.path.join(TEMP_DIR, safe_local_name)
-
-            print(f"\n📥 [{idx_item + 1}/{len(selected_queue)}] Завантаження з Drive: {f_name} -> {safe_local_name}...")
-            if not download_drive_file(drive, f_id, local_path):
-                has_global_failures = True
-                continue
-        else:
-            local_path = item["local_path"]
-            safe_local_name = item["safe_local_name"]
-            print(f"\n🎬 [{idx_item + 1}/{len(selected_queue)}] Обробка з гарячої папки: {safe_local_name}...")
-
-        final_path = local_path
-        is_video = safe_local_name.endswith(('.mp4', '.mov', '.avi'))
-
-        # Обробка HEIC
-        if safe_local_name.endswith(('.heic', '.heif')):
-            jpg_path = os.path.join(TEMP_DIR, safe_local_name.rsplit('.', 1)[0] + '.jpg')
-            try:
-                with Image.open(local_path) as img:
-                    img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
-                final_path = jpg_path
-                local_files_to_clean.append(jpg_path)
+                with open(local_file_path, 'rb') as f:
+                    res = requests.post(
+                        'https://upload.imagekit.io/api/v1/files/upload',
+                        auth=(imagekit_key, ''),
+                        files={'file': (filename, f, mime_type)},
+                        data={'fileName': filename, 'useUniqueFileName': 'true'}, timeout=60
+                    )
+                    if res.status_code in [200, 201]:
+                        res_data = res.json()
+                        return res_data.get('url'), res_data.get('fileId')
             except Exception as e:
-                print(f"❌ Помилка конвертації HEIC для {safe_local_name}: {e}")
-                has_global_failures = True
-                continue
+                print(f"⚠️ Збій завантаження на ImageKit: {e}")
 
-        local_files_to_clean.append(local_path)
-
-        # Створення стоп-кадру відео для аналізу Gemini
-        ai_media_snapshot = final_path
-        if is_video:
-            frame_path = os.path.join(TEMP_DIR, f"frame_{f_id}.jpg")
-            subprocess.run(
-                ['ffmpeg', '-y', '-i', final_path, '-ss', '00:00:01', '-vframes', '1', frame_path],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-            if os.path.exists(frame_path):
-                ai_media_snapshot = frame_path
-                local_files_to_clean.append(frame_path)
-
-        # 1. ШІ Генерація підпису
-        story_caption_text = generate_story_caption(
-            [ai_media_snapshot],
-            item["category"],
-            item["date"],
-            lang_idx,
-            item["location"],
-            previous_captions=previous_captions
-        )
-        print(f"💬 Сгенерований текст: \"{story_caption_text}\"")
-
-        if story_caption_text:
-            previous_captions.append(story_caption_text)
-
-        year_variable = parse_year(item["date"])
-        location_variable = parse_location(item["location"], lang_idx)
-
-        # 2. Оптимізація та рендеринг
-        media_parts_to_upload = []
+        # 3️⃣ Tmpfiles.org (Новий резервний варіант — не потребує API ключів)
+        print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на Tmpfiles.org...")
         try:
-            if is_video:
-                media_parts_to_upload = optimize_video_story(final_path, safe_local_name, story_caption_text, year=year_variable, location=location_variable)
-            else:
-                optimized_path = optimize_image_story(final_path, safe_local_name)
-                overlay_text_on_image(optimized_path, story_caption_text, year=year_variable, location=location_variable)
-                media_parts_to_upload = [optimized_path]
+            with open(local_file_path, 'rb') as f:
+                files = {'file': (remote_filename, f, mime_type)}
+                data = {'expire': '3600'}  # Автовидалення через 1 годину (3600 сек)
+                res = requests.post(
+                    'https://tmpfiles.org/api/v1/upload',
+                    files=files,
+                    data=data,
+                    timeout=30
+                )
+                if res.status_code == 200:
+                    res_data = res.json()
+                    if res_data.get('status') == 'success' and 'data' in res_data and 'url' in res_data['data']:
+                        page_url = res_data['data']['url']
+                        # 🔗 Трансформуємо веб-посилання у пряме посилання для скачування Meta API:
+                        # https://tmpfiles.org/12345/story.jpg -> https://tmpfiles.org/dl/12345/story.jpg
+                        direct_url = page_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+                        return direct_url, None
+                    else:
+                        print(f"⚠️ Tmpfiles відмовив: {res.text[:100]}")
+                else:
+                    print(f"⚠️ Tmpfiles відмовив (Статус {res.status_code}): {res.text[:100]}")
         except Exception as e:
-            print(f"❌ Помилка рендерингу/оптимізації {safe_local_name}: {e}")
-            has_global_failures = True
-            continue
+            print(f"⚠️ Збій завантаження на Tmpfiles: {e}")
 
-        item_published_successfully = False
-        all_parts_successful = True
-
-        # 3. Завантаження та публікація у Meta API
-        for sub_idx, active_path in enumerate(media_parts_to_upload):
-            if len(media_parts_to_upload) > 1:
-                print(f"📦 Обробка фрагмента [{sub_idx + 1}/{len(media_parts_to_upload)}] для {safe_local_name}...")
-
-            if active_path not in (final_path, local_path):
-                local_files_to_clean.append(active_path)
-
-            pub_url, ik_id = get_google_drive_direct_url(f_id, local_file_path=active_path)
-            if not pub_url:
-                print(f"⚠️ Не вдалося отримати публічне посилання для фрагмента {active_path}.")
-                has_global_failures = True
-                all_parts_successful = False
-                continue
-
-            print(f"📡 Надсилання сторіз в Meta API...")
-            success_meta, result_meta = publish_story_to_meta(ig_user_id, meta_access_token, pub_url, is_video)
-
-            if success_meta:
-                print(f"✅ Фрагмент [{sub_idx + 1}/{len(media_parts_to_upload)}] успішно опубліковано! ID: {result_meta}")
-                success_published_any = True
-            else:
-                print(f"❌ {result_meta}")
-                has_global_failures = True
-                all_parts_successful = False
-
-            if ik_id:
-                delete_from_imagekit(ik_id)
-
-        if all_parts_successful and media_parts_to_upload:
-            item_published_successfully = True
-        else:
-            print(f"⚠️ Файл [{safe_local_name}] опубліковано не повністю.")
-
-        # --- ФІНАЛІЗАЦІЯ СТАТУСІВ ---
-        if item_published_successfully:
-            if item["mode"] == "sheet":
-                new_val = item["counter_val"] + 1
-                try:
-                    sheets.spreadsheets().values().update(
-                        spreadsheetId=config.SPREADSHEET_ID, range=item["counter_cell"],
-                        valueInputOption='RAW', body={'values': [[new_val]]}
-                    ).execute()
-                    print(f"✍️ Лічильник у {item['counter_cell']} оновлено на {new_val}.")
-                except Exception as e:
-                    print(f"⚠️ Не вдалося зберегти лічильник: {e}")
-
-            elif item["mode"] == "hot_folder":
-                try:
-                    file_meta = drive.files().get(fileId=f_id, fields='parents').execute()
-                    previous_parents = ",".join(file_meta.get('parents', []))
-                    drive.files().update(
-                        fileId=f_id,
-                        addParents=config.TRASH_FOLDER_ID,
-                        removeParents=previous_parents,
-                        fields='id, parents'
-                    ).execute()
-                    print(f"🗑️ Файл [{f_name}] переміщено до кошика на Google Диску.")
-                except Exception as e:
-                    print(f"⚠️ Не вдалося перемістити {f_name} до кошика: {e}")
-
-    # Оновлення мови H2 при успішній публікації
-    if success_published_any:
-        try:
-            sheets.spreadsheets().values().update(
-                spreadsheetId=config.SPREADSHEET_ID, range=target_lang_cell,
-                valueInputOption='RAW', body={'values': [[next_lang_value]]}
-            ).execute()
-            print(f"\n🔄 Мову для наступного запуску Сторіс (H2) змінено на: {next_lang_value}")
-        except Exception as e:
-            print(f"⚠️ Не вдалося оновити мову в H2: {e}")
-
-    # Очищення кешу
-    for f in set(local_files_to_clean):
-        if os.path.exists(f):
+        # 4️⃣ ImgBB API (Тільки для photo)
+        imgbb_key = os.environ.get("IMGBB_API_KEY")
+        if imgbb_key and mime_type == "image/jpeg":
+            print(f"☁️ Резерв: завантажуємо фото сторіс {filename} на ImgBB API...")
             try:
-                os.remove(f)
-            except Exception:
-                pass
-    print("🧹 Тимчасові локальні файли успішно очищені.")
+                with open(local_file_path, 'rb') as f:
+                    img_bytes = f.read()
+                if img_bytes:
+                    res = requests.post(
+                        'https://api.imgbb.com/1/upload',
+                        data={'key': imgbb_key, 'expiration': 86400},
+                        files={'image': (filename, img_bytes, mime_type)},
+                        timeout=30
+                    ).json()
+                    if res.get('success'):
+                        return res['data']['url'], None
+            except Exception as e:
+                print(f"⚠️ Збій завантаження на ImgBB: {e}")
 
-    if has_global_failures:
-        print("\n💥 [Система] Виконано з окремими помилками.")
-        sys.exit(1)
-    else:
-        print("\n🚀 [Система] Всі обрані файли успішно опубліковані!")
+    # Аварійний фолбек
+    print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
+    return f"https://docs.google.com/uc?export=download&id={file_id}", None
 
-if __name__ == "__main__":
-    main()
+def delete_from_imagekit(file_id: str):
+    if not file_id: return
+    imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
+    if not imagekit_key: return
+    try: 
+        requests.delete(f"https://api.imagekit.io/v1/files/{file_id}", auth=(imagekit_key, ''), timeout=15)
+    except: 
+        pass
+
+def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc, previous_captions=None):
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
+    
+    if previous_captions is None:
+        previous_captions = []
+    
+    pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
+    
+    resolved_loc = ""
+    if target_loc:
+        try:
+            loc_json = json.loads(target_loc)
+            if isinstance(loc_json, dict):
+                resolved_loc = loc_json.get(str(lang_idx), loc_json.get("0", ""))
+            else:
+                resolved_loc = str(target_loc)
+        except (json.JSONDecodeError, TypeError):
+            resolved_loc = str(target_loc)
+
+    invalid_markers = ["невідоме місце", "невідомо", "unknown", "unbekannt", "-", "none", "null", "невідоме місто"]
+    if any(marker in resolved_loc.lower() for marker in invalid_markers):
+        resolved_loc = ""
+
+    cat_lower = category.lower()
+    real_manufacturer = category
+    matched_special = False
+    
+    for spec_key, spec_translation in pref.get("categories", {}).items():
+        if spec_key in cat_lower:
+            real_manufacturer = spec_translation
+            matched_special = True
+            break
+            
+    if not matched_special:
+        for key, names_dict in config.COMPANIES_DB.items():
+            if key in cat_lower:
+                real_manufacturer = names_dict.get(lang_idx, names_dict.get(0, category))
+                break
+
+    if not gemini_key:
+        return pref.get("no_gemini_caption", "Професійна якість та увага до деталей!")
+
+    lang_instructions = {
+        0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1 емодзі.",
+        1: "Write the text exclusively in ENGLISH. You may include 1 emoji.",
+        2: "Schreibe den Text ausschließlich auf DEUTSCH. Du darfst 1 Emoji hinzufügen."
+    }
+    
+    # 🚫 Блок заборони повторів
+    prev_captions_block = ""
+    if previous_captions:
+        formatted_list = "\n".join([f'• "{cap}"' for cap in previous_captions])
+        prev_captions_block = (
+            f"\n\n🚫 СУВОРЕ ОБМЕЖЕННЯ (ЗАБОРОНА ПОВТОРІВ):\n"
+            f"У цій серії Stories ВЖЕ були опубліковані наступні підписи:\n"
+            f"{formatted_list}\n"
+            f"👉 КАТЕГОРИЧНО ЗАБОРОНЕНО повторювати ці ж думки, жарти, метафори, тези чи ключові слова. "
+            f"Зміни ракурс, вибери іншу деталь на фото або інший контекст!"
+        )
+
+    # 🧠 Промт (без змін)
+    prompt = (
+        f"Ти — досвідчений меблевий конструктор, майстер виробництва та іронічний копірайтер для Instagram Stories.\n"
+        f"Проаналізуй це зображення (або кадр з відео) і придумай ОДНУ коротку, влучну та чіпляючу фразу (1-2 короткі речення) "
+        f"для нанесення поверх медіафайлу.\n\n"
+        f"🎯 ВИЗНАЧ КОНТЕКСТ МЕДІА ТА ОБЕРИ ВІДПОВІДНИЙ ТОН:\n"
+        f"- Готові меблі / Виставки: естетика, ергономіка, відчуття затишку, геометрія, ідеальні зазори.\n"
+        f"- Цех / Виробництво / Монтаж: залаштунки, тирса, кава, звук фрезера, складні вузли, перфекціонізм.\n"
+        f"- Заміри / Креслення / Документи / Специфікації: стіни 89°, кути не під 90°, крива підлога, «заміри на око», конструкторська магія, рахунки.\n"
+        f"- Суміжники / Брак / «Похабне ставлення»: перли від електриків та сантехніків, як НЕ треба робити, ремонтні фейли, захист меблів від варварів.\n"
+        f"- Доставка / Логістика: вузькі сходи, пакування, квест з ліфтом, «головне не подряпати».\n"
+        f"- Гумор / Приколи / Меми / Працівники: жива самоіронія, меблевий сленг, робочі моменти, філософія цеху.\n\n"
+        f"📋 ДОДАТКОВИЙ КОНТЕКСТ:\n"
+        f"Бренд/Категорія: '{real_manufacturer}'. Рік: {year}. Локація: {resolved_loc if resolved_loc else 'Меблеве виробництво'}.\n"
+        f"{prev_captions_block}\n\n"
+        f"⚠️ СУВОРЕ ВИМОГИ:\n"
+        f"1. {lang_instructions.get(lang_idx, lang_instructions[0])}\n"
+        f"2. Будь живим, прямим та коротким. Уникай кліше: 'найкраща якість', 'індивідуальний підхід', 'купуйте в нас'.\n"
+        f"3. Поверни ЛИШЕ готовий текст підпису. Без лапок, без вступних слів, без хештегів та пояснень."
+    )
+
+    try:
+        # Ініціалізація офіційного SDK
+        client = genai.Client()
+        
+        # Готуємо масив contents
+        contents = [prompt]
+        
+        for img_path in image_paths:
+            if os.path.exists(img_path):
+                try:
+                    img = PILImage.open(img_path)
+                    if img.mode in ("RGBA", "P"):
+                        img = img.convert("RGB")
+                    
+                    img.thumbnail((1024, 1024))
+                    contents.append(img)
+                except Exception as img_err:
+                    print(f"⚠️ Не вдалося обробити зображення {img_path}: {img_err}")
+
+        # 🔍 Динамічне отримання списку моделей згідно з офіційною документацією
+        models_to_try = []
+        try:
+            excluded_keywords = ["image", "tts", "live", "transcribe", "translate", "audio", "veo", "lyria", "embedding", "robotics"]
+            
+            for m in client.models.list():
+                model_id = m.name.replace("models/", "")
+                model_id_lower = model_id.lower()
+                
+                # Перевірка підтримки генерації контенту згідно з документацією Gemini API
+                supported_actions = getattr(m, 'supported_actions', [])
+                if "generateContent" in supported_actions or not supported_actions:
+                    if "flash" in model_id_lower and not any(kw in model_id_lower for kw in excluded_keywords):
+                        models_to_try.append(model_id)
+            
+            # Сортуємо у зворотному порядку для пріоритету новішим версіям
+            models_to_try.sort(reverse=True)
+        except Exception as list_err:
+            print(f"⚠️ Не вдалося автоматично завантажити перелік моделей: {list_err}")
+
+        # Запасний актуальний список моделей
+        fallback_models = [
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-flash-latest"
+        ]
+
+        # Об'єднуємо динамічний список із фолбек-списком, зберігаючи унікальність та порядок
+        final_models_list = []
+        for m in models_to_try + fallback_models:
+            if m not in final_models_list:
+                final_models_list.append(m)
+
+        # Перебираємо моделі до першої успішної відповіді
+        for model_id in final_models_list:
+            print(f"🚀 Генерація підпису через модель {model_id}...")
+            try:
+                response = client.models.generate_content(
+                    model=model_id,
+                    contents=contents
+                )
+                if response and response.text:
+                    return response.text.strip()
+                else:
+                    print(f"⚠️ Модель {model_id} повернула порожню відповідь.")
+            except Exception as model_err:
+                print(f"⚠️ Помилка моделі {model_id}: {model_err}")
+                continue
+
+    except Exception as general_err:
+        print(f"⚠️ Загальна помилка генерації: {general_err}")
+        
+    return pref.get("fallback_caption", "Точний розрахунок та увага до кожної деталі!")
+
+def wait_for_meta_container(container_id, access_token):
+    check_url = f"https://graph.facebook.com/v19.0/{container_id}"
+    params = {"fields": "status_code,status", "access_token": access_token}
+    for _ in range(30):
+        try:
+            r = requests.get(check_url, params=params, timeout=(10, 120)).json()
+            status = r.get("status_code", "").upper()
+            if status == "FINISHED": return True
+            elif status == "ERROR": return False
+            print(f"⏳ Очікування обробки медіафайлу в Meta... Статус: {status}")
+        except Exception as e:
+            print(f"⚠️ Помилка перевірки статусу контейнера Meta: {e}")
+        time.sleep(5)
+    return False
