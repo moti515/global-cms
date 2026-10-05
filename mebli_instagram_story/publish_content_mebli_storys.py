@@ -1,3 +1,38 @@
+"""
+========================================================================================
+ 📦 МОДУЛЬНА АРХІТЕКТУРА ПРОЄКТУ АВТОПУБЛІКАЦІЇ INSTAGRAM STORIES (mebli_instagram_story)
+========================================================================================
+
+1. publish_content_mebli_storys.py (Цей модуль)
+   - Головний виконавчий модуль (оркестратор) автоматичної публікації Instagram Stories.
+   - Відповідає за повний конвеєр: завантаження файлів з гарячої папки Google Drive,
+     запуск графічної обробки, генерацію AI-підписів, завантаження на хостинги та
+     фінальну публікацію через Meta Graph API.
+
+2. config_meb_insta_story.py
+   - Централізований конфігураційний файл проєкту.
+   - Містить ID Google Sheets/Drive, OAuth Scopes, мовні конфігурації (LANG_CONFIG),
+     базу даних брендів/виробників (COMPANIES_DB) та глобальні налаштування.
+
+3. media_processor_meb_instagram_story.py
+   - Спеціалізований модуль обробки фото, відео, EXIF та геолокації.
+   - Відповідає за формати 1080x1920 (Pillow/FFmpeg), нарізку відео по 60 секунд,
+     створення прозорих PNG-оверлеїв з текстом/емодзі, витягування EXIF-метаданих
+     та реверсивне геокодування координат через OpenStreetMap Nominatim.
+
+4. services_manager_meb_instagram_story.py
+   - Менеджер зовнішніх API, авторизації та хмарної інфраструктури.
+   - Забезпечує авторизацію Google Drive/Sheets, завантаження медіафайлів на тимчасові
+     хостинги (Litterbox, ImageKit, Tmpfiles, ImgBB), генерацію підписів через Gemini API,
+     очікування обробки контейнерів Meta API та логування помилок у Google Таблиці.
+
+5. utils_meb_instagram_story.py
+   - Набір загальних допоміжних утиліт та хелперів.
+   - Містить функції очищення тимчасових папок (temp_mebli), валідації файлових імен,
+     безпечного форматування рядків та обробки системних винятків.
+========================================================================================
+"""
+
 import os
 import sys
 import json
@@ -54,7 +89,7 @@ except ImportError:
 
 def publish_story_item(drive_service, sheets_service, file_info, target_tab="Меблі"):
     """
-    Основна функція конвеєра: завантажує файл з Google Drive, проводить інтелектуальну обробку,
+    Основна функція конвеєра: завантажує файл з Google Drive, проводити інтелектуальну обробку,
     генерує підпис Gemini, накладає оверлей і публікує в Instagram Stories через Meta Graph API.
     """
     file_id = file_info['id']
@@ -121,7 +156,6 @@ def publish_story_item(drive_service, sheets_service, file_info, target_tab="М�
             return False
 
         print("📡 Надсилання сторіз в Meta API...")
-        media_type = "VIDEO" if is_video else "IMAGE"
         param_key = "video_url" if is_video else "image_url"
         
         container_url = f"https://graph.facebook.com/v21.0/{ig_user_id}/media"
