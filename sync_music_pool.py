@@ -2,15 +2,15 @@
 # -*- coding: utf-8 -*-
 """
 ========================================================================================
-🎵 АВТОНОМНИЙ МЕНЕДЖЕР ТА РОТАТОР ФОНОВОЇ МУЗИКИ (Pixabay API -> Google Drive)
+🎵 АВТОНОМНИЙ МЕНЕДЖЕР ТА РОТАТОР ФОНОВОЇ МУЗИКИ (Jamendo API -> Google Drive)
 ========================================================================================
 Скрипт підтримує компактний пул фонових треків (21 шт) у Google Диску для
 автоматичного накладання у Facebook Reels та TikTok.
 
 Основні функції:
 1. Контролює розмір пулу музичних файлів (TARGET_POOL_SIZE = 21).
-2. Автоматично видаляє найстаріші треки (ROTATE_COUNT = 3) та замінює їх свіжими з Pixabay API.
-3. Використовує тематичні запити під меблеве виробництво та естетику сторітелінгу.
+2. Автоматично видаляє найстаріші треки (ROTATE_COUNT = 3) та замінює їх свіжими з Jamendo API.
+3. Використовує інструментальну фонову музику під меблеве виробництво та сторітелінг.
 ========================================================================================
 """
 
@@ -36,25 +36,23 @@ from googleapiclient.http import MediaFileUpload
 # ID папки на Google Диску для зберігання фонової музики
 MUSIC_FOLDER_ID = os.environ.get("MUSIC_FOLDER_ID")
 
-# Ключ Pixabay API
-PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY")
+# Ключ Jamendo API (JAMENDO_CLIENT_ID) або Pixabay (якщо використовується стара назва)
+JAMENDO_CLIENT_ID = os.environ.get("JAMENDO_CLIENT_ID") or os.environ.get("PIXABAY_API_KEY")
 
 # Параметри пулу
 TARGET_POOL_SIZE = 21       # Оптимальна кількість треків у папці
 ROTATE_COUNT = 3            # Скільки найстаріших треків замінювати при кожному запуску ротації
 TEMP_DIR = "temp_music_sync"
 
-# 🎯 Тематичні ключові слова Pixabay (Меблевик + ТікТок / Атмосфера)
-THEME_KEYWORDS = [
-    # Тематика: Меблі, Майстерня, Конструювання, Професіоналізм (FB Reels)
-    "lofi", "acoustic", "lounge", "workshop", "chillhop", "craft", "background", "design",
-    # Тематика: Життя поза меблями, Travel, Естетика, TikTok Vibe
-    "chillout", "travel", "vlog", "aesthetic", "lifestyle", "ambient", "summer"
+# 🎯 Тематичні теги для пошуку фонової інструментальної музики
+THEME_TAGS = [
+    "lofi", "acoustic", "lounge", "chillhop", "ambient",
+    "chillout", "travel", "vlog", "aesthetic", "lifestyle"
 ]
 
 
 def get_google_drive_service():
-    """Ініціалізація сервісу Google Drive API з урахуванням ваших назв секретів у GitHub."""
+    """Ініціалізація сервісу Google Drive API з урахуванням секретів GitHub."""
     creds = None
 
     sa_key_raw = os.environ.get("GDRIVE_SERVICE_ACCOUNT_KEY") or os.environ.get("GOOGLE_CREDENTIALS_JSON")
@@ -110,10 +108,7 @@ def sanitize_filename(name: str) -> str:
 
 
 def fetch_existing_drive_tracks(drive_service, folder_id):
-    """
-    Отримує список існуючих MP3-файлів у папці Google Диска,
-    відсортованих за датою створення (від найстаріших до найновіших).
-    """
+    """Отримує список MP3-файлів у папці Google Диска, відсортованих за датою."""
     query = f"'{folder_id}' in parents and trashed = false and (mimeType contains 'audio/' or name contains '.mp3')"
     try:
         results = drive_service.files().list(
@@ -139,74 +134,73 @@ def delete_drive_file(drive_service, file_id, file_name):
         return False
 
 
-def fetch_tracks_from_pixabay(raw_api_key, count_needed, existing_names):
+def fetch_tracks_from_jamendo(client_id, count_needed, existing_names):
     """
-    Шукає та завантажує нові Royalty-Free треки через Pixabay API.
+    Шукає та завантажує інструментальні MP3-треки через Jamendo API.
     """
-    if not raw_api_key:
-        print("⚠️ [Pixabay] Відсутній ключ PIXABAY_API_KEY у змінних оточення.")
+    if not client_id:
+        print("⚠️ [Jamendo] Відсутній JAMENDO_CLIENT_ID у змінних оточення.")
         return []
 
-    # Очищаємо ключ від можливих пробілів, невидимих символів та лапок
-    api_key = raw_api_key.strip().strip("'").strip('"')
+    client_id = client_id.strip().strip("'").strip('"')
+    masked = f"{client_id[:4]}...{client_id[-4:]}" if len(client_id) > 8 else "***"
+    print(f"🔑 [Jamendo API] Використовується Client ID: {masked}")
 
-    # Виводимо діагностику ключа в лог (з маскуванням)
-    masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "***"
-    print(f"🔑 [Pixabay] Використовується API Key: {masked} (довжина: {len(api_key)} символів)")
-
-    random.shuffle(THEME_KEYWORDS)
+    random.shuffle(THEME_TAGS)
     downloaded_tracks = []
-
     os.makedirs(TEMP_DIR, exist_ok=True)
 
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     })
 
-    for keyword in THEME_KEYWORDS:
+    for tag in THEME_TAGS:
         if len(downloaded_tracks) >= count_needed:
             break
 
-        print(f"🔎 [Pixabay API] Пошук музики за тегом: '{keyword}'...")
-        url = "https://pixabay.com/api/audio/"
+        print(f"🔎 [Jamendo API] Пошук інструментальних треків за тегом: '{tag}'...")
+        url = "https://api.jamendo.com/v3.0/tracks/"
         params = {
-            "key": api_key,
-            "q": keyword,
-            "per_page": 20,
-            "order": "popular"
+            "client_id": client_id,
+            "format": "json",
+            "limit": 20,
+            "tags": tag,
+            "vocalinstrumental": "instrumental",  # Тільки фонова інструментальна музика
+            "audioformat": "mp32",                 # Якісний MP3
+            "order": "popularity_week"
         }
 
         try:
             resp = session.get(url, params=params, timeout=15)
             if resp.status_code != 200:
-                print(f"⚠️ Pixabay API повернув статус {resp.status_code}: {resp.text[:200]}")
+                print(f"⚠️ Jamendo API повернув статус {resp.status_code}: {resp.text[:200]}")
                 continue
 
             data = resp.json()
-            hits = data.get("hits", [])
-            random.shuffle(hits)
+            results = data.get("results", [])
+            random.shuffle(results)
 
-            for hit in hits:
+            for hit in results:
                 if len(downloaded_tracks) >= count_needed:
                     break
 
                 track_id = hit.get("id")
-                raw_title = hit.get("title", f"pixabay_{track_id}")
+                raw_title = hit.get("name", f"jamendo_{track_id}")
                 clean_title = sanitize_filename(raw_title)
-                filename = f"pixabay_{track_id}_{clean_title}.mp3"
+                filename = f"jamendo_{track_id}_{clean_title}.mp3"
 
                 if any(str(track_id) in ex_name for ex_name in existing_names):
                     continue
 
-                audio_url = hit.get("audio") or hit.get("download")
+                audio_url = hit.get("audio")
                 if not audio_url:
                     continue
 
                 local_path = os.path.join(TEMP_DIR, filename)
+                duration = hit.get('duration', 0)
 
-                print(f"📥 [Download] Завантаження: {raw_title} ({hit.get('duration', 0)} сек)...")
+                print(f"📥 [Download] Завантаження: {raw_title} ({duration} сек)...")
                 audio_data = session.get(audio_url, timeout=30).content
                 with open(local_path, "wb") as f:
                     f.write(audio_data)
@@ -219,7 +213,7 @@ def fetch_tracks_from_pixabay(raw_api_key, count_needed, existing_names):
                     })
 
         except Exception as err:
-            print(f"⚠️ Помилка під час пошуку/завантаження за тегом '{keyword}': {err}")
+            print(f"⚠️ Помилка завантаження за тегом '{tag}': {err}")
 
     return downloaded_tracks
 
@@ -239,7 +233,7 @@ def upload_track_to_drive(drive_service, folder_id, local_path, filename):
             fields='id, name'
         ).execute()
 
-        print(f"☁️ ✅ [Upload Successful] Файл додано на Google Диск: {uploaded.get('name')} (ID: {uploaded.get('id')})")
+        print(f"☁️ ✅ [Upload Successful] Додано на Google Диск: {uploaded.get('name')} (ID: {uploaded.get('id')})")
         return True
     except Exception as e:
         print(f"❌ [Upload Failed] Помилка завантаження {filename}: {e}")
@@ -249,7 +243,7 @@ def upload_track_to_drive(drive_service, folder_id, local_path, filename):
 def run_music_pool_sync():
     """Головний сценарій оновлення та ротації пулу."""
     print("=" * 80)
-    print("🚀 ІНІЦІАЛІЗАЦІЯ СИНХРОНІЗАЦІЇ ТА РОТАЦІЇ МУЗИЧНОГО ПУЛУ (PIXABAY -> GOOGLE DRIVE)")
+    print("🚀 ІНІЦІАЛІЗАЦІЯ СИНХРОНІЗАЦІЇ ТА РОТАЦІЇ МУЗИЧНОГО ПУЛУ (JAMENDO -> GOOGLE DRIVE)")
     print(f"🕒 Час запуску: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 80)
 
@@ -259,18 +253,17 @@ def run_music_pool_sync():
 
     drive_service = get_google_drive_service()
 
-    # 1. Отримуємо список існуючих треків
+    # 1. Отримуємо існуючі треки
     existing_files = fetch_existing_drive_tracks(drive_service, MUSIC_FOLDER_ID)
     current_count = len(existing_files)
     print(f"📊 Поточна кількість треків у папці Google Диска: {current_count}/{TARGET_POOL_SIZE}")
 
     existing_names = [f['name'] for f in existing_files]
 
-    # 2. Розраховуємо стратегію ротації
+    # 2. Ротація
     files_to_delete = []
-
     if current_count >= TARGET_POOL_SIZE:
-        print(f"🔄 Пул заповнений! Активуємо РОТАЦІЮ: видаляємо {ROTATE_COUNT} найстаріших треків...")
+        print(f"🔄 Пул заповнений! РОТАЦІЯ: видаляємо {ROTATE_COUNT} найстаріших треків...")
         files_to_delete = existing_files[:ROTATE_COUNT]
 
     for f in files_to_delete:
@@ -285,10 +278,10 @@ def run_music_pool_sync():
 
     print(f"🎯 Потрібно додати нових треків: {needed_count}")
 
-    # 3. Завантажуємо нові треки з Pixabay
-    new_tracks = fetch_tracks_from_pixabay(PIXABAY_API_KEY, needed_count, existing_names)
+    # 3. Завантаження з Jamendo API
+    new_tracks = fetch_tracks_from_jamendo(JAMENDO_CLIENT_ID, needed_count, existing_names)
 
-    # 4. Завантажуємо нові треки на Google Диск
+    # 4. Завантаження на Google Диск
     uploaded_success = 0
     for track in new_tracks:
         if upload_track_to_drive(drive_service, MUSIC_FOLDER_ID, track['local_path'], track['filename']):
@@ -296,7 +289,6 @@ def run_music_pool_sync():
 
     print(f"\n🎉 СИНХРОНІЗАЦІЮ ЗАВЕРШЕНО! Успішно додано {uploaded_success} нових треків.")
 
-    # 5. Очищення тимчасової папки
     if os.path.exists(TEMP_DIR):
         shutil.rmtree(TEMP_DIR)
 
