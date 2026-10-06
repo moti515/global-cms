@@ -2,7 +2,12 @@ import os
 
 # ⚙️ НАЛАШТУВАННЯ (GitHub Actions)
 IG_USER_ID = os.environ.get("IG_USER_ID")
+FB_PAGE_ID = os.environ.get("FB_PAGE_ID")
 META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN")
+
+# Налаштування монтажу Reel
+REEL_PHOTO_DURATION = 4.0      # Тривалість відображення фото у секундах
+REEL_TRANSITION_DURATION = 0.6  # Тривалість ефекту переходу (сек)
 
 SPREADSHEET_ID = '1dPObaOYc2C_NuDfgaFXMM9KByjGAVrIiOsiOuY6c6v0'
 TAB_NAME = "Меблі"
