@@ -23,6 +23,7 @@ jobs:
 
       - name: Run Music Pool Sync
         env:
+          PYTHONUNBUFFERED: "1"  # ⚡ Вивід логів без затримок у реальному часі
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           MUSIC_FOLDER_ID: ${{ secrets.MUSIC_FOLDER_ID }}
           GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
