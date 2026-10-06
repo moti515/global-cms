@@ -20,7 +20,7 @@
     - Генерує креативні підписи через новий офіційний SDK google-genai (Gemini AI).
 
  3. media_processor_meta_post.py (ОБРОБКА МЕДІА ТА ФОРМАТУВАННЯ)
-    - Нормалізує зображення (конвертація HEIC/PNG у JPEG, RGB-режим).
+    - Нормалізує зображення (конвертація HEIC/PNG/WEBP у JPEG, RGB-режим).
     - Калібрує геометрію: додає естетичні ЧОРНІ поля (0, 0, 0) для недопустимих пропорцій.
     - Витягує кадр з відео через FFmpeg для візуального аналізу ШІ.
     - Генерує базований на брендах заголовок поста.
@@ -38,12 +38,6 @@ import json
 import time
 import re
 import requests
-from datetime import datetime
-from PIL import Image
-from pillow_heif import register_heif_opener
-
-# Реєстрація HEIF/HEIC для Pillow
-register_heif_opener()
 
 # Імпорт модулів проєкту
 import config_meta_post as config
@@ -77,7 +71,7 @@ def wait_for_meta_container(container_id: str, access_token: str) -> bool:
                 return False
             print(f"⏳ Очікування готовності контейнера... Статус: {status}")
         except Exception as e:
-            print(f"⚠️️ Помилка перевірки статусу: {e}")
+            print(f"⚠️ Помилка перевірки статусу: {e}")
         time.sleep(10)
     return False
 
@@ -112,7 +106,7 @@ def publish_to_facebook(cloud_urls: list, full_caption: str, has_video: bool, lo
             if "id" in photo_res:
                 photo_id = photo_res["id"]
                 break
-            print(f"⚠️ Спроба {attempt + 1}/3 невдала для фото. Meta API: {photo_res}")
+            print(f"⚠️️ Спроба {attempt + 1}/3 невдала для фото. Meta API: {photo_res}")
             time.sleep(5)
 
         if not photo_id:
@@ -235,7 +229,7 @@ def main():
     ).execute()
     rows = res.get('values', [])
     if not rows:
-        print("ℹ️ Реєстр порожній.")
+        print("ℹ️️ Реєстр порожній.")
         return
 
     col_idx, col_letter = (3, "D") if mode == "ig_post" else ((5, "F") if mode == "fb_post" else (None, None))
@@ -314,7 +308,7 @@ def main():
         if is_current_video:
             has_video = True
 
-        # Унифікована обробка через media_processor (конвертація HEIC/PNG/WEBP, нормалізація, чорні поля)
+        # Уніфікована обробка через media_processor (конвертація HEIC/PNG/WEBP, нормалізація, чорні поля)
         optimized_path = media_processor.optimize_media_geometry(local_path, safe_local_name, mime_type)
         if optimized_path != local_path:
             local_files.append(optimized_path)
