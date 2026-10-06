@@ -6,6 +6,7 @@ import subprocess
 import requests
 import time
 import random
+import shutil
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageOps, ImageFont
 from PIL.ExifTags import TAGS, GPSTAGS
