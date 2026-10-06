@@ -5,6 +5,7 @@ import textwrap
 import subprocess
 import requests
 import time
+import random
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageOps, ImageFont
 from PIL.ExifTags import TAGS, GPSTAGS
@@ -460,3 +461,110 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
         print(f"⚠️ Помилка зчитування системних дат Google Drive: {e}")
 
     return now_time, lat, lon
+
+def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_duration=4.0, transition_dur=0.6):
+    """
+    Склеює масив оброблених фото/відео сторіс в один суцільний Facebook Reel (1080x1920)
+    із динамічними ефектами переходу (xfade) та вирівняним аудіорядом.
+    """
+    if not processed_files:
+        return None
+
+    temp_clips = []
+    clip_durations = []
+
+    print(f"\n🎬 [Reels Builder] Підготовка {len(processed_files)} фрагментів для Facebook Reel...")
+
+    # 1. Нормалізація кожного медіафайлу у 1080x1920 MP4 (30 fps) з однаковим аудіоформатом
+    for idx, file_path in enumerate(processed_files):
+        clip_path = f"temp_mebli/reel_clip_{idx}.mp4"
+        is_video = file_path.lower().endswith(('.mp4', '.mov', '.avi'))
+
+        if is_video:
+            # Визначаємо тривалість оригінального відео через ffprobe
+            dur_cmd = f'ffprobe -v error -show_entries format=duration -of default=noprintwrappers=1:nokey=1 "{file_path}"'
+            try:
+                dur = float(subprocess.check_output(dur_cmd, shell=True).decode().strip())
+            except Exception:
+                dur = 5.0
+
+            # Нормалізуємо відео до 1080x1920, 30fps, yuv420p + додаємо тишу, якщо відсутній аудіотрек
+            cmd = (
+                f'ffmpeg -y -i "{file_path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
+                f'-filter_complex "[0:v]fps=30,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1080-ih)/2[v];'
+                f'[0:a][1:a]amerge=inputs=1[a]" '
+                f'-map "[v]" -map "[a]" -c:v libx264 -c:a aac -pix_fmt yuv420p -shortest "{clip_path}"'
+            )
+            clip_durations.append(dur)
+        else:
+            # Преобразуємо фото у 4-секундне відео з тихим аудіотреком
+            dur = photo_duration
+            cmd = (
+                f'ffmpeg -y -loop 1 -i "{file_path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
+                f'-t {photo_duration} -r 30 '
+                f'-vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1080-ih)/2,format=yuv420p" '
+                f'-c:v libx264 -c:a aac -shortest "{clip_path}"'
+            )
+            clip_durations.append(dur)
+
+        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(clip_path):
+            temp_clips.append(clip_path)
+
+    if not temp_clips:
+        print("❌ [Reels Builder] Не вдалося згенерувати фрагменти відео.")
+        return None
+
+    if len(temp_clips) == 1:
+        # Якщо в серії був лише 1 файл — просто копіюємо його
+        shutil.copy(temp_clips[0], output_reel_path)
+        return output_reel_path
+
+    # 2. Побудова FFmpeg xfade filter_complex для кількох фрагментів
+    transitions = ['fade', 'wipeleft', 'wiperight', 'slideleft', 'slideright', 'circlecrop', 'dissolve', 'fadeblack']
+    
+    inputs_str = " ".join([f'-i "{c}"' for c in temp_clips])
+    filter_parts = []
+    
+    current_offset = clip_durations[0] - transition_dur
+    prev_v = "[0:v]"
+    prev_a = "[0:a]"
+
+    for i in range(1, len(temp_clips)):
+        trans = random.choice(transitions)
+        next_v = f"[v_trans_{i}]" if i < len(temp_clips) - 1 else "[v_out]"
+        next_a = f"[a_trans_{i}]" if i < len(temp_clips) - 1 else "[a_out]"
+
+        filter_parts.append(
+            f"{prev_v}[{i}:v]xfade=transition={trans}:duration={transition_dur}:offset={current_offset:.2f}{next_v}"
+        )
+        filter_parts.append(
+            f"{prev_a}[{i}:a]acrossfade=d={transition_dur}{next_a}"
+        )
+
+        if i < len(temp_clips) - 1:
+            current_offset += clip_durations[i] - transition_dur
+            prev_v = next_v
+            prev_a = next_a
+
+    filter_complex = ";".join(filter_parts)
+
+    concat_cmd = (
+        f'ffmpeg -y {inputs_str} -filter_complex "{filter_complex}" '
+        f'-map "[v_out]" -map "[a_out]" -c:v libx264 -c:a aac -preset fast "{output_reel_path}"'
+    )
+
+    print("🎬 [Reels Builder] Збірка та рендеринг фінального Reel з перехідними ефектами...")
+    res = subprocess.run(concat_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # Очищаємо проміжні кліпи
+    for c in temp_clips:
+        if os.path.exists(c):
+            try: os.remove(c)
+            except: pass
+
+    if os.path.exists(output_reel_path) and os.path.getsize(output_reel_path) > 0:
+        print(f"✅ [Reels Builder] Успішно згенеровано Reel: {output_reel_path}")
+        return output_reel_path
+    
+    return None
