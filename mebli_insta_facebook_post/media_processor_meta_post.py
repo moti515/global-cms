@@ -5,7 +5,8 @@
 
 ОПИС РОБОТИ МОДУЛЯ:
  1. Оптимізація та нормалізація зображень: Відкриває зображення будь-якого формату 
-    (HEIC, PNG, WEBP, JPEG), примусово конвертує у чистий Baseline RGB JPEG.
+    (HEIC, PNG, WEBP, JPEG), автоповертає пікселі за EXIF Orientation,
+    примусово конвертує у чистий Baseline RGB JPEG.
  2. Калібрування пропорцій: Якщо співвідношення сторін виходить за межі [0.8; 1.91], 
     додає підкладку ЧОРНОГО кольору (0, 0, 0) для відповідності стандартам Meta API.
  3. Аналіз відео: Використовує системну утиліту FFmpeg (із захисною перевіркою shutil.which) 
@@ -21,14 +22,14 @@ import json
 import shutil
 import subprocess
 from datetime import datetime
-from PIL import Image
+from PIL import Image, ImageOps  # 👈 Додано ImageOps
 from pillow_heif import register_heif_opener
 
 register_heif_opener()
 
 
 def optimize_media_geometry(local_path: str, filename: str, mime_type: str) -> str:
-    """Нормалізує зображення у RGB JPEG та додає ЧОРНІ поля (0, 0, 0) для неправильних пропорцій."""
+    """Нормалізує зображення у RGB JPEG, повертає за EXIF та додає ЧОРНІ поля (0, 0, 0) для неправильних пропорцій."""
     if not os.path.exists(local_path):
         return local_path
 
@@ -37,7 +38,10 @@ def optimize_media_geometry(local_path: str, filename: str, mime_type: str) -> s
 
     try:
         with Image.open(local_path) as img:
+            # 🌟 КРИТИЧНЕ ВИПРАВЛЕННЯ: Фізично повертаємо пікселі згідно з EXIF Orientation
+            img = ImageOps.exif_transpose(img)
             img = img.convert('RGB')
+            
             w, h = img.size
             ratio = w / h
             needs_padding = ratio < 0.8 or ratio > 1.91
