@@ -9,6 +9,7 @@ import random
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageOps, ImageFont
 from PIL.ExifTags import TAGS, GPSTAGS
+from googleapiclient.http import MediaIoBaseDownload
 
 # In-memory кеш для геокодування, щоб не робити повторні запити для однакових координат
 _GEOCODE_CACHE = {}
@@ -568,3 +569,84 @@ def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_dur
         return output_reel_path
     
     return None
+
+def fetch_random_music_from_drive(drive_service, music_folder_id, temp_dir="temp_mebli"):
+    """
+    Вибирає випадковий MP3-файл із пулу на Google Диску та завантажує його локально.
+    """
+    if not music_folder_id:
+        print("ℹ️ [Drive Audio] MUSIC_FOLDER_ID не вказано в конфігу.")
+        return None
+
+    query = f"'{music_folder_id}' in parents and trashed = false and (mimeType contains 'audio/' or name contains '.mp3' or name contains '.wav')"
+    try:
+        results = drive_service.files().list(
+            q=query,
+            fields="files(id, name)",
+            pageSize=100
+        ).execute()
+        files = results.get('files', [])
+
+        if not files:
+            print("ℹ️ [Drive Audio] Папка з музикою на Google Диску порожня.")
+            return None
+
+        # Вибираємо випадковий трек із пулу
+        selected_file = random.choice(files)
+        file_id = selected_file['id']
+        file_name = selected_file['name']
+        local_music_path = os.path.join(temp_dir, f"bg_music_{file_id}.mp3")
+
+        print(f"🎵 [Drive Audio] Завантажуємо випадковий фоновий трек: {file_name}...")
+
+        request = drive_service.files().get_media(fileId=file_id)
+        with open(local_music_path, 'wb') as fh:
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+
+        if os.path.exists(local_music_path) and os.path.getsize(local_music_path) > 0:
+            return local_music_path
+
+    except Exception as e:
+        print(f"⚠️️ [Drive Audio] Помилка завантаження фонової музики: {e}")
+
+    return None
+
+
+def add_background_music_to_reel(video_path, output_path, music_file_path, music_volume=0.35):
+    """
+    Накладає фоновий трек на згенерований Reel через FFmpeg.
+    Автоматично адаптує довжину аудіо під тривалість відео та додає fade-out.
+    """
+    if not music_file_path or not os.path.exists(music_file_path):
+        print("ℹ️️ [Reels Audio] Фонова музика відсутня, використовуємо сирий Reel.")
+        return video_path
+
+    # 1. Визначаємо точну тривалість згенерованого Reel
+    dur_cmd = f'ffprobe -v error -show_entries format=duration -of default=noprintwrappers=1:nokey=1 "{video_path}"'
+    try:
+        duration = float(subprocess.check_output(dur_cmd, shell=True).decode().strip())
+    except Exception:
+        duration = 15.0
+
+    fade_out_start = max(0.0, duration - 1.5)
+
+    # 2. FFmpeg фільтр: зациклення (-stream_loop -1), точна обрізка (atrim), fade-out (afade) та міксування (amix)
+    cmd = (
+        f'ffmpeg -y -i "{video_path}" -stream_loop -1 -i "{music_file_path}" '
+        f'-filter_complex "[1:a]atrim=0:{duration:.2f},afade=t=out:st={fade_out_start:.2f}:d=1.5,volume={music_volume}[bg_audio];'
+        f'[0:a][bg_audio]amix=inputs=2:duration=first:dropout_transition=2[aout]" '
+        f'-map 0:v -map "[aout]" -c:v copy -c:a aac -shortest "{output_path}"'
+    )
+
+    print(f"🎬 🎵 [Reels Audio] Накладення музики на Reel (тривалість: {duration:.1f} сек)...")
+    subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+        print("✅ [Reels Audio] Фонова музика успішно накладена!")
+        return output_path
+
+    print("⚠️ [Reels Audio] Не вдалося накласти музику, використовується початковий Reel.")
+    return video_path
