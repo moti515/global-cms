@@ -1,3 +1,19 @@
+"""
+================================================================================
+⚙️ МОДУЛЬ КОНФІГУРАЦІЇ ТА ЛОКАЛІЗАЦІЇ (ENV, DB, Translation Config)
+================================================================================
+
+ОПИС РОБОТИ МОДУЛЯ:
+ 1. Системні змінні оточення (ENV): Безпечно отримує секретні ключі API Meta, 
+    Gemini AI, ImageKit, ImgBB та Google Service Account з GitHub Secrets.
+ 2. Таблиці та формати: Зберігає ID Google Таблиці, назви вкладок та валідні розширення.
+ 3. Мультимовність (LANG_CONFIG): Містить локалізовані фрази для UK, EN, DE мов.
+ 4. База брендів (COMPANIES_DB): Містить сопоставлення виробників меблів з їхніми 
+    соціальними акаунтами, посиланнями та тегами для автопідстановки у дописи.
+
+================================================================================
+"""
+
 import os
 
 # ⚙️ СИСТЕМНІ ЗМІННІ (GitHub Actions / ENV)
@@ -47,7 +63,7 @@ LANG_CONFIG = {
         "loc": "Standort", 
         "assembly": "Montage: Möbel, bei deren Montage wir mitgewirkt haben (professioneller Aufbau)", 
         "concept": "Konzept: Interessante Möbellösungen, Trends und Ideen aus aller Welt", 
-        "ergonomics": "Eronomie und Konstruktion: Nützliche Standards und Maße, die bei der Möbelkonstruktion beachtet werden sollten.",
+        "ergonomics": "Ergonomie und Konstruktion: Nützliche Standards und Maße, die bei der Möbelkonstruktion beachtet werden sollten.",
         "link_in_bio": "🔗 Link zum Portfolio finden Sie in unserer Bio!",
         "fallback_caption": "Tolle Arbeit unseres Teams! Wie gefällt Ihnen das Ergebnis? 👇😊",
         "no_gemini_caption": "Qualitätsmöbel für Ihr gemütliches Zuhause! 👇✨ #moebel #interieur"
