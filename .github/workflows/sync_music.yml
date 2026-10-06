@@ -1,19 +1,19 @@
 name: Sync & Rotate Music Pool
 
 on:
-  schedule:
-    - cron: '0 2 * * 0' # Автоматичний запуск щонеділі о 02:00 ночі
   workflow_dispatch: # Кнопка для ручного запуску в UI GitHub
+  repository_dispatch: # Запуск через зовнiшнiй вебхук (cron-job.org)
+    types: [sync-music-event]
 
 jobs:
   sync-music:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
