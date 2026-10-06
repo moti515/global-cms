@@ -415,7 +415,7 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
                 reel_description = f"✨ {target_tab} | {batch_items[0]['date_str']}\n" + "\n".join([f"• {c}" for c in previous_captions if c])
                 
                 fb_page_id = getattr(config, 'FB_PAGE_ID', os.environ.get("FB_PAGE_ID"))
-                fb_token = getattr(config, 'FB_PAGE_ACCESS_TOKEN', access_token)
+                fb_token = getattr(config, 'META_ACCESS_TOKEN', access_token)
 
                 print("📡 Відправка згенерованого Reel у Facebook Page Reels API...")
                 fb_success, fb_res = publish_facebook_reel(fb_page_id, fb_token, reel_url, description=reel_description)
