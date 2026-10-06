@@ -150,14 +150,19 @@ def fetch_tracks_from_pixabay(api_key, count_needed, existing_names):
         print("⚠️ [Pixabay] Відсутній ключ PIXABAY_API_KEY у змінних оточення.")
         return []
 
+    # Очищаємо API-ключ від можливих випадкових пробілів та лапок
+    api_key = api_key.strip().strip("'").strip('"')
+
     random.shuffle(THEME_KEYWORDS)
     downloaded_tracks = []
 
     os.makedirs(TEMP_DIR, exist_ok=True)
 
-    # 🌐 Маскуємо запит під звичайний браузер, щоб оминути блокування 403
+    # Заголовки запиту для імітації реального браузера
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9"
     }
 
     for keyword in THEME_KEYWORDS:
@@ -176,7 +181,7 @@ def fetch_tracks_from_pixabay(api_key, count_needed, existing_names):
         try:
             resp = requests.get(url, params=params, headers=headers, timeout=15)
             if resp.status_code != 200:
-                print(f"⚠️ Pixabay API повернув статус {resp.status_code}")
+                print(f"⚠️ Pixabay API повернув статус {resp.status_code}: {resp.text[:200]}")
                 continue
 
             data = resp.json()
@@ -192,7 +197,6 @@ def fetch_tracks_from_pixabay(api_key, count_needed, existing_names):
                 clean_title = sanitize_filename(raw_title)
                 filename = f"pixabay_{track_id}_{clean_title}.mp3"
 
-                # Перевірка, чи немає вже такого треку на Диску
                 if any(str(track_id) in ex_name for ex_name in existing_names):
                     continue
 
