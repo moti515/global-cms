@@ -277,15 +277,23 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         except Exception as list_err:
             print(f"⚠️ Не вдалося автоматично завантажити перелік моделей: {list_err}")
 
-        # Запасний точний список моделей згідно з актуальною документацією Gemini 3
+        # Запасний точний список моделей згідно з актуальною документацією Gemini
         if not models_to_try:
             models_to_try = [
+                # --- Gemini 3 (Stable & Preview) ---
                 "gemini-3.8-flash",
                 "gemini-3.7-flash",
                 "gemini-3.6-flash",
                 "gemini-3.5-flash",
                 "gemini-3.5-flash-lite",
                 "gemini-3.1-flash-lite",
+                "gemini-3.1-pro-preview",
+                "gemini-3-flash-preview",
+                # --- Gemini 2.5 (Legacy/Fallback) ---
+                "gemini-2.5-flash",
+                "gemini-2.5-flash-lite",
+                "gemini-2.5-pro",
+                # --- General Alias ---
                 "gemini-flash-latest"
             ]
 
