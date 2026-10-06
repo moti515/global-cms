@@ -2,7 +2,7 @@ name: Sync & Rotate Music Pool
 
 on:
   workflow_dispatch: # Кнопка для ручного запуску в UI GitHub
-  repository_dispatch: # Запуск через зовнiшнiй вебхук (cron-job.org)
+  repository_dispatch: # Запуск через зовнішній вебхук (cron-job.org)
     types: [sync-music-event]
 
 jobs:
@@ -24,11 +24,12 @@ jobs:
       - name: Run Music Pool Sync
         env:
           PYTHONUNBUFFERED: "1"  # ⚡ Вивід логів без затримок у реальному часі
-          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }} # Фолбек, якщо використовується стара назва секрету
           MUSIC_FOLDER_ID: ${{ secrets.MUSIC_FOLDER_ID }}
           GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
           GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
         run: |
-          python sync_pixabay_music_pool.py
+          python sync_music_pool.py
