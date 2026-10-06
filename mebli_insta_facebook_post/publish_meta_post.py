@@ -20,7 +20,7 @@
     - Генерує креативні підписи через новий офіційний SDK google-genai (Gemini AI).
 
  3. media_processor_meta_post.py (ОБРОБКА МЕДІА ТА ФОРМАТУВАННЯ)
-    - Нормалізує зображення (конвертація HEIC/PNG/WEBP у JPEG, RGB-режим).
+    - Нормалізує зображення (конвертація HEIC/PNG у JPEG, RGB-режим).
     - Калібрує геометрію: додає естетичні ЧОРНІ поля (0, 0, 0) для недопустимих пропорцій.
     - Витягує кадр з відео через FFmpeg для візуального аналізу ШІ.
     - Генерує базований на брендах заголовок поста.
@@ -39,6 +39,11 @@ import time
 import re
 import requests
 from datetime import datetime
+from PIL import Image
+from pillow_heif import register_heif_opener
+
+# Реєстрація HEIF/HEIC для Pillow
+register_heif_opener()
 
 # Імпорт модулів проєкту
 import config_meta_post as config
@@ -72,7 +77,7 @@ def wait_for_meta_container(container_id: str, access_token: str) -> bool:
                 return False
             print(f"⏳ Очікування готовності контейнера... Статус: {status}")
         except Exception as e:
-            print(f"⚠️ Помилка перевірки статусу: {e}")
+            print(f"⚠️️ Помилка перевірки статусу: {e}")
         time.sleep(10)
     return False
 
@@ -233,4 +238,148 @@ def main():
         print("ℹ️ Реєстр порожній.")
         return
 
-    col_idx, col_letter = (3, "D") if mode == "ig_post" else ((5, "F") if mode
+    col_idx, col_letter = (3, "D") if mode == "ig_post" else ((5, "F") if mode == "fb_post" else (None, None))
+    if col_idx is None:
+        print(f"❌ Невідомий режим публікації: {mode}")
+        sys.exit(1)
+
+    valid_rows = []
+    for i, r in enumerate(rows):
+        if len(r) >= 3 and r[2].lower() != "temporary":
+            try:
+                val = r[col_idx] if len(r) > col_idx and r[col_idx] else "0"
+                valid_rows.append({"row_idx": i + 2, "data": r, "counter": int(val)})
+            except ValueError:
+                continue
+
+    if not valid_rows:
+        print("ℹ️ Немає валідних рядків для обробки.")
+        return
+
+    # Групування за проектом / типом
+    min_counter = min(item["counter"] for item in valid_rows)
+    min_pool = [item for item in valid_rows if item["counter"] == min_counter]
+
+    groups = {}
+    for item in min_pool:
+        data = item["data"]
+        group_loc_json = data[8] if len(data) > 8 else (data[7] if len(data) > 7 else "")
+        group_key = (data[2], data[6] if len(data) > 6 else "", group_loc_json)
+        groups.setdefault(group_key, []).append(item)
+
+    first_key = list(groups.keys())[0]
+    selected_group_items = groups[first_key][:4]
+    category_name, target_date, target_loc = first_key
+    print(f"📂 Обрано групу: {category_name} (Файлів у пулі: {len(selected_group_items)})")
+
+    # Управління мовою
+    target_lang_cell = "'⚙️ Налаштування Папок'!F2" if mode == "fb_post" else "'⚙️ Налаштування Папок'!G2"
+    lang_value = service_manager.read_current_language(sheets, target_lang_cell)
+    
+    lang_idx, lang_flag, next_lang_value = (
+        (1, "🇬🇧", "DE") if lang_value == "EN" else (
+        (2, "🇩🇪", "UK") if lang_value == "DE" else 
+        (0, "🇺🇦", "EN"))
+    )
+    print(f"🌐 Поточна мова: {lang_value} (Індекс: {lang_idx}, Прапор: {lang_flag}). Наступна: {next_lang_value}")
+
+    # Валідація розширень
+    for item in selected_group_items:
+        f_name = item["data"][1]
+        if not f_name.lower().endswith(config.VALID_MEDIA_EXTENSIONS):
+            print(f"❌ КРИТИЧНА ПОМИЛКА: Файл '{f_name}' має непідтримуваний формат!")
+            sys.exit(1)
+
+    os.makedirs('temp_mebli', exist_ok=True)
+    local_files, uploaded_media, ik_ids, ai_analysis_images = [], [], [], []
+    has_video = False
+
+    # Завантаження та єдина обробка медіа
+    for item in selected_group_items:
+        f_id, f_name = item["data"][0], item["data"][1]
+        safe_local_name = sanitize_filename(f"{f_id[:8]}_{f_name}")
+        local_path = os.path.join('temp_mebli', safe_local_name)
+
+        print(f"📥 Завантаження з Drive: {f_name} -> {safe_local_name}...")
+        try:
+            service_manager.download_file_from_drive(drive, f_id, local_path)
+        except Exception as e:
+            print(f"❌ КРИТИЧНА ПОМИЛКА скачування '{f_name}': {e}")
+            clean_up_local_files(local_files)
+            sys.exit(1)
+
+        local_files.append(local_path)
+        mime_type = "video/mp4" if safe_local_name.lower().endswith(('.mp4', '.mov', '.avi')) else "image/jpeg"
+        is_current_video = (mime_type == "video/mp4")
+        if is_current_video:
+            has_video = True
+
+        # Унифікована обробка через media_processor (конвертація HEIC/PNG/WEBP, нормалізація, чорні поля)
+        optimized_path = media_processor.optimize_media_geometry(local_path, safe_local_name, mime_type)
+        if optimized_path != local_path:
+            local_files.append(optimized_path)
+
+        if is_current_video:
+            frame_path = os.path.join('temp_mebli', f"frame_{f_id}.jpg")
+            extracted_frame = media_processor.extract_video_frame(optimized_path, frame_path)
+            if extracted_frame and os.path.exists(extracted_frame):
+                ai_analysis_images.append(extracted_frame)
+                local_files.append(extracted_frame)
+        else:
+            ai_analysis_images.append(optimized_path)
+
+        # Завантаження на зовнішні сервери
+        try:
+            pub_url, ik_id = service_manager.get_google_drive_direct_url(f_id, local_file_path=optimized_path)
+            if not pub_url:
+                raise ValueError("Порожній URL публікації.")
+            uploaded_media.append({"url": pub_url, "is_video": is_current_video})
+            if ik_id:
+                ik_ids.append(ik_id)
+        except Exception as e:
+            print(f"❌ КРИТИЧНА ПОМИЛКА генерування посилання '{f_name}': {e}")
+            clean_up_local_files(local_files)
+            sys.exit(1)
+
+    # Генерація підпису
+    header_text = media_processor.get_manufacturer_header(category_name, target_date, lang_idx, mode, target_loc)
+    ai_text = service_manager.generate_multimodal_caption(ai_analysis_images, category_name, target_date, lang_idx)
+    full_caption = f"{lang_flag} {header_text}{ai_text}"
+
+    # Перевірка ENV ключів
+    if mode == "fb_post" and not config.FB_PAGE_ID:
+        print("❌ Відсутній FB_PAGE_ID!")
+        clean_up_local_files(local_files)
+        sys.exit(1)
+    if mode == "ig_post" and not config.IG_USER_ID:
+        print("❌ Відсутній IG_USER_ID!")
+        clean_up_local_files(local_files)
+        sys.exit(1)
+
+    # Виклик потрібної платформи
+    if mode == "fb_post":
+        res = publish_to_facebook([m["url"] for m in uploaded_media], full_caption, has_video, local_files)
+    else:
+        res = publish_to_instagram(uploaded_media, full_caption, local_files)
+
+    # Фіналізація та оновлення даних
+    if res and ("id" in res or "post_id" in res):
+        print(f"✅ Успішно опубліковано! ID: {res.get('id', res.get('post_id'))}")
+        service_manager.update_sheets_registry_and_lang(
+            sheets, selected_group_items, current_tab, col_letter, target_lang_cell, next_lang_value
+        )
+        if ik_ids:
+            print("🧹 Очищення тимчасового сховища ImageKit...")
+            for ik_id in ik_ids:
+                service_manager.delete_from_imagekit(ik_id)
+    else:
+        print(f"❌ КРИТИЧНА ПОМИЛКА Meta API: {res}")
+        clean_up_local_files(local_files)
+        sys.exit(1)
+
+    clean_up_local_files(local_files)
+    print("🎯 Скрипт успішно завершив роботу.")
+
+
+if __name__ == "__main__":
+    main()
