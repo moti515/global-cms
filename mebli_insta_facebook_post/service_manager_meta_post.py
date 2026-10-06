@@ -80,7 +80,7 @@ def update_sheets_registry_and_lang(sheets_service, items: list, current_tab: st
         ).execute()
         print(f"🔄 Мову на наступний раз змінено на: {next_lang}")
     except Exception as e:
-        print(f"⚠️ Не вдалося оновити комірку мови: {e}")
+        print(f"⚠️️ Не вдалося оновити комірку мови: {e}")
 
 
 def get_google_drive_direct_url(file_id, local_file_path=None):
