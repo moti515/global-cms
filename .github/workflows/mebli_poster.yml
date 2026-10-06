@@ -16,7 +16,7 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 15  # ⏱️ Автоматично зупинить workflow, якщо він висить понад 15 хвилин
+    timeout-minutes: 30  # ⏱️ Автоматично зупинить workflow, якщо він висить понад 30 хвилин
 
     steps:
     - name: Перевірка коду репозиторію
