@@ -178,3 +178,55 @@ def cleanup_temp_dir(directory: str = "temp_mebli"):
             print(f"🧹 Тимчасова папка '{directory}' успішно очищена.")
         except Exception as e:
             print(f"⚠️ Не вдалося повністю очистити '{directory}': {e}")
+
+def publish_facebook_reel(page_id: str, access_token: str, video_url: str, description: str = ""):
+    """
+    Публікує згенероване відео в Facebook Page Reels за допомогою офіційного 3-етапного API Meta.
+    """
+    if not page_id or not access_token or not video_url:
+        print("⚠️ [FB Reels API] Відсутні ключі або посилання для публікації Facebook Reel.")
+        return False, "Missing credentials or video URL"
+
+    try:
+        # ЕТАП 1: Створення сесії завантаження
+        init_url = f"https://graph.facebook.com/v21.0/{page_id}/video_reels"
+        init_payload = {
+            "upload_phase": "start",
+            "access_token": access_token
+        }
+        r_init = requests.post(init_url, data=init_payload, timeout=30).json()
+
+        if "video_id" not in r_init or "upload_url" not in r_init:
+            return False, f"Помилка ініціалізації FB Reel: {r_init}"
+
+        video_id = r_init["video_id"]
+        upload_url = r_init["upload_url"]
+
+        # ЕТАП 2: Завантаження відео за прямою URL адресою
+        headers = {
+            "Authorization": f"OAuth {access_token}",
+            "file_url": video_url
+        }
+        r_upload = requests.post(upload_url, headers=headers, timeout=120).json()
+
+        if not r_upload.get("success"):
+            return False, f"Помилка завантаження файлу в FB Reels: {r_upload}"
+
+        # ЕТАП 3: Публікація Reel
+        publish_url = f"https://graph.facebook.com/v21.0/{page_id}/video_reels"
+        publish_payload = {
+            "upload_phase": "finish",
+            "video_id": video_id,
+            "video_state": "PUBLISHED",
+            "description": description,
+            "access_token": access_token
+        }
+        r_pub = requests.post(publish_url, data=publish_payload, timeout=30).json()
+
+        if r_pub.get("success") or "id" in r_pub:
+            return True, r_pub.get("id", video_id)
+        else:
+            return False, f"Помилка фіналізації FB Reel: {r_pub}"
+
+    except Exception as e:
+        return False, f"Збій публікації Facebook Reel: {e}"
