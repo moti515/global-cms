@@ -1,0 +1,33 @@
+name: Sync & Rotate Music Pool
+
+on:
+  schedule:
+    - cron: '0 2 * * 0' # Автоматичний запуск щонеділі о 02:00 ночі
+  workflow_dispatch: # Кнопка для ручного запуску в UI GitHub
+
+jobs:
+  sync-music:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install google-api-python-client google-auth requests
+
+      - name: Run Music Pool Sync
+        env:
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          MUSIC_FOLDER_ID: ${{ secrets.MUSIC_FOLDER_ID }}
+          GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+        run: |
+          python sync_pixabay_music_pool.py
