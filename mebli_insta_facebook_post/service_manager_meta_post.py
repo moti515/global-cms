@@ -9,7 +9,8 @@
  2. Каскадний хостинг медіа: Послідовно відправляє файли на Litterbox (з павзою 3s), 
     а при його відмові — у резервний бізнес-акаунт ImageKit чи ImgBB API.
  3. Генерація підписів Gemini AI: Використовує новий офіційний SDK google-genai 
-    (`client.models.generate_content`) для створення релевантних текстів трьома мовами.
+    (`client.models.generate_content`) із динамічним опитуванням моделей, 
+    вимкненням AFC та оптимізованим передаванням зображень.
 
 ================================================================================
 """
@@ -20,6 +21,7 @@ import requests
 import time
 from PIL import Image as PILImage
 from google import genai
+from google.genai import types
 from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -80,7 +82,7 @@ def update_sheets_registry_and_lang(sheets_service, items: list, current_tab: st
         ).execute()
         print(f"🔄 Мову на наступний раз змінено на: {next_lang}")
     except Exception as e:
-        print(f"⚠️️ Не вдалося оновити комірку мови: {e}")
+        print(f"⚠️ Не вдалося оновити комірку мови: {e}")
 
 
 def get_google_drive_direct_url(file_id, local_file_path=None):
@@ -167,9 +169,10 @@ def delete_from_imagekit(file_id: str):
 
 
 def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
-    """Генерує креативний підпис через новий SDK google-genai (client.models.generate_content)."""
+    """Генерує креативний підпис через новий SDK google-genai з динамічним вибором моделей та вимкненням AFC."""
     pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
-    if not config.GEMINI_API_KEY:
+    gemini_key = os.environ.get("GEMINI_API_KEY") or config.GEMINI_API_KEY
+    if not gemini_key:
         return pref["no_gemini_caption"]
 
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
@@ -188,22 +191,13 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
                 real_manufacturer = info["names"].get(lang_idx, info["names"][0])
                 break
 
-    models_to_try = [
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite"
-    ]
-
     lang_instructions = {
         0: "Напиши текст виключно УКРАЇНСЬКОЮ мовою. Дозволено додати 1-2 доречних емоїз.",
         1: "Write the text exclusively in ENGLISH. You may include 1-2 relevant emojis.",
         2: "Schreibe den Text ausschließlich auf DEUTSCH. Du darfst 1-2 passende Emojis hinzufügen."
     }
 
+    # Оригінальний промпт залишено без змін
     prompt = (
         f"Ти — досвідчений копірайтер із тонким почуттям гумору та експертний меблевий конструктор.\n"
         f"Подивись на ці зображення (або кадр з відео) і придумай один короткий, влучний та чіпляючий пост для соцмереж.\n\n"
@@ -221,7 +215,8 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
     )
 
     try:
-        client = genai.Client(api_key=config.GEMINI_API_KEY)
+        # Ініціалізація клієнта (автоматично використовує GEMINI_API_KEY)
+        client = genai.Client(api_key=gemini_key)
         contents = [prompt]
 
         for img_path in image_paths:
@@ -235,20 +230,65 @@ def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
                 except Exception as img_err:
                     print(f"⚠️ Не вдалося відкрити зображення {img_path}: {img_err}")
 
-        for model in models_to_try:
-            print(f"🚀 Спроба генерації підпису через {model}...")
+        # 🔍 Динамічний отримання списку актуальних моделей від Google API
+        models_to_try = []
+        try:
+            excluded_keywords = [
+                "image", "tts", "live", "transcribe", "translate", 
+                "audio", "veo", "lyria", "embedding", "robotics", "omni"
+            ]
+            for m in client.models.list():
+                model_name = m.name.replace("models/", "")
+                model_name_lower = model_name.lower()
+                
+                supported_actions = getattr(m, 'supported_actions', [])
+                if "generateContent" in supported_actions or not supported_actions:
+                    if "flash" in model_name_lower and not any(kw in model_name_lower for kw in excluded_keywords):
+                        models_to_try.append(model_name)
+
+            models_to_try.sort(reverse=True)
+        except Exception as list_err:
+            print(f"⚠️ Помилка зчитування переліку моделей: {list_err}")
+
+        # Резервний перелік якщо динамічний списока порожній
+        if not models_to_try:
+            models_to_try = [
+                "gemini-3.8-flash",
+                "gemini-3.7-flash",
+                "gemini-3.6-flash",
+                "gemini-3.5-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-flash-lite",
+                "gemini-2.5-flash",
+                "gemini-2.5-flash-lite"
+            ]
+
+        # Конфігурація із суворим вимкненням Automatic Function Calling
+        gen_config = types.GenerateContentConfig(
+            temperature=0.7,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=True
+            )
+        )
+
+        for model_id in models_to_try:
+            print(f"🚀 Генерація підпису через модель {model_id}...")
             try:
-                response = client.models.generate_content(model=model, contents=contents)
+                response = client.models.generate_content(
+                    model=model_id,
+                    contents=contents,
+                    config=gen_config
+                )
                 if response and response.text:
                     return response.text.strip()
-                print(f"⚠️ Модель {model} повернула порожню відповідь.")
+                print(f"⚠️ Модель {model_id} повернула порожню відповідь.")
             except Exception as model_err:
-                print(f"⚠️ Помилка моделі {model}: {model_err}. Перехід до наступної...")
+                print(f"⚠️ Помилка моделі {model_id}: {model_err}")
                 continue
 
-        print("⚠️ Моделі Gemini не відповіли успішно. Активовано дефолт.")
+        print("⚠️️ Жодна з моделей Gemini не дала результату. Використовуємо дефолтний підпис.")
         return pref["fallback_caption"]
 
     except Exception as e:
-        print(f"⚠️ Критична помилка ШІ: {e}")
+        print(f"⚠️ Критична помилка виконання ШІ: {e}")
         return pref["fallback_caption"]
