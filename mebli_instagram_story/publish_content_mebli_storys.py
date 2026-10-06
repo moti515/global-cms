@@ -48,6 +48,7 @@ try:
         optimize_video_story,
         get_location_data,
         get_intellectual_date,
+        create_facebook_reel_from_batch,  # 👈 Нова функція
     )
     from utils_meb_instagram_story import (
         sanitize_filename,
@@ -58,6 +59,7 @@ try:
         update_saved_language,
         parse_year,
         parse_location,
+        publish_facebook_reel,  # 👈 Нова функція
     )
 except ImportError:
     from mebli_instagram_story.services_manager_meb_instagram_story import (
@@ -73,6 +75,7 @@ except ImportError:
         optimize_video_story,
         get_location_data,
         get_intellectual_date,
+        create_facebook_reel_from_batch,
     )
     from mebli_instagram_story.utils_meb_instagram_story import (
         sanitize_filename,
@@ -83,8 +86,8 @@ except ImportError:
         update_saved_language,
         parse_year,
         parse_location,
+        publish_facebook_reel,
     )
-
 
 def fetch_hot_folder_candidates(drive_service, hot_folder_id, limit=50):
     """
@@ -298,10 +301,6 @@ def move_file_to_trash_folder(drive_service, file_id, file_name, trash_folder_id
 
 
 def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, target_tab="Меблі"):
-    """
-    Оптимізація медіа, генерація підпису Gemini та публікація серії в Instagram Stories.
-    Повертає True, якщо хоча б одну сторіс успішно опубліковано.
-    """
     access_token = os.environ.get("META_ACCESS_TOKEN") or config.META_ACCESS_TOKEN
     ig_user_id = os.environ.get("INSTAGRAM_ACCOUNT_ID") or config.IG_USER_ID
 
@@ -311,6 +310,7 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
 
     previous_captions = []
     published_any = False
+    processed_reel_sources = []  # 👈 Накопичувач оброблених файлів під Facebook Reel
 
     print(f"\n🚀 РОЗПОЧИНАЄМО ПУБЛІКАЦІЮ СЕРІЇ З {len(batch_items)} СТОРІЗ...")
     print(f"🌐 Поточний індекс мови для цієї серії: {lang_idx}")
@@ -322,12 +322,10 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
         local_path = item['local_path']
         date_str = item['date_str']
         display_loc = item['display_loc']
-        dt = item['datetime']
 
         print(f"\n--------------------------------------------------")
         print(f"📸 [{idx}/{len(batch_items)}] Обробка {raw_file_name}...")
 
-        # 1. Генерація підпису через Gemini API з поточним lang_idx
         caption_text = generate_story_caption(
             image_paths=[local_path],
             category=target_tab,
@@ -339,7 +337,6 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
         print(f"💬 Згенерований текст [Мова {lang_idx}]: \"{caption_text}\"")
         previous_captions.append(caption_text)
 
-        # 2. Форматування та оверлей
         lower_name = file_name.lower()
         is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
         year_val = parse_year(date_str)
@@ -352,7 +349,10 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
             overlay_text_on_image(padded_img_path, caption_text, year=year_val, location=loc_val)
             processed_files = [padded_img_path]
 
-        # 3. Публікація в Meta API
+        # Додаємо оброблені файли для створення Reel
+        processed_reel_sources.extend(processed_files)
+
+        # Публікація кожної сторіс в Instagram
         for ready_file in processed_files:
             direct_url, imagekit_id = get_google_drive_direct_url(file_id, local_file_path=ready_file)
             
@@ -370,10 +370,9 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
             )
 
             if success:
-                print(f"✅ УСПІШНО ОПУБЛІКОВАНО! Story ID: {result_msg}")
+                print(f"✅ УСПІШНО ОПУБЛІКОВАНО В IG! Story ID: {result_msg}")
                 published_any = True
                 
-                # Залежно від сценарію: переміщуємо в Кошик або оновлюємо лічильник Таблиці
                 if item.get('mode') == 'hot_folder':
                     move_file_to_trash_folder(drive_service, file_id, raw_file_name, config.TRASH_FOLDER_ID)
                 elif item.get('mode') == 'sheet' and item.get('counter_cell'):
@@ -390,35 +389,63 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
                         print(f"⚠️ Не вдалося оновити лічильник реєстру: {sheet_err}")
 
             else:
-                print(f"❌ ПОМИЛКА ПУБЛІКАЦІЇ: {result_msg}")
+                print(f"❌ ПОМИЛКА ПУБЛІКАЦІЇ В IG: {result_msg}")
                 log_unsupported_to_service(sheets_service, target_tab, raw_file_name, f"Помилка Meta: {result_msg}")
 
             if imagekit_id:
                 delete_from_imagekit(imagekit_id)
 
+    # 🎬 --- ДОДАТКОВИЙ ЕТАП: ПУБЛІКАЦІЯ FACEBOOK REEL ---
+    if published_any and processed_reel_sources:
+        print("\n==================================================")
+        print("🎬 [FACEBOOK REELS] РОЗПОЧИНАЄМО МОНТАЖ ТА ПУБЛІКАЦІЮ REEL...")
+        
+        output_reel_path = "temp_mebli/final_facebook_reel.mp4"
+        reel_file = create_facebook_reel_from_batch(
+            processed_reel_sources, 
+            output_reel_path, 
+            photo_duration=getattr(config, 'REEL_PHOTO_DURATION', 4.0)
+        )
+
+        if reel_file and os.path.exists(reel_file):
+            reel_url, _ = get_google_drive_direct_url("fb_reel", local_file_path=reel_file)
+            
+            if reel_url:
+                # Формуємо короткий опис для FB Reel з використаних підписів
+                reel_description = f"✨ {target_tab} | {batch_items[0]['date_str']}\n" + "\n".join([f"• {c}" for c in previous_captions if c])
+                
+                fb_page_id = getattr(config, 'FB_PAGE_ID', os.environ.get("FB_PAGE_ID"))
+                fb_token = getattr(config, 'FB_PAGE_ACCESS_TOKEN', access_token)
+
+                print("📡 Відправка згенерованого Reel у Facebook Page Reels API...")
+                fb_success, fb_res = publish_facebook_reel(fb_page_id, fb_token, reel_url, description=reel_description)
+
+                if fb_success:
+                    print(f"🎉 ✅ FACEBOOK REEL УСПІШНО ОПУБЛІКОВАНО! Reel ID: {fb_res}")
+                else:
+                    print(f"⚠️ ❌ Помилка публікації Facebook Reel: {fb_res}")
+            
+            # Прибираємо згенерований файл Reel
+            try: os.remove(reel_file)
+            except: pass
+
     return published_any
 
 
 def run_story_publisher():
-    """
-    Головна точка входу.
-    """
     forced_tab = sys.argv[2] if len(sys.argv) >= 3 else config.TAB_NAME
     current_tab = forced_tab if forced_tab else config.TAB_NAME
 
-    print("🚀 ІНІЦІАЛІЗАЦІЯ МОДУЛЯ АВТОПУБЛІКАЦІЇ INSTAGRAM STORIES...")
+    print("🚀 ІНІЦІАЛІЗАЦІЯ МОДУЛЯ АВТОПУБЛІКАЦІЇ INSTAGRAM STORIES & FB REELS...")
     drive_s, sheets_s = get_services()
 
-    # 0. Зчитуємо збережену мову з комірки H2
     saved_lang_code = get_saved_language(sheets_s)
     lang_idx, next_lang_code = rotate_language(saved_lang_code)
     print(f"🌐 Зчитана мова з H2: {saved_lang_code} -> Встановлено індекс: {lang_idx}. Наступна буде: {next_lang_code}")
 
     target_batch = []
 
-    # 1. Спроба 1: Перевірка Гарячої папки (Сценарій 1)
     hot_candidates = fetch_hot_folder_candidates(drive_s, config.HOT_FOLDER_ID, limit=50)
-    
     if hot_candidates:
         print(f"🔥 Знайдено {len(hot_candidates)} кандидатів у Гарячій папці.")
         analyzed_items = download_and_analyze_hot_files(drive_s, hot_candidates)
@@ -427,7 +454,6 @@ def run_story_publisher():
             print(f"🧩 Сформовано {len(grouped_batches)} тематичних/часових груп з Гарячої папки.")
             target_batch = grouped_batches[0][:4]
 
-    # 2. Спроба 2: Фолбек на реєстр Google Таблиці (Сценарій 2)
     if not target_batch:
         target_batch = fetch_registry_candidates(drive_s, sheets_s, target_tab=current_tab)
 
@@ -438,16 +464,13 @@ def run_story_publisher():
 
     print(f"🎯 Обрано {len(target_batch)} файлів для публікації.")
 
-    # 3. Публікуємо обрану серію
     success_published = publish_batch_group(
         drive_s, sheets_s, target_batch, lang_idx=lang_idx, target_tab=current_tab
     )
 
-    # 4. Якщо публікація пройшла успішно — зберігаємо наступну мову в H2
     if success_published:
         update_saved_language(sheets_s, next_lang_code)
 
-    # 5. Очищаємо тимчасові файли
     cleanup_temp_dir("temp_mebli")
 
 
