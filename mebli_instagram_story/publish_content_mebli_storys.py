@@ -49,8 +49,8 @@ try:
         get_location_data,
         get_intellectual_date,
         create_facebook_reel_from_batch,
-        fetch_random_music_from_drive,   # 👈 Нова функція
-        add_background_music_to_reel,    # 👈 Нова функція
+        fetch_random_music_from_drive,
+        add_background_music_to_reel,
     )
     from utils_meb_instagram_story import (
         sanitize_filename,
@@ -94,7 +94,212 @@ except ImportError:
     )
 
 
-# ... [Залишаємо функції fetch_hot_folder_candidates, download_and_analyze_hot_files, fetch_registry_candidates, group_analyzed_files, move_file_to_trash_folder БЕЗ ЗМІН] ...
+def fetch_hot_folder_candidates(drive_service, hot_folder_id, limit=50):
+    """
+    Отримує список до `limit` файлів з Гарячої папки Google Drive.
+    Логіка сортування:
+    - До 20:00 -> Найстаріші файли першими (createdTime asc)
+    - Після 20:00 -> Найновіші файли першими (createdTime desc)
+    """
+    now_hour = datetime.now().hour
+    is_evening = now_hour >= 20
+    order_by = 'createdTime desc' if is_evening else 'createdTime asc'
+    
+    print(f"🕒 Поточний час: {datetime.now().strftime('%H:%M')}. Режим вибірки: {'НАЙНОВІШІ (вечір)' if is_evening else 'НАЙСТАРІШІ (ранок/день)'}")
+
+    query = f"'{hot_folder_id}' in parents and trashed = false"
+    fields = "files(id, name, createdTime, modifiedTime, mimeType)"
+
+    try:
+        results = drive_service.files().list(
+            q=query,
+            orderBy=order_by,
+            pageSize=limit,
+            fields=fields
+        ).execute()
+        return results.get('files', [])
+    except Exception as e:
+        print(f"❌ Помилка отримання файлів з Гарячої папки: {e}")
+        return []
+
+
+def download_and_analyze_hot_files(drive_service, candidate_files):
+    """
+    Завантажує кандидати з Гарячої папки та аналізує їх EXIF, дату зйомки та геолокацію.
+    """
+    os.makedirs('temp_mebli', exist_ok=True)
+    analyzed_items = []
+
+    print(f"\n📥 Завантаження та глибокий аналіз метаданих {len(candidate_files)} файлів...")
+
+    for idx, f_info in enumerate(candidate_files, 1):
+        file_id = f_info['id']
+        raw_name = f_info['name']
+        
+        if not raw_name.lower().endswith(config.VALID_MEDIA_EXTENSIONS):
+            continue
+
+        sanitized_name = sanitize_filename(f"{file_id}_{raw_name}")
+        local_path = os.path.join('temp_mebli', sanitized_name)
+
+        try:
+            request = drive_service.files().get_media(fileId=file_id)
+            with open(local_path, 'wb') as f:
+                f.write(request.execute())
+
+            dt, lat, lon = get_intellectual_date(local_path, raw_name, f_info)
+            display_loc, group_loc = get_location_data(lat, lon)
+
+            date_str = dt.strftime('%d.%m.%Y') if hasattr(dt, 'strftime') else str(dt)
+            date_key = dt.strftime('%Y-%m-%d') if hasattr(dt, 'strftime') else str(dt)
+            loc_key = group_loc if group_loc else "NO_GPS"
+
+            analyzed_items.append({
+                'id': file_id,
+                'raw_name': raw_name,
+                'sanitized_name': sanitized_name,
+                'local_path': local_path,
+                'datetime': dt,
+                'date_str': date_str,
+                'date_key': date_key,
+                'location_key': loc_key,
+                'display_loc': display_loc,
+                'group_loc': group_loc,
+                'mode': 'hot_folder',
+                'counter_cell': None
+            })
+            print(f"  [{idx}/{len(candidate_files)}] {raw_name} -> Дата: {date_str} | Локація: {display_loc or 'без GPS'}")
+
+        except Exception as err:
+            print(f"  ⚠️ Помилка обробки файлу {raw_name}: {err}")
+
+    return analyzed_items
+
+
+def fetch_registry_candidates(drive_service, sheets_service, target_tab="Меблі"):
+    """
+    Сценарій 2 (Фолбек): Отримує чергу публікацій із реєстру Google Таблиці,
+    коли Гаряча папка порожня.
+    """
+    print(f"📊 Гаряча папка порожня. Активуємо Сценарій 2 (Реєстр вкладки '{target_tab}')...")
+    
+    try:
+        res = sheets_service.spreadsheets().values().get(
+            spreadsheetId=config.SPREADSHEET_ID, 
+            range=f"'{target_tab}'!A2:I"
+        ).execute()
+        rows = res.get('values', [])
+    except Exception as e:
+        print(f"❌ Помилка доступу до Google Таблиці: {e}")
+        return []
+
+    if not rows:
+        print("ℹ️ Реєстр порожній. Публікувати нічого.")
+        return []
+
+    valid_rows = []
+    col_idx = 4 
+    col_letter = "E"
+
+    for i, r in enumerate(rows):
+        if len(r) >= 3:
+            if r[2].lower() == "temporary":
+                continue
+            try:
+                val = r[col_idx] if len(r) > col_idx and r[col_idx] else "0"
+                counter = int(val)
+                valid_rows.append({"row_idx": i + 2, "data": r, "counter": counter})
+            except ValueError:
+                continue
+
+    if not valid_rows:
+        print("ℹ️ Немає доступних рядків для публікації в реєстрі.")
+        return []
+
+    min_counter = min(item["counter"] for item in valid_rows)
+    min_pool = [item for item in valid_rows if item["counter"] == min_counter]
+
+    groups = {}
+    for item in min_pool:
+        data = item["data"]
+        cat = data[2] if len(data) > 2 else target_tab
+        target_date = data[6] if len(data) > 6 else ""
+        target_city_json = data[8] if len(data) > 8 else ""
+        group_key = (cat, target_date, target_city_json)
+        groups.setdefault(group_key, []).append(item)
+
+    first_key = list(groups.keys())[0]
+    selected_group_items = groups[first_key][:4]
+    category_name, target_date, target_city_json = first_key
+    
+    print(f"📂 Обрано групу з Реєстру: [{category_name}]. Елементів у черзі: {len(selected_group_items)}")
+
+    os.makedirs('temp_mebli', exist_ok=True)
+    registry_queue = []
+
+    for item in selected_group_items:
+        data = item["data"]
+        file_id = data[0]
+        raw_name = data[1]
+        sanitized_name = sanitize_filename(f"{file_id}_{raw_name}")
+        local_path = os.path.join('temp_mebli', sanitized_name)
+
+        try:
+            request = drive_service.files().get_media(fileId=file_id)
+            with open(local_path, 'wb') as f:
+                f.write(request.execute())
+        except Exception as e:
+            print(f"❌ Не вдалося завантажити файл з реєстру {raw_name}: {e}")
+            continue
+
+        registry_queue.append({
+            'id': file_id,
+            'raw_name': raw_name,
+            'sanitized_name': sanitized_name,
+            'local_path': local_path,
+            'datetime': datetime.now(),
+            'date_str': target_date if target_date else datetime.now().strftime('%d.%m.%Y'),
+            'display_loc': target_city_json,
+            'mode': 'sheet',
+            'counter_cell': f"'{target_tab}'!{col_letter}{item['row_idx']}",
+            'counter_val': item["counter"]
+        })
+
+    return registry_queue
+
+
+def group_analyzed_files(analyzed_items):
+    """
+    Групує проаналізовані файли за датою зйомки та локацією.
+    """
+    grouped_dict = defaultdict(list)
+    for item in analyzed_items:
+        group_key = f"{item['date_key']}_{item['location_key']}"
+        grouped_dict[group_key].append(item)
+    return list(grouped_dict.values())
+
+
+def move_file_to_trash_folder(drive_service, file_id, file_name, trash_folder_id):
+    """
+    Переміщує опублікований файл із Гарячої папки у Кошик на Google Диску.
+    """
+    try:
+        file = drive_service.files().get(fileId=file_id, fields='parents').execute()
+        previous_parents = ",".join(file.get('parents', []))
+        
+        drive_service.files().update(
+            fileId=file_id,
+            addParents=trash_folder_id,
+            removeParents=previous_parents,
+            fields='id, parents'
+        ).execute()
+        print(f"📂 Файл [{file_name}] успішно переміщено в папку Кошика ({trash_folder_id}).")
+    except Exception as e:
+        print(f"⚠ Не вдалося перемістити файл [{file_name}] у папку Кошика, видаляємо в системний trash: {e}")
+        try:
+            drive_service.files().update(fileId=file_id, body={'trashed': True}).execute()
+        except Exception as tr_err:
+            print(f"❌ Помилка видалення файлу: {tr_err}")
 
 
 def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, target_tab="Меблі"):
@@ -190,7 +395,7 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
             if imagekit_id:
                 delete_from_imagekit(imagekit_id)
 
-   # 🎬 --- ДОДАТКОВИЙ ЕТАП: ПУБЛІКАЦІЯ FACEBOOK REEL З ФОНОВОЮ МУЗИКОЮ ---
+    # 🎬 --- ДОДАТКОВИЙ ЕТАП: ПУБЛІКАЦІЯ FACEBOOK REEL З ФОНОВОЮ МУЗИКОЮ ---
     if published_any and processed_reel_sources:
         print("\n==================================================")
         print("🎬 [FACEBOOK REELS] МОНТАЖ ТА ПУБЛІКАЦІЮ REEL З МУЗИКОЮ...")
@@ -224,11 +429,10 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
             for attempt in range(1, max_reel_retries + 1):
                 print(f"📡 Спроба {attempt}/{max_reel_retries}: Отримання прямого посилання на відео та відправка у Facebook Reels API...")
                 
-                # Для кожної спроби генеруємо/отримуємо посилання (може спрацювати інший резервний хостинг)
                 reel_url, imagekit_reel_id = get_google_drive_direct_url("fb_reel", local_file_path=final_reel_file)
                 
                 if not reel_url:
-                    print(f"⚠️ [Спроба {attempt}] Не вдалося отримати прямий URL для відео Reel.")
+                    print(f"⚠️️ [Спроба {attempt}] Не вдалося отримати прямий URL для відео Reel.")
                     continue
 
                 fb_success, fb_res = publish_facebook_reel(fb_page_id, fb_token, reel_url, description=reel_description)
@@ -249,7 +453,7 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
                         import time
                         time.sleep(10)
 
-            # Прибираємо тимчасові файли монтажу перед можливим аварійним виходом
+            # Прибираємо тимчасові файли монтажу
             for tmp_f in [raw_reel_file, final_reel_file, local_music]:
                 if tmp_f and os.path.exists(tmp_f):
                     try: os.remove(tmp_f)
@@ -258,9 +462,10 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
             if not reel_published_successfully:
                 print("🚨 КРИТИЧНА ПОМИЛКА: Не вдалося опублікувати Facebook Reel після всіх спроб.")
                 cleanup_temp_dir("temp_mebli")
-                sys.exit(1)   # 🛑 Аварійне завершення роботи для локалізації помилки в GitHub Actions
+                sys.exit(1)
 
     return published_any
+
 
 def run_story_publisher():
     forced_tab = sys.argv[2] if len(sys.argv) >= 3 else config.TAB_NAME
