@@ -9,8 +9,8 @@
 
 Основні функції:
 1. Контролює розмір пулу музичних файлів (TARGET_POOL_SIZE = 21).
-2. Автоматично видаляє найстаріші треки (ROTATE_COUNT = 3) та замінює їх свіжими з Jamendo API.
-3. Використовує інструментальну фонову музику під меблеве виробництво та сторітелінг.
+2. Переміщує найстаріші треки (ROTATE_COUNT = 3) у папку кошика (FOLDER_TRASH_ID).
+3. Завантажує свіжі інструментальні треки з Jamendo API від імені користувача.
 ========================================================================================
 """
 
@@ -36,12 +36,15 @@ from googleapiclient.http import MediaFileUpload
 # ID папки на Google Диску для зберігання фонової музики
 MUSIC_FOLDER_ID = os.environ.get("MUSIC_FOLDER_ID")
 
-# Ключ Jamendo API (JAMENDO_CLIENT_ID) або Pixabay (якщо використовується стара назва)
+# ID папки кошика для переміщення застарілих треків
+FOLDER_TRASH_ID = os.environ.get("FOLDER_TRASH_ID", "1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N")
+
+# Ключ Jamendo API
 JAMENDO_CLIENT_ID = os.environ.get("JAMENDO_CLIENT_ID") or os.environ.get("PIXABAY_API_KEY")
 
 # Параметри пулу
 TARGET_POOL_SIZE = 21       # Оптимальна кількість треків у папці
-ROTATE_COUNT = 3            # Скільки найстаріших треків замінювати при кожному запуску ротації
+ROTATE_COUNT = 3            # Скільки найстаріших треків переміщувати у кошик при ротації
 TEMP_DIR = "temp_music_sync"
 
 # 🎯 Тематичні теги для пошуку фонової інструментальної музики
@@ -52,39 +55,46 @@ THEME_TAGS = [
 
 
 def get_google_drive_service():
-    """Ініціалізація сервісу Google Drive API з урахуванням секретів GitHub."""
+    """
+    Ініціалізація сервісу Google Drive API.
+    Першочергово використовує OAuth Refresh Token, щоб уникнути помилки
+    квоти пам'яті сервісного акаунту (storageQuotaExceeded).
+    """
     creds = None
 
-    sa_key_raw = os.environ.get("GDRIVE_SERVICE_ACCOUNT_KEY") or os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if sa_key_raw:
+    # 1. Пріоритет: OAuth Refresh Token (використовує квоту особистого акаунту Google)
+    client_id = os.environ.get("GDRIVE_CLIENT_ID")
+    client_secret = os.environ.get("GDRIVE_CLIENT_SECRET")
+    refresh_token = os.environ.get("GDRIVE_REFRESH_TOKEN")
+
+    if client_id and client_secret and refresh_token:
         try:
-            info = json.loads(sa_key_raw)
-            creds = service_account.Credentials.from_service_account_info(
-                info, scopes=['https://www.googleapis.com/auth/drive']
+            creds = Credentials(
+                None,
+                refresh_token=refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=client_id,
+                client_secret=client_secret,
+                scopes=['https://www.googleapis.com/auth/drive']
             )
-            print("🔑 [Auth] Успішна авторизація через Service Account Key.")
+            print("🔑 [Auth] Успішна авторизація через OAuth Refresh Token (особиста квота).")
         except Exception as e:
-            print(f"⚠️ [Auth] Помилка парсингу Service Account JSON: {e}")
+            print(f"⚠️ [Auth] Помилка авторизації через OAuth: {e}")
 
+    # 2. Фолбек: Service Account Key (для корпоративних Shared Drives або читання)
     if not creds:
-        client_id = os.environ.get("GDRIVE_CLIENT_ID")
-        client_secret = os.environ.get("GDRIVE_CLIENT_SECRET")
-        refresh_token = os.environ.get("GDRIVE_REFRESH_TOKEN")
-
-        if client_id and client_secret and refresh_token:
+        sa_key_raw = os.environ.get("GDRIVE_SERVICE_ACCOUNT_KEY") or os.environ.get("GOOGLE_CREDENTIALS_JSON")
+        if sa_key_raw:
             try:
-                creds = Credentials(
-                    None,
-                    refresh_token=refresh_token,
-                    token_uri="https://oauth2.googleapis.com/token",
-                    client_id=client_id,
-                    client_secret=client_secret,
-                    scopes=['https://www.googleapis.com/auth/drive']
+                info = json.loads(sa_key_raw)
+                creds = service_account.Credentials.from_service_account_info(
+                    info, scopes=['https://www.googleapis.com/auth/drive']
                 )
-                print("🔑 [Auth] Успішна авторизація через OAuth Refresh Token.")
+                print("🔑 [Auth] Авторизація через Service Account Key.")
             except Exception as e:
-                print(f"⚠️ [Auth] Помилка авторизації через OAuth: {e}")
+                print(f"⚠️ [Auth] Помилка парсингу Service Account JSON: {e}")
 
+    # 3. Локальний файл credentials.json
     if not creds and os.path.exists("credentials.json"):
         try:
             creds = service_account.Credentials.from_service_account_file(
@@ -108,12 +118,12 @@ def sanitize_filename(name: str) -> str:
 
 
 def fetch_existing_drive_tracks(drive_service, folder_id):
-    """Отримує список MP3-файлів у папці Google Диска, відсортованих за датою."""
+    """Отримує список MP3-файлів у папці Google Диска, відсортованих за датою створення."""
     query = f"'{folder_id}' in parents and trashed = false and (mimeType contains 'audio/' or name contains '.mp3')"
     try:
         results = drive_service.files().list(
             q=query,
-            fields="files(id, name, createdTime)",
+            fields="files(id, name, createdTime, parents)",
             orderBy="createdTime asc",
             pageSize=100
         ).execute()
@@ -123,21 +133,32 @@ def fetch_existing_drive_tracks(drive_service, folder_id):
         return []
 
 
-def delete_drive_file(drive_service, file_id, file_name):
-    """Видаляє застарілий файл з Google Диска."""
+def move_file_to_trash(drive_service, file_id, file_name, trash_folder_id):
+    """
+    Замість видалення переміщує застарілий файл з основної папки у папку кошика.
+    """
     try:
-        drive_service.files().delete(fileId=file_id).execute()
-        print(f"🗑️ [Drive] Видалено застарілий трек: {file_name}")
+        # Отримуємо поточні батьківські папки файлу
+        file_info = drive_service.files().get(fileId=file_id, fields='parents').execute()
+        previous_parents = ",".join(file_info.get('parents', []))
+
+        # Переміщуємо файл у папку кошика
+        drive_service.files().update(
+            fileId=file_id,
+            addParents=trash_folder_id,
+            removeParents=previous_parents,
+            fields='id, parents'
+        ).execute()
+
+        print(f"📦 ➔ 🗑️ [Drive] Файл успішно переміщено у кошик: {file_name}")
         return True
     except Exception as e:
-        print(f"⚠️ [Drive] Не вдалося видалити файл {file_name}: {e}")
+        print(f"⚠️ [Drive] Не вдалося перемістити файл {file_name} у кошик: {e}")
         return False
 
 
 def fetch_tracks_from_jamendo(client_id, count_needed, existing_names):
-    """
-    Шукає та завантажує інструментальні MP3-треки через Jamendo API.
-    """
+    """Шукає та завантажує інструментальні MP3-треки через Jamendo API."""
     if not client_id:
         print("⚠️ [Jamendo] Відсутній JAMENDO_CLIENT_ID у змінних оточення.")
         return []
@@ -166,8 +187,8 @@ def fetch_tracks_from_jamendo(client_id, count_needed, existing_names):
             "format": "json",
             "limit": 20,
             "tags": tag,
-            "vocalinstrumental": "instrumental",  # Тільки фонова інструментальна музика
-            "audioformat": "mp32",                 # Якісний MP3
+            "vocalinstrumental": "instrumental",
+            "audioformat": "mp32",
             "order": "popularity_week"
         }
 
@@ -260,14 +281,14 @@ def run_music_pool_sync():
 
     existing_names = [f['name'] for f in existing_files]
 
-    # 2. Ротація
-    files_to_delete = []
+    # 2. Ротація (Переміщення найстаріших треків у папку кошика)
+    files_to_move = []
     if current_count >= TARGET_POOL_SIZE:
-        print(f"🔄 Пул заповнений! РОТАЦІЯ: видаляємо {ROTATE_COUNT} найстаріших треків...")
-        files_to_delete = existing_files[:ROTATE_COUNT]
+        print(f"🔄 Пул заповнений! РОТАЦІЯ: переміщуємо {ROTATE_COUNT} найстаріших треків у кошик...")
+        files_to_move = existing_files[:ROTATE_COUNT]
 
-    for f in files_to_delete:
-        if delete_drive_file(drive_service, f['id'], f['name']):
+    for f in files_to_move:
+        if move_file_to_trash(drive_service, f['id'], f['name'], FOLDER_TRASH_ID):
             existing_names.remove(f['name'])
             current_count -= 1
 
