@@ -57,7 +57,6 @@ def get_google_drive_service():
     """Ініціалізація сервісу Google Drive API з урахуванням ваших назв секретів у GitHub."""
     creds = None
 
-    # 1. Спроба зчитати GDRIVE_SERVICE_ACCOUNT_KEY (Service Account JSON з GitHub Secrets)
     sa_key_raw = os.environ.get("GDRIVE_SERVICE_ACCOUNT_KEY") or os.environ.get("GOOGLE_CREDENTIALS_JSON")
     if sa_key_raw:
         try:
@@ -69,7 +68,6 @@ def get_google_drive_service():
         except Exception as e:
             print(f"⚠️ [Auth] Помилка парсингу Service Account JSON: {e}")
 
-    # 2. Фолбек: Спроба авторизації через OAuth Refresh Token (якщо використовується OAuth)
     if not creds:
         client_id = os.environ.get("GDRIVE_CLIENT_ID")
         client_secret = os.environ.get("GDRIVE_CLIENT_SECRET")
@@ -89,7 +87,6 @@ def get_google_drive_service():
             except Exception as e:
                 print(f"⚠️ [Auth] Помилка авторизації через OAuth: {e}")
 
-    # 3. Спроба зчитати з локального файлу credentials.json (для локальної розробки)
     if not creds and os.path.exists("credentials.json"):
         try:
             creds = service_account.Credentials.from_service_account_file(
@@ -97,7 +94,7 @@ def get_google_drive_service():
             )
             print("🔑 [Auth] Авторизація через локальний файл credentials.json.")
         except Exception as e:
-            print(f"⚠️️ [Auth] Помилка локального файлу credentials.json: {e}")
+            print(f"⚠️ [Auth] Помилка локального файлу credentials.json: {e}")
 
     if not creds:
         print("❌ [Auth] Не знайдено дійсної конфігурації для Google Drive API.")
@@ -138,32 +135,35 @@ def delete_drive_file(drive_service, file_id, file_name):
         print(f"🗑️ [Drive] Видалено застарілий трек: {file_name}")
         return True
     except Exception as e:
-        print(f"⚠️️ [Drive] Не вдалося видалити файл {file_name}: {e}")
+        print(f"⚠️ [Drive] Не вдалося видалити файл {file_name}: {e}")
         return False
 
 
-def fetch_tracks_from_pixabay(api_key, count_needed, existing_names):
+def fetch_tracks_from_pixabay(raw_api_key, count_needed, existing_names):
     """
     Шукає та завантажує нові Royalty-Free треки через Pixabay API.
     """
-    if not api_key:
+    if not raw_api_key:
         print("⚠️ [Pixabay] Відсутній ключ PIXABAY_API_KEY у змінних оточення.")
         return []
 
-    # Очищаємо API-ключ від можливих випадкових пробілів та лапок
-    api_key = api_key.strip().strip("'").strip('"')
+    # Очищаємо ключ від можливих пробілів, невидимих символів та лапок
+    api_key = raw_api_key.strip().strip("'").strip('"')
+
+    # Виводимо діагностику ключа в лог (з маскуванням)
+    masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "***"
+    print(f"🔑 [Pixabay] Використовується API Key: {masked} (довжина: {len(api_key)} символів)")
 
     random.shuffle(THEME_KEYWORDS)
     downloaded_tracks = []
 
     os.makedirs(TEMP_DIR, exist_ok=True)
 
-    # Заголовки запиту для імітації реального браузера
-    headers = {
+    session = requests.Session()
+    session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9"
-    }
+        "Accept": "application/json, text/plain, */*"
+    })
 
     for keyword in THEME_KEYWORDS:
         if len(downloaded_tracks) >= count_needed:
@@ -179,7 +179,7 @@ def fetch_tracks_from_pixabay(api_key, count_needed, existing_names):
         }
 
         try:
-            resp = requests.get(url, params=params, headers=headers, timeout=15)
+            resp = session.get(url, params=params, timeout=15)
             if resp.status_code != 200:
                 print(f"⚠️ Pixabay API повернув статус {resp.status_code}: {resp.text[:200]}")
                 continue
@@ -207,7 +207,7 @@ def fetch_tracks_from_pixabay(api_key, count_needed, existing_names):
                 local_path = os.path.join(TEMP_DIR, filename)
 
                 print(f"📥 [Download] Завантаження: {raw_title} ({hit.get('duration', 0)} сек)...")
-                audio_data = requests.get(audio_url, headers=headers, timeout=30).content
+                audio_data = session.get(audio_url, timeout=30).content
                 with open(local_path, "wb") as f:
                     f.write(audio_data)
 
@@ -222,6 +222,7 @@ def fetch_tracks_from_pixabay(api_key, count_needed, existing_names):
             print(f"⚠️ Помилка під час пошуку/завантаження за тегом '{keyword}': {err}")
 
     return downloaded_tracks
+
 
 def upload_track_to_drive(drive_service, folder_id, local_path, filename):
     """Завантажує файл у папку Google Диска."""
@@ -270,16 +271,13 @@ def run_music_pool_sync():
 
     if current_count >= TARGET_POOL_SIZE:
         print(f"🔄 Пул заповнений! Активуємо РОТАЦІЮ: видаляємо {ROTATE_COUNT} найстаріших треків...")
-        # Вибираємо найстаріші файли (вони вже відсортовані за createdTime asc)
         files_to_delete = existing_files[:ROTATE_COUNT]
 
-    # Видаляємо вибрані застарілі файли
     for f in files_to_delete:
         if delete_drive_file(drive_service, f['id'], f['name']):
             existing_names.remove(f['name'])
             current_count -= 1
 
-    # Розраховуємо, скільки нових треків потрібно завантажити
     needed_count = TARGET_POOL_SIZE - current_count
     if needed_count <= 0:
         print("✨ Пул повністю укомплектований. Оновлення не потрібне.")
