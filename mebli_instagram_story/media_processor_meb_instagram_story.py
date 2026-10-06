@@ -122,7 +122,7 @@ def optimize_image_story(final_upload_path, orig_name):
             paste_x = (target_w - new_w) // 2
             paste_y = (target_h - new_h) // 2
             canvas.paste(resized_img, (paste_x, paste_y))
-            canvas.save(story_path, 'JPEG', quality=95)
+            canvas.save(story_path, 'JPEG', quality=98)
             
         return story_path
     except Exception as e:
@@ -144,7 +144,7 @@ def overlay_text_on_image(image_path, text, year=None, location=None):
                 final_img = Image.alpha_composite(img, overlay)
             
             final_img = final_img.convert('RGB')
-            final_img.save(image_path, 'JPEG', quality=95)
+            final_img.save(image_path, 'JPEG', quality=98)
             
         # Очищуємо тимчасовий PNG
         if os.path.exists(overlay_png):
@@ -182,14 +182,12 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
         '-i', overlay_png_path,    # Вхід [1:v] - наш прозорий PNG оверлей
         '-filter_complex', filter_complex,
         '-c:v', 'libx264', 
-        '-profile:v', 'main', 
-        '-level:v', '4.0', 
+        '-preset', 'medium',
+        '-crf', '18',
+        '-colorspace', 'bt709', '-color_trc', 'bt709', '-color_primaries', 'bt709',
         '-pix_fmt', 'yuv420p',
-        '-b:v', '3000k',          
-        '-maxrate', '4500k', 
-        '-bufsize', '9000k', 
         '-c:a', 'aac', 
-        '-b:a', '128k'
+        '-b:a', '192k'
     ]
     
     if duration > 60.0:
@@ -241,6 +239,113 @@ def get_video_duration(video_path):
         print(f"⚠️ Не вдалося визначити тривалість відео: {e}")
     return 0.0
 
+# 🎬 ОПТИМІЗОВАНИЙ БУДІВНИК REELS (БЕЗ ПОТРОЙНОГО ПЕРЕКОДУВАННЯ ТА БЕЗ ПОВТОРНОГО РЕСАЙЗУ)
+def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_duration=4.0, transition_dur=0.6):
+    """
+    Склеює масив ГОТОВИХ 1080x1920 фото/відео з накладеним текстом у суцільний Facebook Reel.
+    Усунуто повторний ресайз та подвійне стиснення.
+    """
+    if not processed_files:
+        return None
+
+    temp_clips = []
+    clip_durations = []
+
+    print(f"\n🎬 [Reels Builder] Пряма збірка {len(processed_files)} готових фрагментів у Facebook Reel...")
+
+    for idx, file_path in enumerate(processed_files):
+        clip_path = f"temp_mebli/reel_clip_{idx}.mp4"
+        is_video = file_path.lower().endswith(('.mp4', '.mov', '.avi'))
+
+        if is_video:
+            # Відео ВЖЕ має розмір 1080x1920 та накладений текст від optimize_video_story.
+            # Лише перевіряємо наявність аудіодорожки та гармонізуємо параметри
+            dur = get_video_duration(file_path)
+            if dur == 0: dur = 5.0
+
+            cmd = (
+                f'ffmpeg -y -i "{file_path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
+                f'-filter_complex "[0:a][1:a]amerge=inputs=1[a]" '
+                f'-map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -shortest "{clip_path}"'
+            )
+            clip_durations.append(dur)
+        else:
+            # Фото ВЖЕ відформатовано в JPEG 1080x1920 з текстом.
+            # Прямо конвертуємо в 4-секундний відеофрагмент без додаткового масштабування
+            dur = photo_duration
+            cmd = (
+                f'ffmpeg -y -loop 1 -i "{file_path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
+                f'-t {photo_duration} -r 30 '
+                f'-c:v libx264 -preset ultrafast -crf 17 '
+                f'-colorspace bt709 -color_trc bt709 -color_primaries bt709 -pix_fmt yuv420p '
+                f'-c:a aac -b:a 192k -shortest "{clip_path}"'
+            )
+            clip_durations.append(dur)
+
+        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(clip_path):
+            temp_clips.append(clip_path)
+
+    if not temp_clips:
+        print("❌ [Reels Builder] Не вдалося згенерувати фрагменти відео.")
+        return None
+
+    if len(temp_clips) == 1:
+        shutil.copy(temp_clips[0], output_reel_path)
+        return output_reel_path
+
+    # 2. Перехідні ефекти (xfade)
+    transitions = ['fade', 'wipeleft', 'wiperight', 'slideleft', 'slideright', 'circlecrop', 'dissolve', 'fadeblack']
+    
+    inputs_str = " ".join([f'-i "{c}"' for c in temp_clips])
+    filter_parts = []
+    
+    current_offset = clip_durations[0] - transition_dur
+    prev_v = "[0:v]"
+    prev_a = "[0:a]"
+
+    for i in range(1, len(temp_clips)):
+        trans = random.choice(transitions)
+        next_v = f"[v_trans_{i}]" if i < len(temp_clips) - 1 else "[v_out]"
+        next_a = f"[a_trans_{i}]" if i < len(temp_clips) - 1 else "[a_out]"
+
+        filter_parts.append(
+            f"{prev_v}[{i}:v]xfade=transition={trans}:duration={transition_dur}:offset={current_offset:.2f}{next_v}"
+        )
+        filter_parts.append(
+            f"{prev_a}[{i}:a]acrossfade=d={transition_dur}{next_a}"
+        )
+
+        if i < len(temp_clips) - 1:
+            current_offset += clip_durations[i] - transition_dur
+            prev_v = next_v
+            prev_a = next_a
+
+    filter_complex = ";".join(filter_parts)
+
+    # 3. ЄДИНИЙ Фінальний рендеринг Reel: високий бітрейт (9-12M), CRF 18, колірний простір BT.709
+    concat_cmd = (
+        f'ffmpeg -y {inputs_str} -filter_complex "{filter_complex}" '
+        f'-map "[v_out]" -map "[a_out]" -c:v libx264 -preset medium -crf 18 '
+        f'-b:v 9M -maxrate 12M -bufsize 24M -pix_fmt yuv420p '
+        f'-colorspace bt709 -color_trc bt709 -color_primaries bt709 '
+        f'-c:a aac -b:a 192k "{output_reel_path}"'
+    )
+
+    print("🎬 [Reels Builder] Збірка та рендеринг фінального HQ Reel з перехідними ефектами...")
+    subprocess.run(concat_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    for c in temp_clips:
+        if os.path.exists(c):
+            try: os.remove(c)
+            except: pass
+
+    if os.path.exists(output_reel_path) and os.path.getsize(output_reel_path) > 0:
+        print(f"✅ [Reels Builder] Успішно згенеровано HQ Reel: {output_reel_path}")
+        return output_reel_path
+
+    return None
+    
 # =====================================================================
 # 🧠 ІНТЕЛЕКТУАЛЬНИЙ БЛОК АНАЛІЗУ МЕТАДАНИХ ТА ГЕОЛОКАЦІЇ
 # =====================================================================
@@ -462,126 +567,6 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
         print(f"⚠️ Помилка зчитування системних дат Google Drive: {e}")
 
     return now_time, lat, lon
-
-def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_duration=4.0, transition_dur=0.6):
-    """
-    Склеює масив оброблених фото/відео сторіс в один суцільний Facebook Reel (1080x1920)
-    із максимальними параметрами чіткості, високим бітрейтом (BT.709, Lanczos)
-    та перехідними ефектами (xfade).
-    """
-    if not processed_files:
-        return None
-
-    temp_clips = []
-    clip_durations = []
-
-    print(f"\n🎬 [Reels Builder] Підготовка {len(processed_files)} фрагментів максимальної якості для Facebook Reel...")
-
-    # 1. Нормалізація кожного медіафайлу у 1080x1920 MP4 (30 fps) з високою деталізацією
-    for idx, file_path in enumerate(processed_files):
-        clip_path = f"temp_mebli/reel_clip_{idx}.mp4"
-        is_video = file_path.lower().endswith(('.mp4', '.mov', '.avi'))
-
-        if is_video:
-            # Визначаємо тривалість оригінального відео через ffprobe
-            dur_cmd = f'ffprobe -v error -show_entries format=duration -of default=noprintwrappers=1:nokey=1 "{file_path}"'
-            try:
-                dur = float(subprocess.check_output(dur_cmd, shell=True).decode().strip())
-            except Exception:
-                dur = 5.0
-
-            # Чітке масштабування (Lanczos) + високий бітрейт кодування (CRF 17) + колірний профіль BT.709
-            cmd = (
-                f'ffmpeg -y -i "{file_path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
-                f'-filter_complex "[0:v]fps=30,scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos,'
-                f'pad=1080:1920:(1080-iw)/2:(1080-ih)/2:color=black,format=yuv420p[v];'
-                f'[0:a][1:a]amerge=inputs=1[a]" '
-                f'-map "[v]" -map "[a]" -c:v libx264 -preset medium -crf 17 '
-                f'-colorspace bt709 -color_trc bt709 -color_primaries bt709 '
-                f'-c:a aac -b:a 192k -shortest "{clip_path}"'
-            )
-            clip_durations.append(dur)
-        else:
-            # Перетворюємо фото у відео з прецизійною різкістю (Lanczos)
-            dur = photo_duration
-            cmd = (
-                f'ffmpeg -y -loop 1 -i "{file_path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
-                f'-t {photo_duration} -r 30 '
-                f'-vf "scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos,'
-                f'pad=1080:1920:(1080-iw)/2:(1080-ih)/2:color=black,format=yuv420p" '
-                f'-c:v libx264 -preset medium -crf 17 '
-                f'-colorspace bt709 -color_trc bt709 -color_primaries bt709 '
-                f'-c:a aac -b:a 192k -shortest "{clip_path}"'
-            )
-            clip_durations.append(dur)
-
-        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.exists(clip_path):
-            temp_clips.append(clip_path)
-
-    if not temp_clips:
-        print("❌ [Reels Builder] Не вдалося згенерувати фрагменти відео.")
-        return None
-
-    if len(temp_clips) == 1:
-        # Якщо в серії був лише 1 файл — копіюємо високоефективний кліп
-        shutil.copy(temp_clips[0], output_reel_path)
-        return output_reel_path
-
-    # 2. Побудова FFmpeg xfade filter_complex для перехідних ефектів
-    transitions = ['fade', 'wipeleft', 'wiperight', 'slideleft', 'slideright', 'circlecrop', 'dissolve', 'fadeblack']
-    
-    inputs_str = " ".join([f'-i "{c}"' for c in temp_clips])
-    filter_parts = []
-    
-    current_offset = clip_durations[0] - transition_dur
-    prev_v = "[0:v]"
-    prev_a = "[0:a]"
-
-    for i in range(1, len(temp_clips)):
-        trans = random.choice(transitions)
-        next_v = f"[v_trans_{i}]" if i < len(temp_clips) - 1 else "[v_out]"
-        next_a = f"[a_trans_{i}]" if i < len(temp_clips) - 1 else "[a_out]"
-
-        filter_parts.append(
-            f"{prev_v}[{i}:v]xfade=transition={trans}:duration={transition_dur}:offset={current_offset:.2f}{next_v}"
-        )
-        filter_parts.append(
-            f"{prev_a}[{i}:a]acrossfade=d={transition_dur}{next_a}"
-        )
-
-        if i < len(temp_clips) - 1:
-            current_offset += clip_durations[i] - transition_dur
-            prev_v = next_v
-            prev_a = next_a
-
-    filter_complex = ";".join(filter_parts)
-
-    # 3. Фінальний рендеринг: високий бітрейт (9-12 Mbps), CRF 18, колірний простір BT.709
-    concat_cmd = (
-        f'ffmpeg -y {inputs_str} -filter_complex "{filter_complex}" '
-        f'-map "[v_out]" -map "[a_out]" -c:v libx264 -preset medium -crf 18 '
-        f'-b:v 9M -maxrate 12M -bufsize 24M -pix_fmt yuv420p '
-        f'-colorspace bt709 -color_trc bt709 -color_primaries bt709 '
-        f'-c:a aac -b:a 192k "{output_reel_path}"'
-    )
-
-    print("🎬 [Reels Builder] Збірка та рендеринг фінального HQ Reel з перехідними ефектами...")
-    subprocess.run(concat_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    # Очищаємо тимчасові кліпи
-    for c in temp_clips:
-        if os.path.exists(c):
-            try:
-                os.remove(c)
-            except Exception:
-                pass
-
-    if os.path.exists(output_reel_path) and os.path.getsize(output_reel_path) > 0:
-        print(f"✅ [Reels Builder] Успішно згенеровано HQ Reel: {output_reel_path}")
-        return output_reel_path
-
-    return None
 
 def fetch_random_music_from_drive(drive_service, music_folder_id, temp_dir="temp_mebli"):
     """
