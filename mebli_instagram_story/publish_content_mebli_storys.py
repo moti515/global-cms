@@ -213,22 +213,44 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
             # 3. Накладаємо музику на Reel з урахуванням його тривалості
             final_reel_file = add_background_music_to_reel(raw_reel_file, output_reel_final, local_music)
 
-            # 4. Отримуємо URL та публікуємо у Facebook
-            reel_url, _ = get_google_drive_direct_url("fb_reel", local_file_path=final_reel_file)
-            
-            if reel_url:
-                reel_description = f"✨ {target_tab} | {batch_items[0]['date_str']}\n" + "\n".join([f"• {c}" for c in previous_captions if c])
-                
-                fb_page_id = getattr(config, 'FB_PAGE_ID', os.environ.get("FB_PAGE_ID"))
-                fb_token = getattr(config, 'META_ACCESS_TOKEN', access_token)
+            # 4. Публікація у Facebook з системою повторних спроб (Retry) при таймаутах хостингу
+            reel_description = f"✨ {target_tab} | {batch_items[0]['date_str']}\n" + "\n".join([f"• {c}" for c in previous_captions if c])
+            fb_page_id = getattr(config, 'FB_PAGE_ID', os.environ.get("FB_PAGE_ID"))
+            fb_token = getattr(config, 'META_ACCESS_TOKEN', access_token)
 
-                print("📡 Відправка Reel з музикою у Facebook Page Reels API...")
+            max_reel_retries = 2
+            reel_published_successfully = False
+
+            for attempt in range(1, max_reel_retries + 1):
+                print(f"📡 Спроба {attempt}/{max_reel_retries}: Отримання прямого посилання на відео та відправка у Facebook Reels API...")
+                
+                # Для кожної спроби генеруємо/отримуємо посилання (може спрацювати інший резервний хостинг)
+                reel_url, imagekit_reel_id = get_google_drive_direct_url("fb_reel", local_file_path=final_reel_file)
+                
+                if not reel_url:
+                    print(f"⚠️ [Спроба {attempt}] Не вдалося отримати прямий URL для відео Reel.")
+                    continue
+
                 fb_success, fb_res = publish_facebook_reel(fb_page_id, fb_token, reel_url, description=reel_description)
 
                 if fb_success:
                     print(f"🎉 ✅ FACEBOOK REEL УСПІШНО ОПУБЛІКОВАНО! Reel ID: {fb_res}")
+                    reel_published_successfully = True
+                    if imagekit_reel_id:
+                        delete_from_imagekit(imagekit_reel_id)
+                    break
                 else:
-                    print(f"⚠️ ❌ Помилка публікації Facebook Reel: {fb_res}")
+                    print(f"⚠️ ❌ [Спроба {attempt}] Помилка публікації Facebook Reel: {fb_res}")
+                    if imagekit_reel_id:
+                        delete_from_imagekit(imagekit_reel_id)
+                    
+                    if attempt < max_reel_retries:
+                        print("⏳ Очікування 10 секунд перед наступною спробою рендерингу посилання...")
+                        import time
+                        time.sleep(10)
+
+            if not reel_published_successfully:
+                print("🚨 Не вдалося опублікувати Facebook Reel після кількох спроб через проблеми з upstream/хостингом.")
 
             # Прибираємо тимчасові файли монтажу
             for tmp_f in [raw_reel_file, final_reel_file, local_music]:
@@ -237,7 +259,6 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
                     except: pass
 
     return published_any
-
 
 def run_story_publisher():
     forced_tab = sys.argv[2] if len(sys.argv) >= 3 else config.TAB_NAME
