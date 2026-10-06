@@ -14,6 +14,7 @@ TAB_NAME = "Меблі"
 
 HOT_FOLDER_ID = '1BlPC3ua00pHnqdwpy2EA3EzOA-tCmt2N'
 TRASH_FOLDER_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
+MUSIC_FOLDER_ID = os.environ.get("MUSIC_FOLDER_ID")
 
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
