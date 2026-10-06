@@ -190,7 +190,7 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
             if imagekit_id:
                 delete_from_imagekit(imagekit_id)
 
-    # 🎬 --- ДОДАТКОВИЙ ЕТАП: ПУБЛІКАЦІЯ FACEBOOK REEL З ФОНОВОЮ МУЗИКОЮ ---
+   # 🎬 --- ДОДАТКОВИЙ ЕТАП: ПУБЛІКАЦІЯ FACEBOOK REEL З ФОНОВОЮ МУЗИКОЮ ---
     if published_any and processed_reel_sources:
         print("\n==================================================")
         print("🎬 [FACEBOOK REELS] МОНТАЖ ТА ПУБЛІКАЦІЮ REEL З МУЗИКОЮ...")
@@ -249,14 +249,16 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
                         import time
                         time.sleep(10)
 
-            if not reel_published_successfully:
-                print("🚨 Не вдалося опублікувати Facebook Reel після кількох спроб через проблеми з upstream/хостингом.")
-
-            # Прибираємо тимчасові файли монтажу
+            # Прибираємо тимчасові файли монтажу перед можливим аварійним виходом
             for tmp_f in [raw_reel_file, final_reel_file, local_music]:
                 if tmp_f and os.path.exists(tmp_f):
                     try: os.remove(tmp_f)
                     except: pass
+
+            if not reel_published_successfully:
+                print("🚨 КРИТИЧНА ПОМИЛКА: Не вдалося опублікувати Facebook Reel після всіх спроб.")
+                cleanup_temp_dir("temp_mebli")
+                sys.exit(1)   # 🛑 Аварійне завершення роботи для локалізації помилки в GitHub Actions
 
     return published_any
 
