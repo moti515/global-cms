@@ -4,12 +4,12 @@
 ========================================================================================
 🎵 АВТОНОМНИЙ МЕНЕДЖЕР ТА РОТАТОР ФОНОВОЇ МУЗИКИ (Pixabay API -> Google Drive)
 ========================================================================================
-Скрипт підтримує компактний пул фонових треків (10-12 шт) у Google Диску для
+Скрипт підтримує компактний пул фонових треків (21 шт) у Google Диску для
 автоматичного накладання у Facebook Reels та TikTok.
 
 Основні функції:
-1. Контролює розмір пулу музичних файлів.
-2. Автоматично видаляє найстаріші треки та замінює їх свіжими з Pixabay API.
+1. Контролює розмір пулу музичних файлів (TARGET_POOL_SIZE = 21).
+2. Автоматично видаляє найстаріші треки (ROTATE_COUNT = 3) та замінює їх свіжими з Pixabay API.
 3. Використовує тематичні запити під меблеве виробництво та естетику сторітелінгу.
 ========================================================================================
 """
@@ -19,11 +19,13 @@ import sys
 import random
 import re
 import shutil
+import json
 import requests
 from datetime import datetime
 
 # Google API Client
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
@@ -32,17 +34,17 @@ from googleapiclient.http import MediaFileUpload
 # ======================================================================================
 
 # ID папки на Google Диску для зберігання фонової музики
-MUSIC_FOLDER_ID = os.environ.get("MUSIC_FOLDER_ID", "ВАШ_MUSIC_FOLDER_ID_ТУТ")
+MUSIC_FOLDER_ID = os.environ.get("MUSIC_FOLDER_ID")
 
-# Ключ Pixabay API (безкоштовно на https://pixabay.com/api/docs/)
-PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY", "ВАШ_PIXABAY_API_KEY_ТУТ")
+# Ключ Pixabay API
+PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY")
 
 # Параметри пулу
-TARGET_POOL_SIZE = 12       # Оптимальна кількість треків у папці
+TARGET_POOL_SIZE = 21       # Оптимальна кількість треків у папці
 ROTATE_COUNT = 3            # Скільки найстаріших треків замінювати при кожному запуску ротації
 TEMP_DIR = "temp_music_sync"
 
-# 🎯 Тематичні ключеві слова Pixabay (Меблевик + ТікТок / Атмосфера)
+# 🎯 Тематичні ключові слова Pixabay (Меблевик + ТікТок / Атмосфера)
 THEME_KEYWORDS = [
     # Тематика: Меблі, Майстерня, Конструювання, Професіоналізм (FB Reels)
     "lofi", "acoustic", "lounge", "workshop", "chillhop", "craft", "background", "design",
@@ -52,25 +54,53 @@ THEME_KEYWORDS = [
 
 
 def get_google_drive_service():
-    """Ініціалізація сервісу Google Drive API."""
+    """Ініціалізація сервісу Google Drive API з урахуванням ваших назв секретів у GitHub."""
     creds = None
-    
-    # 1. Спроба зчитати з оточення GOOGLE_CREDENTIALS_JSON (для GitHub Actions)
-    credentials_raw = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if credentials_raw:
-        import json
-        info = json.loads(credentials_raw)
-        creds = service_account.Credentials.from_service_account_info(
-            info, scopes=['https://www.googleapis.com/auth/drive']
-        )
-    # 2. Спроба зчитати з файлу credentials.json
-    elif os.path.exists("credentials.json"):
-        creds = service_account.Credentials.from_service_account_file(
-            "credentials.json", scopes=['https://www.googleapis.com/auth/drive']
-        )
+
+    # 1. Спроба зчитати GDRIVE_SERVICE_ACCOUNT_KEY (Service Account JSON з GitHub Secrets)
+    sa_key_raw = os.environ.get("GDRIVE_SERVICE_ACCOUNT_KEY") or os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    if sa_key_raw:
+        try:
+            info = json.loads(sa_key_raw)
+            creds = service_account.Credentials.from_service_account_info(
+                info, scopes=['https://www.googleapis.com/auth/drive']
+            )
+            print("🔑 [Auth] Успішна авторизація через Service Account Key.")
+        except Exception as e:
+            print(f"⚠️ [Auth] Помилка парсингу Service Account JSON: {e}")
+
+    # 2. Фолбек: Спроба авторизації через OAuth Refresh Token (якщо використовується OAuth)
+    if not creds:
+        client_id = os.environ.get("GDRIVE_CLIENT_ID")
+        client_secret = os.environ.get("GDRIVE_CLIENT_SECRET")
+        refresh_token = os.environ.get("GDRIVE_REFRESH_TOKEN")
+
+        if client_id and client_secret and refresh_token:
+            try:
+                creds = Credentials(
+                    None,
+                    refresh_token=refresh_token,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    scopes=['https://www.googleapis.com/auth/drive']
+                )
+                print("🔑 [Auth] Успішна авторизація через OAuth Refresh Token.")
+            except Exception as e:
+                print(f"⚠️ [Auth] Помилка авторизації через OAuth: {e}")
+
+    # 3. Спроба зчитати з локального файлу credentials.json (для локальної розробки)
+    if not creds and os.path.exists("credentials.json"):
+        try:
+            creds = service_account.Credentials.from_service_account_file(
+                "credentials.json", scopes=['https://www.googleapis.com/auth/drive']
+            )
+            print("🔑 [Auth] Авторизація через локальний файл credentials.json.")
+        except Exception as e:
+            print(f"⚠️️ [Auth] Помилка локального файлу credentials.json: {e}")
 
     if not creds:
-        print("❌ [Auth] Не знайдено облікових даних Google Drive API.")
+        print("❌ [Auth] Не знайдено дійсної конфігурації для Google Drive API.")
         sys.exit(1)
 
     return build('drive', 'v3', credentials=creds)
@@ -108,7 +138,7 @@ def delete_drive_file(drive_service, file_id, file_name):
         print(f"🗑️ [Drive] Видалено застарілий трек: {file_name}")
         return True
     except Exception as e:
-        print(f"⚠️ [Drive] Не вдалося видалити файл {file_name}: {e}")
+        print(f"⚠️️ [Drive] Не вдалося видалити файл {file_name}: {e}")
         return False
 
 
@@ -116,11 +146,10 @@ def fetch_tracks_from_pixabay(api_key, count_needed, existing_names):
     """
     Шукає та завантажує нові Royalty-Free треки через Pixabay API.
     """
-    if not api_key or api_key.startswith("ВАШ_"):
-        print("⚠️ [Pixabay] Відсутній дійсна ключ PIXABAY_API_KEY.")
+    if not api_key:
+        print("⚠️ [Pixabay] Відсутній ключ PIXABAY_API_KEY у змінних оточення.")
         return []
 
-    # Вибираємо випадкову тематику з нашого списку
     random.shuffle(THEME_KEYWORDS)
     downloaded_tracks = []
 
@@ -215,8 +244,8 @@ def run_music_pool_sync():
     print(f"🕒 Час запуску: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 80)
 
-    if not MUSIC_FOLDER_ID or MUSIC_FOLDER_ID.startswith("ВАШ_"):
-        print("❌ Помилка: Вкажіть MUSIC_FOLDER_ID в змінних оточення або конфігу.")
+    if not MUSIC_FOLDER_ID:
+        print("❌ Помилка: Вкажіть MUSIC_FOLDER_ID в змінних оточення GitHub Secrets.")
         return
 
     drive_service = get_google_drive_service()
@@ -235,7 +264,7 @@ def run_music_pool_sync():
         print(f"🔄 Пул заповнений! Активуємо РОТАЦІЮ: видаляємо {ROTATE_COUNT} найстаріших треків...")
         # Вибираємо найстаріші файли (вони вже відсортовані за createdTime asc)
         files_to_delete = existing_files[:ROTATE_COUNT]
-    
+
     # Видаляємо вибрані застарілі файли
     for f in files_to_delete:
         if delete_drive_file(drive_service, f['id'], f['name']):
