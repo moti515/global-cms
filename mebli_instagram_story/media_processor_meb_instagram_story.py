@@ -466,7 +466,8 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
 def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_duration=4.0, transition_dur=0.6):
     """
     Склеює масив оброблених фото/відео сторіс в один суцільний Facebook Reel (1080x1920)
-    із динамічними ефектами переходу (xfade) та вирівняним аудіорядом.
+    із максимальними параметрами чіткості, високим бітрейтом (BT.709, Lanczos)
+    та перехідними ефектами (xfade).
     """
     if not processed_files:
         return None
@@ -474,9 +475,9 @@ def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_dur
     temp_clips = []
     clip_durations = []
 
-    print(f"\n🎬 [Reels Builder] Підготовка {len(processed_files)} фрагментів для Facebook Reel...")
+    print(f"\n🎬 [Reels Builder] Підготовка {len(processed_files)} фрагментів максимальної якості для Facebook Reel...")
 
-    # 1. Нормалізація кожного медіафайлу у 1080x1920 MP4 (30 fps) з однаковим аудіоформатом
+    # 1. Нормалізація кожного медіафайлу у 1080x1920 MP4 (30 fps) з високою деталізацією
     for idx, file_path in enumerate(processed_files):
         clip_path = f"temp_mebli/reel_clip_{idx}.mp4"
         is_video = file_path.lower().endswith(('.mp4', '.mov', '.avi'))
@@ -489,22 +490,28 @@ def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_dur
             except Exception:
                 dur = 5.0
 
-            # Нормалізуємо відео до 1080x1920, 30fps, yuv420p + додаємо тишу, якщо відсутній аудіотрек
+            # Чітке масштабування (Lanczos) + високий бітрейт кодування (CRF 17) + колірний профіль BT.709
             cmd = (
                 f'ffmpeg -y -i "{file_path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
-                f'-filter_complex "[0:v]fps=30,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1080-ih)/2[v];'
+                f'-filter_complex "[0:v]fps=30,scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos,'
+                f'pad=1080:1920:(1080-iw)/2:(1080-ih)/2:color=black,format=yuv420p[v];'
                 f'[0:a][1:a]amerge=inputs=1[a]" '
-                f'-map "[v]" -map "[a]" -c:v libx264 -c:a aac -pix_fmt yuv420p -shortest "{clip_path}"'
+                f'-map "[v]" -map "[a]" -c:v libx264 -preset medium -crf 17 '
+                f'-colorspace bt709 -color_trc bt709 -color_primaries bt709 '
+                f'-c:a aac -b:a 192k -shortest "{clip_path}"'
             )
             clip_durations.append(dur)
         else:
-            # Преобразуємо фото у 4-секундне відео з тихим аудіотреком
+            # Перетворюємо фото у відео з прецизійною різкістю (Lanczos)
             dur = photo_duration
             cmd = (
                 f'ffmpeg -y -loop 1 -i "{file_path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
                 f'-t {photo_duration} -r 30 '
-                f'-vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1080-ih)/2,format=yuv420p" '
-                f'-c:v libx264 -c:a aac -shortest "{clip_path}"'
+                f'-vf "scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos,'
+                f'pad=1080:1920:(1080-iw)/2:(1080-ih)/2:color=black,format=yuv420p" '
+                f'-c:v libx264 -preset medium -crf 17 '
+                f'-colorspace bt709 -color_trc bt709 -color_primaries bt709 '
+                f'-c:a aac -b:a 192k -shortest "{clip_path}"'
             )
             clip_durations.append(dur)
 
@@ -517,11 +524,11 @@ def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_dur
         return None
 
     if len(temp_clips) == 1:
-        # Якщо в серії був лише 1 файл — просто копіюємо його
+        # Якщо в серії був лише 1 файл — копіюємо високоефективний кліп
         shutil.copy(temp_clips[0], output_reel_path)
         return output_reel_path
 
-    # 2. Побудова FFmpeg xfade filter_complex для кількох фрагментів
+    # 2. Побудова FFmpeg xfade filter_complex для перехідних ефектів
     transitions = ['fade', 'wipeleft', 'wiperight', 'slideleft', 'slideright', 'circlecrop', 'dissolve', 'fadeblack']
     
     inputs_str = " ".join([f'-i "{c}"' for c in temp_clips])
@@ -550,24 +557,30 @@ def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_dur
 
     filter_complex = ";".join(filter_parts)
 
+    # 3. Фінальний рендеринг: високий бітрейт (9-12 Mbps), CRF 18, колірний простір BT.709
     concat_cmd = (
         f'ffmpeg -y {inputs_str} -filter_complex "{filter_complex}" '
-        f'-map "[v_out]" -map "[a_out]" -c:v libx264 -c:a aac -preset fast "{output_reel_path}"'
+        f'-map "[v_out]" -map "[a_out]" -c:v libx264 -preset medium -crf 18 '
+        f'-b:v 9M -maxrate 12M -bufsize 24M -pix_fmt yuv420p '
+        f'-colorspace bt709 -color_trc bt709 -color_primaries bt709 '
+        f'-c:a aac -b:a 192k "{output_reel_path}"'
     )
 
-    print("🎬 [Reels Builder] Збірка та рендеринг фінального Reel з перехідними ефектами...")
-    res = subprocess.run(concat_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print("🎬 [Reels Builder] Збірка та рендеринг фінального HQ Reel з перехідними ефектами...")
+    subprocess.run(concat_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # Очищаємо проміжні кліпи
+    # Очищаємо тимчасові кліпи
     for c in temp_clips:
         if os.path.exists(c):
-            try: os.remove(c)
-            except: pass
+            try:
+                os.remove(c)
+            except Exception:
+                pass
 
     if os.path.exists(output_reel_path) and os.path.getsize(output_reel_path) > 0:
-        print(f"✅ [Reels Builder] Успішно згенеровано Reel: {output_reel_path}")
+        print(f"✅ [Reels Builder] Успішно згенеровано HQ Reel: {output_reel_path}")
         return output_reel_path
-    
+
     return None
 
 def fetch_random_music_from_drive(drive_service, music_folder_id, temp_dir="temp_mebli"):
