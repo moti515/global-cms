@@ -155,6 +155,11 @@ def fetch_tracks_from_pixabay(api_key, count_needed, existing_names):
 
     os.makedirs(TEMP_DIR, exist_ok=True)
 
+    # 🌐 Маскуємо запит під звичайний браузер, щоб оминути блокування 403
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
+
     for keyword in THEME_KEYWORDS:
         if len(downloaded_tracks) >= count_needed:
             break
@@ -169,7 +174,7 @@ def fetch_tracks_from_pixabay(api_key, count_needed, existing_names):
         }
 
         try:
-            resp = requests.get(url, params=params, timeout=15)
+            resp = requests.get(url, params=params, headers=headers, timeout=15)
             if resp.status_code != 200:
                 print(f"⚠️ Pixabay API повернув статус {resp.status_code}")
                 continue
@@ -198,7 +203,7 @@ def fetch_tracks_from_pixabay(api_key, count_needed, existing_names):
                 local_path = os.path.join(TEMP_DIR, filename)
 
                 print(f"📥 [Download] Завантаження: {raw_title} ({hit.get('duration', 0)} сек)...")
-                audio_data = requests.get(audio_url, timeout=30).content
+                audio_data = requests.get(audio_url, headers=headers, timeout=30).content
                 with open(local_path, "wb") as f:
                     f.write(audio_data)
 
@@ -213,7 +218,6 @@ def fetch_tracks_from_pixabay(api_key, count_needed, existing_names):
             print(f"⚠️ Помилка під час пошуку/завантаження за тегом '{keyword}': {err}")
 
     return downloaded_tracks
-
 
 def upload_track_to_drive(drive_service, folder_id, local_path, filename):
     """Завантажує файл у папку Google Диска."""
