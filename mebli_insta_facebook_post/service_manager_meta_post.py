@@ -167,7 +167,26 @@ def delete_from_imagekit(file_id: str):
     except Exception:
         pass
 
-
+def clean_generated_text(text: str, manufacturer: str, year: str) -> str:
+    """Видаляє випадкові дублювання бренду та року в кінці згенерованого тексту."""
+    if not text:
+        return text
+    
+    text = text.strip(' "' + "''")
+    
+    # Видаляємо кінцеві фрагменти типу "Solovey Furniture Studio, 2020" або "Олександр Гончаренко, 2021 рік"
+    patterns = [
+        rf'[\s,\.\-–—]*{re.escape(manufacturer)}[\s,\.\-–—]*{year}\s*(?:рік|р\.?|year|jahr)?\.?$',
+        rf'[\s,\.\-–—]*{year}\s*(?:рік|р\.?|year|jahr)?[\s,\.\-–—]*{re.escape(manufacturer)}\.?$',
+        rf'[\s,\.\-–—]*{re.escape(manufacturer)}\.?$',
+        rf'[\s,\.\-–—]*{year}\s*(?:рік|р\.?|year|jahr)?\.?$'
+    ]
+    
+    for pattern in patterns:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE).strip()
+        
+    return text
+ 
 def generate_multimodal_caption(image_paths, category, date_str, lang_idx):
     """Генерує креативний підпис через новий SDK google-genai з динамічним вибором моделей та вимкненням AFC."""
     pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
