@@ -14,10 +14,13 @@ TOKENS_FILE = 'tiktok_tokens.json'
 FOLDER_INPUT_ID = '19wPAbTuyGGqMI4twWXfU5gfs-vk2Ru_G'
 FOLDER_TRASH_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
 
+# Зчитуємо ID папки з музикою з GitHub Secrets
+FOLDER_MUSIC_ID = os.environ.get('MUSIC_FOLDER_ID')
+MUSIC_FOLDER_ID = FOLDER_MUSIC_ID
+
 FINAL_FPS = 30        
 
-# Вказуємо шлях до папки з музикою. 
-# Оскільки ви робите `cd tiktok`, скрипт шукатиме папку 'music' прямо в ньому.
+# Локальна папка як фолбек (резервний варіант, якщо на Диску немає музики)
 MUSIC_FALLBACK_PATH = 'music'
 
 # Підтримувані формати медіа
