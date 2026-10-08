@@ -230,3 +230,17 @@ def publish_facebook_reel(page_id: str, access_token: str, video_url: str, descr
 
     except Exception as e:
         return False, f"Збій публікації Facebook Reel: {e}"
+
+# 💬 ЛОКАЛІЗОВАНІ СЛОГАНИ ДЛЯ FACEBOOK REELS
+REEL_SLOGANS = {
+    0: "Меблі як вони є ✨",
+    1: "Furniture as it is ✨",
+    2: "Möbel wie sie sind ✨"
+}
+
+def get_reel_description(lang_idx: int) -> str:
+    """
+    Повертає короткий локалізований опис для Facebook Reel 
+    відповідно до мови, обраної для поточного запуску.
+    """
+    return REEL_SLOGANS.get(lang_idx, REEL_SLOGANS[0])
