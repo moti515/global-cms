@@ -62,6 +62,7 @@ try:
         parse_year,
         parse_location,
         publish_facebook_reel,
+        get_reel_description,
     )
 except ImportError:
     from mebli_instagram_story.services_manager_meb_instagram_story import (
@@ -91,6 +92,7 @@ except ImportError:
         parse_year,
         parse_location,
         publish_facebook_reel,
+        get_reel_description,
     )
 
 
@@ -419,7 +421,7 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
             final_reel_file = add_background_music_to_reel(raw_reel_file, output_reel_final, local_music)
 
             # 4. Публікація у Facebook з системою повторних спроб (Retry) при таймаутах хостингу
-            reel_description = f"✨ {target_tab} | {batch_items[0]['date_str']}\n" + "\n".join([f"• {c}" for c in previous_captions if c])
+            reel_description = get_reel_description(lang_idx)
             fb_page_id = getattr(config, 'FB_PAGE_ID', os.environ.get("FB_PAGE_ID"))
             fb_token = getattr(config, 'META_ACCESS_TOKEN', access_token)
 
