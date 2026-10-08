@@ -7,8 +7,14 @@ import subprocess
 import textwrap
 from datetime import datetime
 import requests
-from PIL import Image, ImageOps, ImageDraw, ImageFont  # Додано ImageDraw та ImageFont
+from PIL import Image, ImageOps, ImageDraw, ImageFont
+
 Image.MAX_IMAGE_PIXELS = None
+
+# Імпорт інструментів для скачування з Google Диску
+from googleapiclient.http import MediaIoBaseDownload
+from auth_tiktok import get_gdrive_service
+import config_tiktok
 from config_tiktok import FINAL_FPS, MUSIC_FALLBACK_PATH
 
 def get_video_duration(input_path):
