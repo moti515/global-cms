@@ -115,6 +115,7 @@ def get_manufacturer_header(category: str, date_str: str, lang_idx: int, mode: s
         "unknown", "unknown city", "unknown location",
         "unbekannt", "unbekannte stadt", "unbekannter ort",
         "-", "--", "none", "null", "n/a"
+    ]
     has_valid_loc = resolved_loc and not any(marker in resolved_loc.lower() for marker in invalid_markers)
 
     if "montage various" in cat_lower:
