@@ -46,6 +46,7 @@ jobs:
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         CLIENT_KEY_TIKTOK: ${{ secrets.CLIENT_KEY_TIKTOK }}
         CLIENT_SECRET_TIKTOK: ${{ secrets.CLIENT_SECRET_TIKTOK }}
+        MUSIC_FOLDER_ID: ${{ secrets.MUSIC_FOLDER_ID }}
         RUN_MODE: ${{ github.event.inputs.run_mode }}
       run: |
         cd tiktok
@@ -76,6 +77,7 @@ jobs:
         CLIENT_KEY_TIKTOK: ${{ secrets.CLIENT_KEY_TIKTOK }}
         CLIENT_SECRET_TIKTOK: ${{ secrets.CLIENT_SECRET_TIKTOK }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        MUSIC_FOLDER_ID: ${{ secrets.MUSIC_FOLDER_ID }}
         RUN_MODE: ${{ github.event.inputs.run_mode }}
       run: |
         cd tiktok
