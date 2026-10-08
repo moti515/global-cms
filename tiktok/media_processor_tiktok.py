@@ -422,36 +422,138 @@ def fast_concat_videos(video_paths, final_output_path):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(list_path): os.remove(list_path)
 
-def add_background_music(input_path, output_path):
-    """Накладає випадкову фонову музику."""
-    if not MUSIC_FALLBACK_PATH or not os.path.exists(MUSIC_FALLBACK_PATH):
-        print("⚠️ Фонова музика не знайдена.")
+def fetch_random_music_from_drive(drive_service=None, music_folder_id=None, temp_dir="downloaded"):
+    """
+    Вибирає випадковий аудіофайл із папки Google Диску та завантажує його локально.
+    Якщо Google Диск порожній або виникла помилка, використовує локальний MUSIC_FALLBACK_PATH.
+    """
+    # 1. Автоматичне визначення drive_service
+    if not drive_service:
+        try:
+            drive_service = get_gdrive_service()
+        except Exception as e:
+            print(f"⚠️ [Drive Audio] Не вдалося отримати сервіс Google Диску: {e}")
+
+    # 2. Отримання ID папки з музикою з конфігу (FOLDER_MUSIC_ID або MUSIC_FOLDER_ID)
+    folder_id = music_folder_id or getattr(config_tiktok, 'FOLDER_MUSIC_ID', None) or getattr(config_tiktok, 'MUSIC_FOLDER_ID', None)
+
+    if drive_service and folder_id:
+        query = f"'{folder_id}' in parents and trashed = false and (mimeType contains 'audio/' or name contains '.mp3' or name contains '.wav' or name contains '.m4a')"
+        try:
+            results = drive_service.files().list(
+                q=query,
+                fields="files(id, name)",
+                pageSize=100
+            ).execute()
+            files = results.get('files', [])
+
+            if files:
+                selected_file = random.choice(files)
+                file_id = selected_file['id']
+                file_name = selected_file['name']
+                os.makedirs(temp_dir, exist_ok=True)
+                local_music_path = os.path.join(temp_dir, f"bg_music_{file_id}.mp3")
+
+                print(f"🎵 [Drive Audio] Завантажуємо фоновий трек з Google Диску: {file_name}...")
+
+                request = drive_service.files().get_media(fileId=file_id)
+                with open(local_music_path, 'wb') as fh:
+                    downloader = MediaIoBaseDownload(fh, request)
+                    done = False
+                    while not done:
+                        _, done = downloader.next_chunk()
+
+                if os.path.exists(local_music_path) and os.path.getsize(local_music_path) > 0:
+                    return local_music_path
+            else:
+                print("ℹ️ [Drive Audio] Папка з музикою на Google Диску порожня.")
+        except Exception as e:
+            print(f"⚠️ [Drive Audio] Помилка завантаження фонової музики з Диску: {e}")
+
+    # 3. Фолбек на локальну папку з музикою (якщо є в конфігу)
+    if MUSIC_FALLBACK_PATH and os.path.exists(MUSIC_FALLBACK_PATH):
+        if os.path.isdir(MUSIC_FALLBACK_PATH):
+            tracks = [os.path.join(MUSIC_FALLBACK_PATH, f) for f in os.listdir(MUSIC_FALLBACK_PATH)
+                      if f.lower().endswith(('.mp3', '.wav', '.m4a', '.aac'))]
+            if tracks:
+                selected = random.choice(tracks)
+                print(f"🎵 [Local Audio] Використовуємо локальний фоновий трек: {os.path.basename(selected)}")
+                return selected
+        elif os.path.isfile(MUSIC_FALLBACK_PATH):
+            print(f"🎵 [Local Audio] Використовуємо локальний фоновий трек: {os.path.basename(MUSIC_FALLBACK_PATH)}")
+            return MUSIC_FALLBACK_PATH
+
+    print("ℹ️ [Audio] Фонова музика не знайдена ні на Google Диску, ні в локальній папці.")
+    return None
+
+
+def add_background_music(input_path, output_path, drive_service=None, music_folder_id=None, music_volume=0.20):
+    """
+    Накладає фоновий трек (скачаний з Google Диску або з локального фолбеку) на відео.
+    Автоматично вираховує тривалість відео, робить зациклення (-stream_loop -1), 
+    плавний fade-out в кінці та мікшує з оригінальним звуком.
+    """
+    # 1. Скачуємо або отримуємо трек
+    local_music_path = fetch_random_music_from_drive(drive_service, music_folder_id)
+    if not local_music_path or not os.path.exists(local_music_path):
+        print("⏩ Публікуємо відео з оригінальним звуком (без фонової музики).")
         return False
 
-    music_file = MUSIC_FALLBACK_PATH
-    if os.path.isdir(MUSIC_FALLBACK_PATH):
-        tracks = [os.path.join(MUSIC_FALLBACK_PATH, f) for f in os.listdir(MUSIC_FALLBACK_PATH)
-                  if f.lower().endswith(('.mp3', '.wav', '.m4a', '.aac'))]
-        if not tracks:
-            return False
-        
-        tracks.sort()
-        music_file = random.SystemRandom().choice(tracks)
-        print(f"🎵 Фоновий трек (обрано рандомно): {os.path.basename(music_file)}")
+    is_temp_downloaded = "bg_music_" in os.path.basename(local_music_path)
 
-    cmd = [
-        'ffmpeg', '-y',
-        '-i', input_path,
-        '-stream_loop', '-1', '-i', music_file,
-        '-filter_complex', '[0:a]volume=1.0[orig];[1:a]volume=0.15[bg];[orig][bg]amix=inputs=2:duration=first:dropout_transition=0',
-        '-c:v', 'copy',
-        '-c:a', 'aac', '-b:a', '128k',
-        '-shortest',
-        output_path
-    ]
     try:
+        # 2. Розраховуємо тривалість відео та точку початку fade-out (за 1.5 сек до кінця)
+        duration = get_video_duration(input_path)
+        if duration <= 0:
+            duration = 10.0  # Резервне значення
+
+        fade_out_start = max(0.0, duration - 1.5)
+
+        # 3. Перевіряємо наявність оригінального аудіопотоку
+        has_orig_audio = has_audio_stream(input_path)
+
+        cmd = ['ffmpeg', '-y', '-i', input_path, '-stream_loop', '-1', '-i', local_music_path]
+
+        if has_orig_audio:
+            filter_complex = (
+                f'[1:a]atrim=0:{duration:.2f},afade=t=out:st={fade_out_start:.2f}:d=1.5,volume={music_volume}[bg_audio];'
+                f'[0:a][bg_audio]amix=inputs=2:duration=first:dropout_transition=2[aout]'
+            )
+            cmd.extend([
+                '-filter_complex', filter_complex,
+                '-map', '0:v', '-map', '[aout]',
+                '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k',
+                '-shortest', output_path
+            ])
+        else:
+            filter_complex = (
+                f'[1:a]atrim=0:{duration:.2f},afade=t=out:st={fade_out_start:.2f}:d=1.5,volume={music_volume}[aout]'
+            )
+            cmd.extend([
+                '-filter_complex', filter_complex,
+                '-map', '0:v', '-map', '[aout]',
+                '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k',
+                '-shortest', output_path
+            ])
+
+        print(f"🎬 🎵 Накладення фонової музики (тривалість: {duration:.1f}s, fade-out з {fade_out_start:.1f}s)...")
         res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return res.returncode == 0
+        success = (res.returncode == 0) and os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+        if success:
+            print("✅ Фонова музика успішно інтегрована в ролик!")
+        else:
+            print("⚠️ Не вдалося накласти музику через FFmpeg.")
+
+        return success
+
     except Exception as e:
-        print(f"⚠️ Помилка міксування звуку: {e}")
+        print(f"⚠️ Помилка обробки фонової музики: {e}")
         return False
+    finally:
+        # Автоматичне прибирання: видаляємо тимчасово скачаний MP3-файл з диска
+        if is_temp_downloaded and os.path.exists(local_music_path):
+            try:
+                os.remove(local_music_path)
+            except Exception:
+                pass
