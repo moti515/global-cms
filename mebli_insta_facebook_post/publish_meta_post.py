@@ -99,11 +99,18 @@ def publish_to_facebook(cloud_urls: list, full_caption: str, has_video: bool, lo
     for url in cloud_urls:
         photo_id = None
         for attempt in range(3):
-            photo_res = requests.post(f"https://graph.facebook.com/v19.0/{config.FB_PAGE_ID}/photos", data={
-                "url": url, "published": "false", "access_token": config.META_ACCESS_TOKEN
-            }, timeout=60).json()
+            try:
+                photo_res = requests.post(
+                    f"https://graph.facebook.com/v19.0/{config.FB_PAGE_ID}/photos",
+                    data={
+                        "url": url,
+                        "published": "false",
+                        "access_token": config.META_ACCESS_TOKEN
+                    },
+                    timeout=60
+                ).json()
 
-            if "id" in photo_res:
+                if "id" in photo_res:
                     photo_id = photo_res["id"]
                     break
                 print(f"⚠️ Спроба {attempt + 1}/3 невдала для фото. Meta API: {photo_res}")
