@@ -179,13 +179,17 @@ def cleanup_temp_dir(directory: str = "temp_mebli"):
         except Exception as e:
             print(f"⚠️ Не вдалося повністю очистити '{directory}': {e}")
 
-def publish_facebook_reel(page_id: str, access_token: str, video_url: str, description: str = ""):
+def publish_facebook_reel(page_id: str, access_token: str, video_path_or_url: str, description: str = ""):
     """
-    Публікує згенероване відео в Facebook Page Reels за допомогою офіційного 3-етапного API Meta.
+    Публікує згенероване відео в Facebook Page Reels.
+    Підтримує як прямий бінарний upload локального файлу (без залучення сторонніх хостингів),
+    так і публікацію через external URL.
     """
-    if not page_id or not access_token or not video_url:
-        print("⚠️ [FB Reels API] Відсутні ключі або посилання для публікації Facebook Reel.")
-        return False, "Missing credentials or video URL"
+    if not page_id or not access_token or not video_path_or_url:
+        print("⚠️ [FB Reels API] Відсутні ключі або шлях до відео для публікації Facebook Reel.")
+        return False, "Missing credentials or video source"
+
+    is_local_file = os.path.exists(video_path_or_url)
 
     try:
         # ЕТАП 1: Створення сесії завантаження
@@ -202,17 +206,29 @@ def publish_facebook_reel(page_id: str, access_token: str, video_url: str, descr
         video_id = r_init["video_id"]
         upload_url = r_init["upload_url"]
 
-        # ЕТАП 2: Завантаження відео за прямою URL адресою
-        headers = {
-            "Authorization": f"OAuth {access_token}",
-            "file_url": video_url
-        }
-        r_upload = requests.post(upload_url, headers=headers, timeout=120).json()
+        # ЕТАП 2: Завантаження відео
+        if is_local_file:
+            print(f"📤 [FB Reels API] Пряме бінарне завантаження локального файлу ({os.path.getsize(video_path_or_url) / (1024*1024):.2f} MB)...")
+            file_size = os.path.getsize(video_path_or_url)
+            headers = {
+                "Authorization": f"OAuth {access_token}",
+                "offset": "0",
+                "file_size": str(file_size)
+            }
+            with open(video_path_or_url, 'rb') as f:
+                r_upload = requests.post(upload_url, headers=headers, data=f, timeout=180).json()
+        else:
+            print(f"🌐 [FB Reels API] Завантаження відео за зовнішнім посиланням...")
+            headers = {
+                "Authorization": f"OAuth {access_token}",
+                "file_url": video_path_or_url
+            }
+            r_upload = requests.post(upload_url, headers=headers, timeout=120).json()
 
         if not r_upload.get("success"):
             return False, f"Помилка завантаження файлу в FB Reels: {r_upload}"
 
-        # ЕТАП 3: Публікація Reel
+        # ЕТАП 3: Фіналізація та Публікація Reel
         publish_url = f"https://graph.facebook.com/v21.0/{page_id}/video_reels"
         publish_payload = {
             "upload_phase": "finish",
@@ -221,6 +237,9 @@ def publish_facebook_reel(page_id: str, access_token: str, video_url: str, descr
             "description": description,
             "access_token": access_token
         }
+        
+        # Чекаємо 3 секунди перед фіналізацією для завершення обробки бінарного потоку сервером Meta
+        time.sleep(3)
         r_pub = requests.post(publish_url, data=publish_payload, timeout=30).json()
 
         if r_pub.get("success") or "id" in r_pub:
