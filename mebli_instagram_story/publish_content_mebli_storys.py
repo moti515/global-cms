@@ -420,40 +420,33 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
             # 3. Накладаємо музику на Reel з урахуванням його тривалості
             final_reel_file = add_background_music_to_reel(raw_reel_file, output_reel_final, local_music)
 
-            # 4. Публікація у Facebook з системою повторних спроб (Retry) при таймаутах хостингу
+            # 4. Публікація у Facebook з системою повторних спроб (Direct Upload)
             reel_description = get_reel_description(lang_idx)
             fb_page_id = getattr(config, 'FB_PAGE_ID', os.environ.get("FB_PAGE_ID"))
             fb_token = getattr(config, 'META_ACCESS_TOKEN', access_token)
 
-            max_reel_retries = 2
+            max_reel_retries = 3
             reel_published_successfully = False
 
             for attempt in range(1, max_reel_retries + 1):
-                print(f"📡 Спроба {attempt}/{max_reel_retries}: Отримання прямого посилання на відео та відправка у Facebook Reels API...")
-                
-                reel_url, imagekit_reel_id = get_google_drive_direct_url("fb_reel", local_file_path=final_reel_file)
-                
-                if not reel_url:
-                    print(f"⚠️️ [Спроба {attempt}] Не вдалося отримати прямий URL для відео Reel.")
-                    continue
+                print(f"📡 Спроба {attempt}/{max_reel_retries}: Пряме завантаження файлу у Facebook Reels API...")
 
-                fb_success, fb_res = publish_facebook_reel(fb_page_id, fb_token, reel_url, description=reel_description)
+                fb_success, fb_res = publish_facebook_reel(
+                    fb_page_id, 
+                    fb_token, 
+                    final_reel_file,  # 👈 Передаємо безпосередньо локальний шлях
+                    description=reel_description
+                )
 
                 if fb_success:
                     print(f"🎉 ✅ FACEBOOK REEL УСПІШНО ОПУБЛІКОВАНО! Reel ID: {fb_res}")
                     reel_published_successfully = True
-                    if imagekit_reel_id:
-                        delete_from_imagekit(imagekit_reel_id)
                     break
                 else:
                     print(f"⚠️ ❌ [Спроба {attempt}] Помилка публікації Facebook Reel: {fb_res}")
-                    if imagekit_reel_id:
-                        delete_from_imagekit(imagekit_reel_id)
-                    
                     if attempt < max_reel_retries:
-                        print("⏳ Очікування 10 секунд перед наступною спробою рендерингу посилання...")
-                        import time
-                        time.sleep(10)
+                        print("⏳ Очікування 15 секунд перед наступною спробою...")
+                        time.sleep(15)
 
             # Прибираємо тимчасові файли монтажу
             for tmp_f in [raw_reel_file, final_reel_file, local_music]:
