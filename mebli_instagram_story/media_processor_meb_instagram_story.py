@@ -162,7 +162,7 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
     processed_files = []
     
     duration = get_video_duration(local_path)
-    if duration == 0:
+    if duration <= 0.5:
         print("⚠️ Тривалість 0 або помилка аналізу. Спробуємо обробити як один файл.")
         duration = 59.0
         
@@ -171,16 +171,17 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
     # 1. СТВОРЮЄМО КРАСИВИЙ ШАР З ТЕКСТОМ ТА ЕМОДЗІ
     overlay_png_path = generate_story_overlay(base_name, text, year, location)
     
-    # 2. СКЛАДАЄМО ФІЛЬТР FFMPEG: спочатку ресайз відео, потім накладання PNG оверлею за координатами 0:0
+    # 2. СКЛАДАЄМО ФІЛЬТР FFMPEG (додано -fps_mode cfr для стабільних старих AVI)
     vf_base = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black"
     filter_complex = f"[0:v]{vf_base}[bg]; [bg][1:v]overlay=0:0"
     
     output_template = os.path.join('temp_mebli', f'story_padded_{base_name}_part_%03d.mp4')
+    single_output = os.path.join('temp_mebli', f'story_padded_{base_name}.mp4')
     
     cmd = [
         'ffmpeg', '-y', 
-        '-i', local_path,          # Вхід [0:v] - відео
-        '-i', overlay_png_path,    # Вхід [1:v] - наш прозорий PNG оверлей
+        '-i', local_path,         
+        '-i', overlay_png_path,    
         '-filter_complex', filter_complex,
         '-c:v', 'libx264', 
         '-preset', 'medium',
@@ -200,7 +201,6 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
             output_template
         ]
     else:
-        single_output = os.path.join('temp_mebli', f'story_padded_{base_name}.mp4')
         cmd.append(single_output)
 
     try:
@@ -231,21 +231,32 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
     return [local_path]
 
 def get_video_duration(video_path):
-    cmd = ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nocues=1', video_path]
+    # Покращений запит ffprobe з урахуванням старих кодеків та контейнерів
+    cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
     try:
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if res.returncode == 0 and res.stdout:
-            return float(res.stdout.strip())
-    except Exception as e:
-        print(f"⚠️ Не вдалося визначити тривалість відео: {e}")
+        if res.returncode == 0 and res.stdout.strip():
+            val = float(res.stdout.strip())
+            if val > 0:
+                return val
+    except Exception:
+        pass
+    
+    # Фолбек через витягування тривалості стріму через ffprobe
+    cmd_stream = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
+    try:
+        res = subprocess.run(cmd_stream, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode == 0 and res.stdout.strip():
+            val = float(res.stdout.strip())
+            if val > 0:
+                return val
+    except Exception:
+        pass
+        
     return 0.0
 
 # 🎬 ОПТИМІЗОВАНИЙ БУДІВНИК REELS (БЕЗ ПОТРОЙНОГО ПЕРЕКОДУВАННЯ ТА БЕЗ ПОВТОРНОГО РЕСАЙЗУ)
 def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_duration=4.0, transition_dur=0.6):
-    """
-    Склеює масив ГОТОВИХ 1080x1920 фото/відео з накладеним текстом у суцільний Facebook Reel.
-    Усунуто повторний ресайз та подвійне стиснення.
-    """
     if not processed_files:
         return None
 
@@ -259,20 +270,18 @@ def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_dur
         is_video = file_path.lower().endswith(('.mp4', '.mov', '.avi'))
 
         if is_video:
-            # Відео ВЖЕ має розмір 1080x1920 та накладений текст від optimize_video_story.
-            # Лише перевіряємо наявність аудіодорожки та гармонізуємо параметри
             dur = get_video_duration(file_path)
-            if dur == 0: dur = 5.0
+            if dur <= 0: dur = 5.0
 
+            # Генеруємо чисту аудіодоріжку для стабільного мікшування навіть якщо її не було в .avi
             cmd = (
                 f'ffmpeg -y -i "{file_path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
-                f'-filter_complex "[0:a][1:a]amerge=inputs=1[a]" '
-                f'-map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -shortest "{clip_path}"'
+                f'-filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black[v];[0:a][1:a]amerge=inputs=1[a]" '
+                f'-map "[v]" -map "[a]" -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p '
+                f'-c:a aac -b:a 192k -t {dur} -shortest "{clip_path}"'
             )
             clip_durations.append(dur)
         else:
-            # Фото ВЖЕ відформатовано в JPEG 1080x1920 з текстом.
-            # Прямо конвертуємо в 4-секундний відеофрагмент без додаткового масштабування
             dur = photo_duration
             cmd = (
                 f'ffmpeg -y -loop 1 -i "{file_path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
@@ -283,8 +292,8 @@ def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_dur
             )
             clip_durations.append(dur)
 
-        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.exists(clip_path):
+        res = subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
             temp_clips.append(clip_path)
 
     if not temp_clips:
