@@ -391,6 +391,9 @@ def extract_date_from_filename(filename):
 
 def get_exif_data(image_path):
     date_str, lat, lon = None, None, None
+    # 🛡️ ЗАХИСТ: Відеофайли НІКОЛИ не відкриваються через Pillow (image_open)
+    if image_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg')):
+        return date_str, lat, lon
     try:
         with Image.open(image_path) as img:
             exif = img.getexif()
