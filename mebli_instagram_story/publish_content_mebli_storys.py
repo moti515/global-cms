@@ -353,8 +353,6 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
             overlay_text_on_image(padded_img_path, caption_text, year=year_val, location=loc_val)
             processed_files = [padded_img_path]
 
-        processed_reel_sources.extend(processed_files)
-
         for ready_file in processed_files:
             direct_url, imagekit_id = get_google_drive_direct_url(file_id, local_file_path=ready_file)
             
@@ -374,6 +372,7 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
             if success:
                 print(f"✅ УСПІШНО ОПУБЛІКОВАНО В IG! Story ID: {result_msg}")
                 published_any = True
+                processed_reel_sources.append(ready_file)  # 👈 Додаємо ТІЛЬКИ успішно опубліковані файли
                 
                 if item.get('mode') == 'hot_folder':
                     move_file_to_trash_folder(drive_service, file_id, raw_file_name, config.TRASH_FOLDER_ID)
