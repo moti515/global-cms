@@ -4,6 +4,7 @@ import time
 import base64
 import requests
 import io
+import subprocess
 from PIL import Image as PILImage
 from google import genai
 from google.genai import types
@@ -151,6 +152,24 @@ def delete_from_imagekit(file_id: str):
     except: 
         pass
 
+def extract_frame_from_video(video_path, output_image_path):
+    """Витягує один кадр із середини відео для аналізу ШІ."""
+    try:
+        # Швидкий фолбек довжини через ffprobe
+        cmd_dur = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
+        res = subprocess.run(cmd_dur, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        duration = float(res.stdout.strip()) if res.returncode == 0 and res.stdout.strip() else 5.0
+    except Exception:
+        duration = 5.0
+        
+    ss_time = max(0.5, duration / 2)
+    cmd = [
+        'ffmpeg', '-y', '-ss', str(ss_time), '-i', video_path,
+        '-vframes', '1', '-q:v', '2', output_image_path
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return os.path.exists(output_image_path)
+    
 def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc, previous_captions=None):
     gemini_key = os.environ.get("GEMINI_API_KEY")
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
@@ -239,19 +258,33 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         
         # Готуємо масив contents
         contents = [prompt]
-        
+
+        temp_frame_path = None
         for img_path in image_paths:
             if os.path.exists(img_path):
+                target_path = img_path
+                is_video = img_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.3gp', '.gif'))
+                
+                if is_video:
+                    temp_frame_path = img_path + "_caption_target.jpg"
+                    if extract_frame_from_video(img_path, temp_frame_path):
+                        target_path = temp_frame_path
+                    else:
+                        temp_frame_path = None
                 try:
                     img = PILImage.open(img_path)
                     if img.mode in ("RGBA", "P"):
                         img = img.convert("RGB")
-                    
                     img.thumbnail((1024, 1024))
                     # В офіційному google-genai об'єкт PIL.Image передається напряму
                     contents.append(img)
                 except Exception as img_err:
                     print(f"⚠️ Не вдалося обробити зображення {img_path}: {img_err}")
+                finally:
+                    # Очищуємо тимчасовий кадр відео одразу після завантаження в пам'ять
+                    if temp_frame_path and os.path.exists(temp_frame_path):
+                        try: os.remove(temp_frame_path)
+                        except: pass
 
         # 🔍 Динамічно отримуємо доступні моделі через офіційний API
         models_to_try = []
