@@ -181,18 +181,20 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
     cmd = [
         'ffmpeg', '-y', 
         '-i', local_path,         
-        '-i', overlay_png_path,    
-        '-filter_complex', filter_complex,
+        '-i', overlay_png_path,
+        '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100', # 👈 Гарантує наявність звуку
+        '-filter_complex', f"[0:v]{vf_base}[bg]; [bg][1:v]overlay=0:0[v]; [0:a][2:a]amerge=inputs=1[a]",
+        '-map', '[v]',
+        '-map', '[a]',
         '-c:v', 'libx264', 
         '-preset', 'fast',
         '-profile:v', 'main',
-        '-level', '3.1',
         '-crf', '22',
-        '-colorspace', 'bt709', '-color_trc', 'bt709', '-color_primaries', 'bt709',
         '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', 
         '-b:a', '128k',
-        '-movflags', '+faststart'  # 👈 КРИТИЧНО ДЛЯ META API: швидкий старт індексу
+        '-shortest',
+        '-movflags', '+faststart'
     ]
     
     if duration > 60.0:
