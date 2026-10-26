@@ -171,7 +171,7 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
     # 1. СТВОРЮЄМО КРАСИВИЙ ШАР З ТЕКСТОМ ТА ЕМОДЗІ
     overlay_png_path = generate_story_overlay(base_name, text, year, location)
     
-    # 2. СКЛАДАЄМО ФІЛЬТР FFMPEG (додано -fps_mode cfr для стабільних старих AVI)
+    # 2. СКЛАДАЄМО ФІЛЬТР FFMPEG
     vf_base = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black"
     filter_complex = f"[0:v]{vf_base}[bg]; [bg][1:v]overlay=0:0"
     
@@ -184,12 +184,15 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
         '-i', overlay_png_path,    
         '-filter_complex', filter_complex,
         '-c:v', 'libx264', 
-        '-preset', 'medium',
-        '-crf', '18',
+        '-preset', 'fast',
+        '-profile:v', 'main',
+        '-level', '3.1',
+        '-crf', '22',
         '-colorspace', 'bt709', '-color_trc', 'bt709', '-color_primaries', 'bt709',
         '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', 
-        '-b:a', '192k'
+        '-b:a', '128k',
+        '-movflags', '+faststart'  # 👈 КРИТИЧНО ДЛЯ META API: швидкий старт індексу
     ]
     
     if duration > 60.0:
