@@ -140,7 +140,8 @@ def publish_story_to_meta(ig_user_id: str, meta_access_token: str, pub_url: str,
         creation_id = res["id"]
         
         # 2️⃣ Очікування обробки медіа
-        if not wait_for_meta_container(creation_id, meta_access_token):
+        max_attempts = 36 if is_video else 12 
+        if not wait_for_meta_container(creation_id, meta_access_token, max_attempts=max_attempts):
             return False, "Контейнер медіафайлу не перейшов у стан готовності (Таймаут/Помилка Meta)."
             
         # 3️⃣ Фінальна публікація
