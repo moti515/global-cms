@@ -358,17 +358,29 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         
     return pref.get("fallback_caption", "Точний розрахунок та увага до кожної деталі!")
     
-def wait_for_meta_container(container_id, access_token, max_attempts=30):
-    check_url = f"https://graph.facebook.com/v19.0/{container_id}"
-    params = {"fields": "status_code,status", "access_token": access_token}
-    for _ in range(max_attempts):
+def wait_for_meta_container(container_id, access_token, max_attempts=36):
+    # Оновлено до v21.0 для сумісності з іншими модулями
+    check_url = f"https://graph.facebook.com/v21.0/{container_id}"
+    # Додано поле 'error_message' для точної діагностики збоїв Meta
+    params = {"fields": "status_code,status,error_message", "access_token": access_token}
+    
+    for attempt in range(1, max_attempts + 1):
         try:
-            r = requests.get(check_url, params=params, timeout=(10, 120)).json()
+            r = requests.get(check_url, params=params, timeout=(10, 30)).json()
             status = r.get("status_code", "").upper()
-            if status == "FINISHED": return True
-            elif status == "ERROR": return False
-            print(f"⏳ Очікування обробки медіафайлу в Meta... Статус: {status}")
+            
+            if status == "FINISHED":
+                return True
+            elif status == "ERROR":
+                err_msg = r.get("error_message", "Невідома помилка обробки медіа в Meta")
+                print(f"❌ Мета повернула статус ERROR: {err_msg}")
+                return False
+            
+            print(f"⏳ [Спроба {attempt}/{max_attempts}] Обробка медіафайлу в Meta... Статус: {status or 'IN_PROGRESS'}")
         except Exception as e:
             print(f"⚠️ Помилка перевірки статусу контейнера Meta: {e}")
+            
         time.sleep(5)
+        
+    print("⏰ Вичерпано ліміт часу (таймаут) очікування готовності медіа в Meta.")
     return False
