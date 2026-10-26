@@ -499,8 +499,11 @@ def run_story_publisher():
 
     if success_published:
         update_saved_language(sheets_s, next_lang_code)
-
-    cleanup_temp_dir("temp_mebli")
+        cleanup_temp_dir("temp_mebli")
+    else:
+        print("🚨 КРИТИЧНА ПОМИЛКА: Жодної сторіз не вдалося опублікувати!")
+        cleanup_temp_dir("temp_mebli")
+        sys.exit(1)  # 👈 Гарантує червоний хрестик/збій у CI/CD
 
 
 if __name__ == "__main__":
