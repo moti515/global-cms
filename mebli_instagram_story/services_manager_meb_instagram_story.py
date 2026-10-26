@@ -259,29 +259,29 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         # Готуємо масив contents
         contents = [prompt]
 
-        temp_frame_path = None
         for img_path in image_paths:
             if os.path.exists(img_path):
                 target_path = img_path
+                temp_frame_path = None
                 is_video = img_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.3gp', '.gif'))
                 
-                if is_video:
-                    temp_frame_path = img_path + "_caption_target.jpg"
-                    if extract_frame_from_video(img_path, temp_frame_path):
-                        target_path = temp_frame_path
-                    else:
-                        temp_frame_path = None
                 try:
-                    img = PILImage.open(img_path)
+                    if is_video:
+                        temp_frame_path = img_path + "_caption_target.jpg"
+                        if extract_frame_from_video(img_path, temp_frame_path):
+                            target_path = temp_frame_path
+                        else:
+                            temp_frame_path = None
+                            
+                    # 🛡️ Тепер відкриваємо виключно зображення або витягнутий із відео кадр
+                    img = PILImage.open(target_path)
                     if img.mode in ("RGBA", "P"):
                         img = img.convert("RGB")
                     img.thumbnail((1024, 1024))
-                    # В офіційному google-genai об'єкт PIL.Image передається напряму
                     contents.append(img)
                 except Exception as img_err:
-                    print(f"⚠️ Не вдалося обробити зображення {img_path}: {img_err}")
+                    print(f"⚠️ Не вдалося обробити кадр для Gemini {img_path}: {img_err}")
                 finally:
-                    # Очищуємо тимчасовий кадр відео одразу після завантаження в пам'ять
                     if temp_frame_path and os.path.exists(temp_frame_path):
                         try: os.remove(temp_frame_path)
                         except: pass
@@ -358,10 +358,10 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         
     return pref.get("fallback_caption", "Точний розрахунок та увага до кожної деталі!")
     
-def wait_for_meta_container(container_id, access_token):
+def wait_for_meta_container(container_id, access_token, max_attempts=30):
     check_url = f"https://graph.facebook.com/v19.0/{container_id}"
     params = {"fields": "status_code,status", "access_token": access_token}
-    for _ in range(30):
+    for _ in range(max_attempts):
         try:
             r = requests.get(check_url, params=params, timeout=(10, 120)).json()
             status = r.get("status_code", "").upper()
