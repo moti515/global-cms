@@ -335,7 +335,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     
 def wait_for_meta_container(container_id, access_token, max_attempts=36):
     # Оновлено до v21.0 для сумісності з іншими модулями
-    check_url = f"https://graph.facebook.com/v21.0/{container_id}"
+    check_url = f"https://graph.facebook.com/v26.0/{container_id}"
     # Додано поле 'error_message' для точної діагностики збоїв Meta
     params = {"fields": "status_code,status,error_message", "access_token": access_token}
     
