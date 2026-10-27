@@ -40,70 +40,116 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
         print(f"❌ Не вдалося записати помилку на службовий аркуш: {e}")
 
 def get_google_drive_direct_url(file_id, local_file_path=None):
-    if local_file_path and os.path.exists(local_file_path):
-        filename = os.path.basename(local_file_path)
-        lower_name = filename.lower()
-        is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
-        mime_type = "video/mp4" if is_video else "image/jpeg"
-        remote_filename = "story.mp4" if is_video else "story.jpg"
-        
-        # 🚀 1️⃣ ПРІОРИТЕТ ДЛЯ ВСІХ ФАЙЛІВ: Pixeldrain.com (Ідеально для Meta API)
-        print(f"☁️ Завантажуємо файл {filename} на Pixeldrain.com...")
+    """
+    Каскадний завантажувач: послідовно пробує Litterbox -> ImageKit -> Tmpfiles -> ImgBB.
+    Якщо один із сервісів падає, автоматично переходить до наступного.
+    """
+    if not local_file_path or not os.path.exists(local_file_path):
+        print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
+        return f"https://docs.google.com/uc?export=download&id={file_id}", None
+
+    filename = os.path.basename(local_file_path)
+    lower_name = filename.lower()
+    is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
+    mime_type = "video/mp4" if is_video else "image/jpeg"
+    remote_filename = "story.mp4" if is_video else "story.jpg"
+
+    # --- 1️⃣ СПРОБА: Litterbox.moe (Згідно з офіційною документацією ShareX API) ---
+    print(f"☁️ [Каскад 1/4] Пробуємо завантажити {filename} на Litterbox.moe...")
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        }
+        with open(local_file_path, 'rb') as f:
+            files = {'fileToUpload': (remote_filename, f, mime_type)}
+            data = {
+                'reqtype': 'fileupload',
+                'time': '1h'  # Доступні значення: 1h, 12h, 24h, 72h
+            }
+            res = requests.post(
+                'https://litterbox.catbox.moe/resources/internals/api.php',
+                data=data,
+                files=files,
+                headers=headers,
+                timeout=30
+            )
+            if res.status_code == 200 and res.text.strip().startswith('http'):
+                direct_url = res.text.strip()
+                print(f"✅ Успішно завантажено на Litterbox: {direct_url}")
+                return direct_url, None
+            else:
+                print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text[:150]}")
+    except Exception as e:
+        print(f"⚠️ Помилка мережі/SSL під час завантаження на Litterbox: {e}")
+
+    # --- 2️⃣ СПРОБА: ImageKit.io (Надійний бізнес-бекенд) ---
+    imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
+    if imagekit_key:
+        print(f"☁️ [Каскад 2/4] Пробуємо завантажити {filename} на ImageKit.io...")
         try:
             with open(local_file_path, 'rb') as f:
-                files = {'file': (remote_filename, f)}
-                res = requests.post('https://pixeldrain.com/api/file/', files=files, timeout=60)
-                if res.status_code == 201:
+                res = requests.post(
+                    'https://upload.imagekit.io/api/v1/files/upload',
+                    auth=(imagekit_key, ''),
+                    files={'file': (filename, f, mime_type)},
+                    data={'fileName': filename, 'useUniqueFileName': 'true'},
+                    timeout=60
+                )
+                if res.status_code in [200, 201]:
                     res_data = res.json()
-                    if res_data.get('success') and 'id' in res_data:
-                        file_id_px = res_data['id']
-                        # Пряме посилання для скачування/стрімінгу Meta
-                        direct_url = f"https://pixeldrain.com/api/file/{file_id_px}"
-                        return direct_url, None
+                    url = res_data.get('url')
+                    file_id_ik = res_data.get('fileId')
+                    print(f"✅ Успішно завантажено на ImageKit: {url}")
+                    return url, file_id_ik
                 else:
-                    print(f"⚠️ Pixeldrain відмовив (Статус {res.status_code}): {res.text[:100]}")
+                    print(f"⚠️ ImageKit відмовив (Статус {res.status_code}): {res.text[:150]}</h2>")
         except Exception as e:
-            print(f"⚠️ Збій Pixeldrain: {e}")
+            print(f"⚠️ Помилка завантаження на ImageKit: {e}")
 
-        # 🖼️ 2️⃣ РЕЗЕРВ ДЛЯ ФОТО: ImageKit.io
-        imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
-        if imagekit_key and not is_video:
-            print(f"☁️ Резерв: завантажуємо фото на ImageKit.io...")
-            try:
-                with open(local_file_path, 'rb') as f:
-                    res = requests.post(
-                        'https://upload.imagekit.io/api/v1/files/upload',
-                        auth=(imagekit_key, ''),
-                        files={'file': (filename, f, mime_type)},
-                        data={'fileName': filename, 'useUniqueFileName': 'true'}, timeout=60
-                    )
-                    if res.status_code in [200, 201]:
-                        res_data = res.json()
-                        return res_data.get('url'), res_data.get('fileId')
-            except Exception as e:
-                print(f"⚠️ Збій ImageKit: {e}")
+    # --- 3️⃣ СПРОБА: Tmpfiles.org ---
+    print(f"☁️ [Каскад 3/4] Пробуємо завантажити {filename} на Tmpfiles.org...")
+    try:
+        with open(local_file_path, 'rb') as f:
+            files = {'file': (remote_filename, f, mime_type)}
+            data = {'expire': '3600'}
+            res = requests.post('https://tmpfiles.org/api/v1/upload', files=files, data=data, timeout=30)
+            if res.status_code == 200:
+                res_data = res.json()
+                if res_data.get('status') == 'success' and 'url' in res_data.get('data', {}):
+                    page_url = res_data['data']['url']
+                    direct_url = page_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+                    print(f"✅ Успішно завантажено на Tmpfiles: {direct_url}")
+                    return direct_url, None
+            else:
+                print(f"⚠️ Tmpfiles відмовив (Статус {res.status_code}): {res.text[:150]}")
+    except Exception as e:
+        print(f"⚠️ Помилка завантаження на Tmpfiles: {e}")
 
-        # 🔄 3️⃣ РЕЗЕРВ ДЛЯ ФОТО: ImgBB API
-        imgbb_key = os.environ.get("IMGBB_API_KEY")
-        if imgbb_key and not is_video:
-            print(f"☁️ Резерв: завантажуємо фото на ImgBB...")
-            try:
-                with open(local_file_path, 'rb') as f:
-                    img_bytes = f.read()
-                if img_bytes:
-                    res = requests.post(
-                        'https://api.imgbb.com/1/upload',
-                        data={'key': imgbb_key, 'expiration': 86400},
-                        files={'image': (filename, img_bytes, mime_type)},
-                        timeout=30
-                    ).json()
-                    if res.get('success'):
-                        return res['data']['url'], None
-            except Exception as e:
-                print(f"⚠️ Збій ImgBB: {e}")
+    # --- 4️⃣ СПРОБА: ImgBB API (Тільки для зображень) ---
+    imgbb_key = os.environ.get("IMGBB_API_KEY")
+    if imgbb_key and not is_video:
+        print(f"☁️ [Каскад 4/4] Пробуємо завантажити фото {filename} на ImgBB...")
+        try:
+            with open(local_file_path, 'rb') as f:
+                img_bytes = f.read()
+            if img_bytes:
+                res = requests.post(
+                    'https://api.imgbb.com/1/upload',
+                    data={'key': imgbb_key, 'expiration': 86400},
+                    files={'image': (filename, img_bytes, mime_type)},
+                    timeout=30
+                ).json()
+                if res.get('success'):
+                    url = res['data']['url']
+                    print(f"✅ Успішно завантажено на ImgBB: {url}")
+                    return url, None
+                else:
+                    print(f"⚠️ ImgBB відмовив: {res}")
+        except Exception as e:
+            print(f"⚠️ Помилка завантаження на ImgBB: {e}")
 
-    # Аварійний фолбек на Google Drive
-    print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
+    # 🚨 Аварійний фолбек на Google Drive (якщо всі сервери недоступні)
+    print(f"🚨 Усі хостинги каскаду недоступні! Використовуємо аварійний режим Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}", None
     
 def delete_from_imagekit(file_id: str):
