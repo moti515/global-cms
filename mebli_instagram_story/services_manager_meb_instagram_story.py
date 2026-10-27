@@ -47,10 +47,28 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         mime_type = "video/mp4" if is_video else "image/jpeg"
         remote_filename = "story.mp4" if is_video else "story.jpg"
         
-        # 🎬 & 🖼️ УНІВЕРСАЛЬНИЙ ПРІОРИТЕТ: ImageKit.io (Ідеально і для відео, і для фото)
+        # 🚀 1️⃣ ПРІОРИТЕТ ДЛЯ ВСІХ ФАЙЛІВ: Pixeldrain.com (Ідеально для Meta API)
+        print(f"☁️ Завантажуємо файл {filename} на Pixeldrain.com...")
+        try:
+            with open(local_file_path, 'rb') as f:
+                files = {'file': (remote_filename, f)}
+                res = requests.post('https://pixeldrain.com/api/file/', files=files, timeout=60)
+                if res.status_code == 201:
+                    res_data = res.json()
+                    if res_data.get('success') and 'id' in res_data:
+                        file_id_px = res_data['id']
+                        # Пряме посилання для скачування/стрімінгу Meta
+                        direct_url = f"https://pixeldrain.com/api/file/{file_id_px}"
+                        return direct_url, None
+                else:
+                    print(f"⚠️ Pixeldrain відмовив (Статус {res.status_code}): {res.text[:100]}")
+        except Exception as e:
+            print(f"⚠️ Збій Pixeldrain: {e}")
+
+        # 🖼️ 2️⃣ РЕЗЕРВ ДЛЯ ФОТО: ImageKit.io
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
-        if imagekit_key:
-            print(f"☁️ Завантажуємо файл {filename} на ImageKit.io...")
+        if imagekit_key and not is_video:
+            print(f"☁️ Резерв: завантажуємо фото на ImageKit.io...")
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
@@ -65,21 +83,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             except Exception as e:
                 print(f"⚠️ Збій ImageKit: {e}")
 
-        # 🔄 РЕЗЕРВ ДЛЯ ВІДЕО: Tmpfiles.org
-        if is_video:
-            print(f"☁️ Резерв: завантажуємо відео на Tmpfiles.org...")
-            try:
-                with open(local_file_path, 'rb') as f:
-                    files = {'file': (remote_filename, f, mime_type)}
-                    res = requests.post('https://tmpfiles.org/api/v1/upload', files=files, data={'expire': '3600'}, timeout=30)
-                    if res.status_code == 200:
-                        res_data = res.json()
-                        if res_data.get('status') == 'success' and 'url' in res_data.get('data', {}):
-                            return res_data['data']['url'].replace("tmpfiles.org/", "tmpfiles.org/dl/"), None
-            except Exception as e:
-                print(f"⚠️ Збій Tmpfiles: {e}")
-
-        # 🔄 РЕЗЕРВ ДЛЯ ФОТО: ImgBB API
+        # 🔄 3️⃣ РЕЗЕРВ ДЛЯ ФОТО: ImgBB API
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and not is_video:
             print(f"☁️ Резерв: завантажуємо фото на ImgBB...")
