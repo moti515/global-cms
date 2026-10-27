@@ -643,7 +643,7 @@ def add_background_music_to_reel(video_path, output_path, music_file_path, music
         return video_path
 
     # 1. Визначаємо точну тривалість згенерованого Reel
-    dur_cmd = f'ffprobe -v error -show_entries format=duration -of default=noprintwrappers=1:nokey=1 "{video_path}"'
+    dur_cmd = f'ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "{video_path}"'
     try:
         duration = float(subprocess.check_output(dur_cmd, shell=True).decode().strip())
     except Exception:
