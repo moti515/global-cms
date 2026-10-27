@@ -118,7 +118,7 @@ def parse_location(location_str: str, lang_idx: int) -> str:
 def publish_story_to_meta(ig_user_id: str, meta_access_token: str, pub_url: str, is_video: bool):
     """
     Відправляє медіафайл у Meta API (Створення контейнера -> Очікування готовності (тільки для відео) -> Публікація).
-    Використовує Graph API v21.0.
+    Використовує Graph API v26.0.
     Повертає кортеж: (bool_успіх, string_id_або_помилка)
     """
     param_type = "video_url" if is_video else "image_url"
@@ -130,7 +130,7 @@ def publish_story_to_meta(ig_user_id: str, meta_access_token: str, pub_url: str,
     
     try:
         # 1️⃣ Створення медіа-контейнера
-        container_endpoint = f"https://graph.facebook.com/v21.0/{ig_user_id}/media"
+        container_endpoint = f"https://graph.facebook.com/v26.0/{ig_user_id}/media"
         response = requests.post(container_endpoint, data=payload, timeout=(10, 120))
         res = response.json()
         
@@ -146,7 +146,7 @@ def publish_story_to_meta(ig_user_id: str, meta_access_token: str, pub_url: str,
                 return False, "Контейнер відео не перейшов у стан готовності (Таймаут/Помилка Meta)."
         
         # 3️⃣ Фінальна публікація з ретраями на випадок тимчасової зайнятості сервери Meta
-        publish_endpoint = f"https://graph.facebook.com/v21.0/{ig_user_id}/media_publish"
+        publish_endpoint = f"https://graph.facebook.com/v26.0/{ig_user_id}/media_publish"
         pub_payload = {
             "creation_id": creation_id, 
             "access_token": meta_access_token
