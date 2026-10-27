@@ -45,30 +45,12 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         lower_name = filename.lower()
         is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
         mime_type = "video/mp4" if is_video else "image/jpeg"
-        
-        # 🛠 ВИПРАВЛЕНО: додано коректний синтаксис тернарного оператора
         remote_filename = "story.mp4" if is_video else "story.jpg"
         
-        # 🎬 ДЛЯ ВІДЕО: Пріоритет Tmpfiles.org
-        if is_video:
-            print(f"☁️ Завантажуємо відео-сторіс {filename} на Tmpfiles.org...")
-            try:
-                with open(local_file_path, 'rb') as f:
-                    files = {'file': (remote_filename, f, mime_type)}
-                    data = {'expire': '3600'}
-                    res = requests.post('https://tmpfiles.org/api/v1/upload', files=files, data=data, timeout=30)
-                    if res.status_code == 200:
-                        res_data = res.json()
-                        if res_data.get('status') == 'success' and 'data' in res_data and 'url' in res_data['data']:
-                            page_url = res_data['data']['url']
-                            return page_url.replace("tmpfiles.org/", "tmpfiles.org/dl/"), None
-            except Exception as e:
-                print(f"⚠️ Збій Tmpfiles для відео: {e}")
-
-        # 🖼️ ДЛЯ ФОТО: Пріоритет ImageKit.io (або ImgBB)
+        # 🎬 & 🖼️ УНІВЕРСАЛЬНИЙ ПРІОРИТЕТ: ImageKit.io (Ідеально і для відео, і для фото)
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
-        if imagekit_key and not is_video:
-            print(f"☁️ Завантажуємо фото-сторіс {filename} на ImageKit.io...")
+        if imagekit_key:
+            print(f"☁️ Завантажуємо файл {filename} на ImageKit.io...")
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
@@ -81,9 +63,23 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                         res_data = res.json()
                         return res_data.get('url'), res_data.get('fileId')
             except Exception as e:
-                print(f"⚠️ Збій ImageKit для фото: {e}")
+                print(f"⚠️ Збій ImageKit: {e}")
 
-        # Резерв для фото: ImgBB API
+        # 🔄 РЕЗЕРВ ДЛЯ ВІДЕО: Tmpfiles.org
+        if is_video:
+            print(f"☁️ Резерв: завантажуємо відео на Tmpfiles.org...")
+            try:
+                with open(local_file_path, 'rb') as f:
+                    files = {'file': (remote_filename, f, mime_type)}
+                    res = requests.post('https://tmpfiles.org/api/v1/upload', files=files, data={'expire': '3600'}, timeout=30)
+                    if res.status_code == 200:
+                        res_data = res.json()
+                        if res_data.get('status') == 'success' and 'url' in res_data.get('data', {}):
+                            return res_data['data']['url'].replace("tmpfiles.org/", "tmpfiles.org/dl/"), None
+            except Exception as e:
+                print(f"⚠️ Збій Tmpfiles: {e}")
+
+        # 🔄 РЕЗЕРВ ДЛЯ ФОТО: ImgBB API
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and not is_video:
             print(f"☁️ Резерв: завантажуємо фото на ImgBB...")
@@ -102,19 +98,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             except Exception as e:
                 print(f"⚠️ Збій ImgBB: {e}")
 
-        # Загальний резерв (Litterbox)
-        print(f"☁️ Загальний резерв: завантажуємо на Litterbox.moe...")
-        try:
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            with open(local_file_path, 'rb') as f:
-                files = {'fileToUpload': (remote_filename, f, mime_type)}
-                res = requests.post('https://litterbox.catbox.moe/resources/internals/api.php', data={'reqtype': 'fileupload', 'time': '1h'}, files=files, headers=headers, timeout=30)
-                if res.status_code == 200 and res.text.strip().startswith('http'):
-                    return res.text.strip(), None
-        except Exception as e:
-            print(f"⚠️ Збій Litterbox: {e}")
-
-    # Аварійний фолбек
+    # Аварійний фолбек на Google Drive
     print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}", None
     
