@@ -117,7 +117,7 @@ def parse_location(location_str: str, lang_idx: int) -> str:
 
 def publish_story_to_meta(ig_user_id: str, meta_access_token: str, pub_url: str, is_video: bool):
     """
-    Відправляє медіафайл у Meta API (Створення контейнера -> Очікування готовності -> Публікація).
+    Відправляє медіафайл у Meta API (Створення контейнера -> Очікування готовності (тільки для відео) -> Публікація).
     Використовує Graph API v21.0.
     Повертає кортеж: (bool_успіх, string_id_або_помилка)
     """
@@ -139,24 +139,35 @@ def publish_story_to_meta(ig_user_id: str, meta_access_token: str, pub_url: str,
             
         creation_id = res["id"]
         
-        # 2️⃣ Очікування обробки медіа
-        max_attempts = 36 if is_video else 12 
-        if not wait_for_meta_container(creation_id, meta_access_token, max_attempts=max_attempts):
-            return False, "Контейнер медіафайлу не перейшов у стан готовності (Таймаут/Помилка Meta)."
-            
-        # 3️⃣ Фінальна публікація
-        publish_endpoint = f"https://graph.facebook.com/v21.0/{ig_user_id}/media_publish"
-        pub_response = requests.post(
-            publish_endpoint, 
-            data={"creation_id": creation_id, "access_token": meta_access_token}, 
-            timeout=(10, 120)
-        )
-        publish_res = pub_response.json()
+        # 2️⃣ Очікування обробки медіа — ВИКЛЮЧНО ДЛЯ ВІДЕО!
+        # Для фотографій очікування статусу не потрібне, контейнер готовий миттєво.
+        if is_video:
+            if not wait_for_meta_container(creation_id, meta_access_token, max_attempts=36):
+                return False, "Контейнер відео не перейшов у стан готовності (Таймаут/Помилка Meta)."
         
-        if "id" in publish_res:
-            return True, publish_res["id"]
-        else:
-            return False, f"Помилка публікації сторіз в Meta API: {publish_res}"
+        # 3️⃣ Фінальна публікація з ретраями на випадок тимчасової зайнятості сервери Meta
+        publish_endpoint = f"https://graph.facebook.com/v21.0/{ig_user_id}/media_publish"
+        pub_payload = {
+            "creation_id": creation_id, 
+            "access_token": meta_access_token
+        }
+        
+        for attempt in range(1, 6):
+            pub_response = requests.post(publish_endpoint, data=pub_payload, timeout=(10, 120))
+            publish_res = pub_response.json()
+            
+            if "id" in publish_res:
+                return True, publish_res["id"]
+            
+            err = publish_res.get("error", {})
+            if err.get("error_subcode") == 2207027 or err.get("code") == 9007:
+                print(f"⏳ Сервери Meta зайняті (Спроба {attempt}/5). Очікування 10 сек...")
+                time.sleep(10)
+                continue
+            else:
+                return False, f"Помилка публікації сторіз в Meta API: {publish_res}"
+        
+        return False, "Вичерпано спроби публікації в Meta API."
             
     except requests.exceptions.Timeout:
         return False, "Перевищено час очікування відповіді від Meta API (Timeout)."
