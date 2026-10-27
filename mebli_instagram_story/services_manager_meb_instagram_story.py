@@ -49,33 +49,34 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         # 🧼 Спрощуємо ім'я файлу для сервера
         remote_filename = "story.mp4" if is_video else "story.jpg"
         
-        # 1️⃣ Litterbox (Тимчасове сховище — ідеально для Meta API)
-        print(f"☁️ Завантажуємо сторіс-файл {filename} на Litterbox.moe (1h)...")
+        # 1️⃣ Tmpfiles.org (Основний швидкий варіант — стабільні прямі лінки для Meta)
+        print(f"☁️ Завантажуємо сторіс-файл {filename} на Tmpfiles.org...")
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-            }
             with open(local_file_path, 'rb') as f:
-                files = {'fileToUpload': (remote_filename, f, mime_type)}
-                data = {
-                    'reqtype': 'fileupload',
-                    'time': '1h'  # Файл видалиться сам через годину, Meta встигне забрати його за секунди
-                }
+                files = {'file': (remote_filename, f, mime_type)}
+                data = {'expire': '3600'}  # Автовидалення через 1 годину
                 res = requests.post(
-                    'https://litterbox.catbox.moe/resources/internals/api.php',
-                    data=data,
+                    'https://tmpfiles.org/api/v1/upload',
                     files=files,
-                    headers=headers,
+                    data=data,
                     timeout=30
                 )
-                if res.status_code == 200 and res.text.strip().startswith('http'):
-                    return res.text.strip(), None
+                if res.status_code == 200:
+                    res_data = res.json()
+                    if res_data.get('status') == 'success' and 'data' in res_data and 'url' in res_data['data']:
+                        page_url = res_data['data']['url']
+                        # 🔗 Трансформуємо веб-посилання у пряме посилання для Meta API:
+                        # https://tmpfiles.org/12345/story.mp4 -> https://tmpfiles.org/dl/12345/story.mp4
+                        direct_url = page_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+                        return direct_url, None
+                    else:
+                        print(f"⚠️ Tmpfiles відмовив: {res.text[:100]}")
                 else:
-                    print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text[:100]}")
+                    print(f"⚠️ Tmpfiles відмовив (Статус {res.status_code}): {res.text[:100]}")
         except Exception as e:
-            print(f"⚠️ Збій завантаження на Litterbox: {e}")
+            print(f"⚠️ Збій завантаження на Tmpfiles: {e}")
 
-        # 2️⃣ ImageKit.io (Надійний бізнес-бекэнд — залишається як залізобетонний резерв)
+        # 2️⃣ ImageKit.io (Надійний бізнес-бекэнд)
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
         if imagekit_key:
             print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на ImageKit.io...")
@@ -93,34 +94,33 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             except Exception as e:
                 print(f"⚠️ Збій завантаження на ImageKit: {e}")
 
-        # 3️⃣ Tmpfiles.org (Новий резервний варіант — не потребує API ключів)
-        print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на Tmpfiles.org...")
+        # 3️⃣ Litterbox (Резервне тимчасове сховище)
+        print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на Litterbox.moe...")
         try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            }
             with open(local_file_path, 'rb') as f:
-                files = {'file': (remote_filename, f, mime_type)}
-                data = {'expire': '3600'}  # Автовидалення через 1 годину (3600 сек)
+                files = {'fileToUpload': (remote_filename, f, mime_type)}
+                data = {
+                    'reqtype': 'fileupload',
+                    'time': '1h'
+                }
                 res = requests.post(
-                    'https://tmpfiles.org/api/v1/upload',
-                    files=files,
+                    'https://litterbox.catbox.moe/resources/internals/api.php',
                     data=data,
+                    files=files,
+                    headers=headers,
                     timeout=30
                 )
-                if res.status_code == 200:
-                    res_data = res.json()
-                    if res_data.get('status') == 'success' and 'data' in res_data and 'url' in res_data['data']:
-                        page_url = res_data['data']['url']
-                        # 🔗 Трансформуємо веб-посилання у пряме посилання для скачування Meta API:
-                        # https://tmpfiles.org/12345/story.jpg -> https://tmpfiles.org/dl/12345/story.jpg
-                        direct_url = page_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-                        return direct_url, None
-                    else:
-                        print(f"⚠️ Tmpfiles відмовив: {res.text[:100]}")
+                if res.status_code == 200 and res.text.strip().startswith('http'):
+                    return res.text.strip(), None
                 else:
-                    print(f"⚠️ Tmpfiles відмовив (Статус {res.status_code}): {res.text[:100]}")
+                    print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text[:100]}")
         except Exception as e:
-            print(f"⚠️ Збій завантаження на Tmpfiles: {e}")
+            print(f"⚠️ Збій завантаження на Litterbox: {e}")
 
-        # 4️⃣ ImgBB API (Тільки для photo)
+        # 4️⃣ ImgBB API (Тільки для фото)
         imgbb_key = os.environ.get("IMGBB_API_KEY")
         if imgbb_key and mime_type == "image/jpeg":
             print(f"☁️ Резерв: завантажуємо фото сторіс {filename} на ImgBB API...")
@@ -142,7 +142,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     # Аварійний фолбек
     print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}", None
-
+    
 def delete_from_imagekit(file_id: str):
     if not file_id: return
     imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
