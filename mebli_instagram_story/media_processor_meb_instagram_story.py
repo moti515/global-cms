@@ -26,8 +26,8 @@ def generate_story_overlay(base_name, text, year=None, location=None):
     overlay = Image.new('RGBA', (1080, 1920), (0, 0, 0, 0))
     
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    font_size_main = 40
-    font_size_meta = 34
+    font_size_main = 32
+    font_size_meta = 28
     
     try:
         font_main = ImageFont.truetype(font_path, font_size_main)
@@ -54,7 +54,7 @@ def generate_story_overlay(base_name, text, year=None, location=None):
         current_line = []
         for word in words:
             current_line.append(word)
-            if draw_measure.textlength(" ".join(current_line), font=font_main) > 920:
+            if draw_measure.textlength(" ".join(current_line), font=font_main) > 900:
                 current_line.pop()
                 lines.append(" ".join(current_line))
                 current_line = [word]
@@ -71,8 +71,8 @@ def generate_story_overlay(base_name, text, year=None, location=None):
             d.text(position, content, font=font, fill=fill_color, stroke_width=stroke_width, stroke_fill=stroke_color)
 
     # 2. Малювання головного тексту (Центрований, зверху)
-    start_y = 200
-    line_height = 55
+    start_y = 180
+    line_height = 45
     for i, line in enumerate(lines):
         bbox = draw_measure.textbbox((0, 0), line, font=font_main)
         text_w = bbox[2] - bbox[0]
@@ -91,7 +91,7 @@ def generate_story_overlay(base_name, text, year=None, location=None):
     if meta_parts:
         meta_text = " | ".join(meta_parts)
         meta_x = 70
-        meta_y = 1650
+        meta_y = 1750
         draw_text_dynamic(overlay, (meta_x, meta_y), meta_text, font_meta, (255, 240, 100))
 
     overlay_path = os.path.join('temp_mebli', f'overlay_{base_name}.png')
@@ -178,12 +178,13 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
     output_template = os.path.join('temp_mebli', f'story_padded_{base_name}_part_%03d.mp4')
     single_output = os.path.join('temp_mebli', f'story_padded_{base_name}.mp4')
     
+    # 🛠 Надійніший фільтр для об'єднання відео, аудіо та PNG оверлею
     cmd = [
         'ffmpeg', '-y', 
         '-i', local_path,         
         '-i', overlay_png_path,
-        '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100', # 👈 Гарантує наявність звуку
-        '-filter_complex', f"[0:v]{vf_base}[bg]; [bg][1:v]overlay=0:0[v]; [0:a][2:a]amerge=inputs=1[a]",
+        '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+        '-filter_complex', f"[0:v]{vf_base}[bg]; [bg][1:v]overlay=0:0[v]; [0:a][2:a]amix=inputs=2:duration=first[a]",
         '-map', '[v]',
         '-map', '[a]',
         '-c:v', 'libx264', 
