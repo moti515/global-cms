@@ -46,40 +46,29 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
         mime_type = "video/mp4" if is_video else "image/jpeg"
         
-        # 🧼 Спрощуємо ім'я файлу для сервера
+        # 🛠 ВИПРАВЛЕНО: додано коректний синтаксис тернарного оператора
         remote_filename = "story.mp4" if is_video else "story.jpg"
         
-        # 1️⃣ Tmpfiles.org (Основний швидкий варіант — стабільні прямі лінки для Meta)
-        print(f"☁️ Завантажуємо сторіс-файл {filename} на Tmpfiles.org...")
-        try:
-            with open(local_file_path, 'rb') as f:
-                files = {'file': (remote_filename, f, mime_type)}
-                data = {'expire': '3600'}  # Автовидалення через 1 годину
-                res = requests.post(
-                    'https://tmpfiles.org/api/v1/upload',
-                    files=files,
-                    data=data,
-                    timeout=30
-                )
-                if res.status_code == 200:
-                    res_data = res.json()
-                    if res_data.get('status') == 'success' and 'data' in res_data and 'url' in res_data['data']:
-                        page_url = res_data['data']['url']
-                        # 🔗 Трансформуємо веб-посилання у пряме посилання для Meta API:
-                        # https://tmpfiles.org/12345/story.mp4 -> https://tmpfiles.org/dl/12345/story.mp4
-                        direct_url = page_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-                        return direct_url, None
-                    else:
-                        print(f"⚠️ Tmpfiles відмовив: {res.text[:100]}")
-                else:
-                    print(f"⚠️ Tmpfiles відмовив (Статус {res.status_code}): {res.text[:100]}")
-        except Exception as e:
-            print(f"⚠️ Збій завантаження на Tmpfiles: {e}")
+        # 🎬 ДЛЯ ВІДЕО: Пріоритет Tmpfiles.org
+        if is_video:
+            print(f"☁️ Завантажуємо відео-сторіс {filename} на Tmpfiles.org...")
+            try:
+                with open(local_file_path, 'rb') as f:
+                    files = {'file': (remote_filename, f, mime_type)}
+                    data = {'expire': '3600'}
+                    res = requests.post('https://tmpfiles.org/api/v1/upload', files=files, data=data, timeout=30)
+                    if res.status_code == 200:
+                        res_data = res.json()
+                        if res_data.get('status') == 'success' and 'data' in res_data and 'url' in res_data['data']:
+                            page_url = res_data['data']['url']
+                            return page_url.replace("tmpfiles.org/", "tmpfiles.org/dl/"), None
+            except Exception as e:
+                print(f"⚠️ Збій Tmpfiles для відео: {e}")
 
-        # 2️⃣ ImageKit.io (Надійний бізнес-бекэнд)
+        # 🖼️ ДЛЯ ФОТО: Пріоритет ImageKit.io (або ImgBB)
         imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
-        if imagekit_key:
-            print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на ImageKit.io...")
+        if imagekit_key and not is_video:
+            print(f"☁️ Завантажуємо фото-сторіс {filename} на ImageKit.io...")
             try:
                 with open(local_file_path, 'rb') as f:
                     res = requests.post(
@@ -92,38 +81,12 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                         res_data = res.json()
                         return res_data.get('url'), res_data.get('fileId')
             except Exception as e:
-                print(f"⚠️ Збій завантаження на ImageKit: {e}")
+                print(f"⚠️ Збій ImageKit для фото: {e}")
 
-        # 3️⃣ Litterbox (Резервне тимчасове сховище)
-        print(f"☁️ Резерв: завантажуємо сторіс-файл {filename} на Litterbox.moe...")
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-            }
-            with open(local_file_path, 'rb') as f:
-                files = {'fileToUpload': (remote_filename, f, mime_type)}
-                data = {
-                    'reqtype': 'fileupload',
-                    'time': '1h'
-                }
-                res = requests.post(
-                    'https://litterbox.catbox.moe/resources/internals/api.php',
-                    data=data,
-                    files=files,
-                    headers=headers,
-                    timeout=30
-                )
-                if res.status_code == 200 and res.text.strip().startswith('http'):
-                    return res.text.strip(), None
-                else:
-                    print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text[:100]}")
-        except Exception as e:
-            print(f"⚠️ Збій завантаження на Litterbox: {e}")
-
-        # 4️⃣ ImgBB API (Тільки для фото)
+        # Резерв для фото: ImgBB API
         imgbb_key = os.environ.get("IMGBB_API_KEY")
-        if imgbb_key and mime_type == "image/jpeg":
-            print(f"☁️ Резерв: завантажуємо фото сторіс {filename} на ImgBB API...")
+        if imgbb_key and not is_video:
+            print(f"☁️ Резерв: завантажуємо фото на ImgBB...")
             try:
                 with open(local_file_path, 'rb') as f:
                     img_bytes = f.read()
@@ -137,7 +100,19 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                     if res.get('success'):
                         return res['data']['url'], None
             except Exception as e:
-                print(f"⚠️ Збій завантаження на ImgBB: {e}")
+                print(f"⚠️ Збій ImgBB: {e}")
+
+        # Загальний резерв (Litterbox)
+        print(f"☁️ Загальний резерв: завантажуємо на Litterbox.moe...")
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            with open(local_file_path, 'rb') as f:
+                files = {'fileToUpload': (remote_filename, f, mime_type)}
+                res = requests.post('https://litterbox.catbox.moe/resources/internals/api.php', data={'reqtype': 'fileupload', 'time': '1h'}, files=files, headers=headers, timeout=30)
+                if res.status_code == 200 and res.text.strip().startswith('http'):
+                    return res.text.strip(), None
+        except Exception as e:
+            print(f"⚠️ Збій Litterbox: {e}")
 
     # Аварійний фолбек
     print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
