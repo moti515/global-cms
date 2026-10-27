@@ -335,28 +335,29 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     
 def wait_for_meta_container(container_id, access_token, max_attempts=36):
     check_url = f"https://graph.facebook.com/v26.0/{container_id}"
-    # Додаємо більше полів для повної діагностики (наприклад, 'status', 'status_code', 'error_message')
-    params = {"fields": "status_code,status,error_message", "access_token": access_token}
+    # 🛠 ВИПРАВЛЕНО: залишаємо лише справжні поля Graph API для контейнера сторіз
+    params = {"fields": "status_code,status", "access_token": access_token}
     
     for attempt in range(1, max_attempts + 1):
         try:
             response = requests.get(check_url, params=params, timeout=(10, 30))
             r = response.json()
             
+            # Якщо Meta повернула помилку на рівні самого API
+            if "error" in r:
+                print(f"❌ Помилка Meta API під час перевірки статусу: {r['error']}")
+                return False
+                
             status = r.get("status_code", "").upper()
-            sub_status = r.get("status", "")
             
             if status == "FINISHED":
                 print(f"✅ Контейнер успішно скомпіровано Meta на спробі {attempt}.")
                 return True
             elif status == "ERROR":
-                err_msg = r.get("error_message", "Невідома помилка обробки медіа в Meta")
-                print(f"❌ Мета повернула статус ERROR: {err_msg}")
-                print(f"📄 Повний об'єкт помилки від Meta: {r}")
+                print(f"❌ Мета повернула статус ERROR для контейнера: {r}")
                 return False
             
-            # 🔍 Виводимо всю відповідь Meta, якщо вона не FINISHED і не ERROR
-            print(f"⏳ [Спроба {attempt}/{max_attempts}] Відповідь Meta: {r}")
+            print(f"⏳ [Спроба {attempt}/{max_attempts}] Обробка медіафайлу в Meta... Статус: {status or 'IN_PROGRESS'}")
             
         except Exception as e:
             print(f"⚠️ Помилка перевірки статусу контейнера Meta: {e}")
