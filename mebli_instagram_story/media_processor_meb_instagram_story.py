@@ -156,63 +156,59 @@ def overlay_text_on_image(image_path, text, year=None, location=None):
         print(f"⚠️ Помилка графічного накладання тексту на фото: {e}")
 
 
-# 📐 ОПТИМІЗАЦІЯ ВІДЕО ПІД СТОРІЗ ЧЕРЕЗ FFMPEG (МЕТОД PNG-ОВЕРЛЕЮ)
+# 📐 ОПТИМІЗАЦІЯ ВІДЕО ПІД СТОРІЗ ЧЕРЕЗ FFMPEG (З ЄДИНИМИ СТАНДАРТАМИ ФРЕЙМРЕЙТУ ТА АУДІО)
 def optimize_video_story(local_path, f_name, text, year=None, location=None):
     print("🎬 Оптимізація Відео: підганяємо під ліміти Instagram (1080x1920) + Мапимо PNG-оверлей...")
     processed_files = []
     
     duration = get_video_duration(local_path)
     if duration <= 0.5:
-        print("⚠️ Тривалість 0 або помилка аналізу. Спробуємо обробити як один файл.")
         duration = 59.0
         
     base_name = f_name.rsplit('.', 1)[0]
-    
-    # 1. СТВОРЮЄМО КРАСИВИЙ ШАР З ТЕКСТОМ ТА ЕМОДЗІ
     overlay_png_path = generate_story_overlay(base_name, text, year, location)
     
-    # 2. СКЛАДАЄМО ФІЛЬТР FFMPEG
     vf_base = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black"
-    filter_complex = f"[0:v]{vf_base}[bg]; [bg][1:v]overlay=0:0"
-    
-    output_template = os.path.join('temp_mebli', f'story_padded_{base_name}_part_%03d.mp4')
     single_output = os.path.join('temp_mebli', f'story_padded_{base_name}.mp4')
+    output_template = os.path.join('temp_mebli', f'story_padded_{base_name}_part_%03d.mp4')
     
-    # 🛠 Надійніший фільтр для об'єднання відео, аудіо та PNG оверлею
+    has_audio = has_audio_stream(local_path)
+    
     cmd = [
         'ffmpeg', '-y', 
         '-i', local_path,         
-        '-i', overlay_png_path,
-        '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-        '-filter_complex', f"[0:v]{vf_base}[bg]; [bg][1:v]overlay=0:0[v]; [0:a][2:a]amix=inputs=2:duration=first[a]",
-        '-map', '[v]',
-        '-map', '[a]',
-        '-c:v', 'libx264', 
-        '-preset', 'fast',
-        '-profile:v', 'main',
-        '-crf', '22',
-        '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', 
-        '-b:a', '128k',
-        '-shortest',
-        '-movflags', '+faststart'
+        '-i', overlay_png_path
     ]
     
+    if not has_audio:
+        cmd.extend(['-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100'])
+        filter_complex = f"[0:v]{vf_base}[bg]; [bg][1:v]overlay=0:0[outv]"
+        audio_map_index = 2
+    else:
+        filter_complex = f"[0:v]{vf_base}[bg]; [bg][1:v]overlay=0:0[outv]"
+        audio_map_index = 0
+
+    cmd.extend([
+        '-filter_complex', filter_complex,
+        '-map', '[outv]',
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+        '-r', '30',
+        '-b:v', '3000k', '-maxrate', '4500k', '-bufsize', '9000k',
+        '-video_track_timescale', '90000'
+    ])
+
+    if has_audio:
+        cmd.extend(['-map', f'{audio_map_index}:a', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2'])
+    else:
+        cmd.extend(['-map', f'{audio_map_index}:a', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2', '-shortest'])
+
     if duration > 60.0:
-        print(f"✂️ Відео триває {duration:.1f} сек. Нарізаємо на частини по 60 секунд...")
-        cmd += [
-            '-f', 'segment',
-            '-segment_time', '60',
-            '-reset_timestamps', '1',
-            output_template
-        ]
+        cmd += ['-f', 'segment', '-segment_time', '60', '-reset_timestamps', '1', output_template]
     else:
         cmd.append(single_output)
 
     try:
         res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # Видаляємо тимчасовий файл оверлею, бо він уже "впечений" у відео
         if os.path.exists(overlay_png_path):
             try: os.remove(overlay_png_path)
             except: pass
@@ -226,15 +222,22 @@ def optimize_video_story(local_path, f_name, text, year=None, location=None):
                 ])
                 processed_files.extend(part_files)
             else:
-                single_output = os.path.join('temp_mebli', f'story_padded_{base_name}.mp4')
                 if os.path.exists(single_output):
                     processed_files.append(single_output)
-                    
             return processed_files
     except Exception as e:
-        print(f"⚠️ Помилка під час рендерингу відео через FFmpeg: {e}")
+        print(f"⚠️ Помилка рендерингу відео через FFmpeg: {e}")
         
     return [local_path]
+
+
+def has_audio_stream(video_path):
+    cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_type', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return bool(res.stdout.strip())
+    except:
+        return False
 
 def get_video_duration(video_path):
     # Покращений запит ffprobe з урахуванням старих кодеків та контейнерів
@@ -261,58 +264,62 @@ def get_video_duration(video_path):
         
     return 0.0
 
-# 🎬 ОПТИМІЗОВАНИЙ БУДІВНИК REELS (БЕЗ ПОТРОЙНОГО ПЕРЕКОДУВАННЯ ТА БЕЗ ПОВТОРНОГО РЕСАЙЗУ)
+# 🎬 УНІВЕРСАЛЬНИЙ БУДІВНИК REELS З ІДЕАЛЬНОЮ СТАНДАРТИЗАЦІЄЮ
 def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_duration=4.0, transition_dur=0.6):
-    if not processed_files:
+    valid_files = [f for f in processed_files if f and os.path.exists(f)]
+    if not valid_files:
+        print("❌ [Reels Builder] Не знайдено жодного валідного файлу для збірки Reel.")
         return None
 
     temp_clips = []
     clip_durations = []
 
-    print(f"\n🎬 [Reels Builder] Пряма збірка {len(processed_files)} готових фрагментів у Facebook Reel...")
+    print(f"\n🎬 [Reels Builder] Підготовка {len(valid_files)} стандартизованих кліпів для Facebook Reel...")
 
-    for idx, file_path in enumerate(processed_files):
+    for idx, file_path in enumerate(valid_files):
         clip_path = f"temp_mebli/reel_clip_{idx}.mp4"
         is_video = file_path.lower().endswith(('.mp4', '.mov', '.avi'))
 
         if is_video:
             dur = get_video_duration(file_path)
             if dur <= 0: dur = 5.0
-
-            # Генеруємо чисту аудіодоріжку для стабільного мікшування навіть якщо її не було в .avi
+            
+            # Єдині стандарти для відеокліпу перед склейкою
             cmd = (
                 f'ffmpeg -y -i "{file_path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
-                f'-filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black[v];[0:a][1:a]amerge=inputs=1[a]" '
-                f'-map "[v]" -map "[a]" -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p '
-                f'-c:a aac -b:a 192k -t {dur} -shortest "{clip_path}"'
+                f'-filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,format=yuv420p[v];'
+                f'[0:a]aformat=sample_rates=44100:channel_layouts=stereo[a1];[1:a]aformat=sample_rates=44100:channel_layouts=stereo[a2];'
+                f'[a1][a2]amix=inputs=2:duration=first[a]" '
+                f'-map "[v]" -map "[a]" -c:v libx264 -pix_fmt yuv420p -r 30 '
+                f'-b:v 3000k -maxrate 4500k -bufsize 9000k -video_track_timescale 90000 '
+                f'-c:a aac -b:a 128k -ar 44100 -ac 2 -t {dur} "{clip_path}"'
             )
             clip_durations.append(dur)
         else:
             dur = photo_duration
+            # Єдині стандарти для фотокліпу (ідентичні відео)
             cmd = (
                 f'ffmpeg -y -loop 1 -i "{file_path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
-                f'-t {photo_duration} -r 30 '
-                f'-c:v libx264 -preset ultrafast -crf 17 '
-                f'-colorspace bt709 -color_trc bt709 -color_primaries bt709 -pix_fmt yuv420p '
-                f'-c:a aac -b:a 192k -shortest "{clip_path}"'
+                f'-t {photo_duration} -r 30 -pix_fmt yuv420p '
+                f'-c:v libx264 -b:v 3000k -maxrate 4500k -bufsize 9000k -video_track_timescale 90000 '
+                f'-c:a aac -b:a 128k -ar 44100 -ac 2 "{clip_path}"'
             )
             clip_durations.append(dur)
 
-        res = subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        res = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
             temp_clips.append(clip_path)
 
     if not temp_clips:
-        print("❌ [Reels Builder] Не вдалося згенерувати фрагменти відео.")
+        print("❌ [Reels Builder] Не вдалося згенерувати жодного кліпу для Reel.")
         return None
 
     if len(temp_clips) == 1:
         shutil.copy(temp_clips[0], output_reel_path)
         return output_reel_path
 
-    # 2. Перехідні ефекти (xfade)
-    transitions = ['fade', 'wipeleft', 'wiperight', 'slideleft', 'slideright', 'circlecrop', 'dissolve', 'fadeblack']
-    
+    # Плавна склейка xfade з однаковими потоками
+    transitions = ['fade', 'wipeleft', 'wiperight', 'slideleft', 'slideright', 'dissolve']
     inputs_str = " ".join([f'-i "{c}"' for c in temp_clips])
     filter_parts = []
     
@@ -325,12 +332,8 @@ def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_dur
         next_v = f"[v_trans_{i}]" if i < len(temp_clips) - 1 else "[v_out]"
         next_a = f"[a_trans_{i}]" if i < len(temp_clips) - 1 else "[a_out]"
 
-        filter_parts.append(
-            f"{prev_v}[{i}:v]xfade=transition={trans}:duration={transition_dur}:offset={current_offset:.2f}{next_v}"
-        )
-        filter_parts.append(
-            f"{prev_a}[{i}:a]acrossfade=d={transition_dur}{next_a}"
-        )
+        filter_parts.append(f"{prev_v}[{i}:v]xfade=transition={trans}:duration={transition_dur}:offset={current_offset:.2f}{next_v}")
+        filter_parts.append(f"{prev_a}[{i}:a]acrossfade=d={transition_dur}{next_a}")
 
         if i < len(temp_clips) - 1:
             current_offset += clip_durations[i] - transition_dur
@@ -339,16 +342,14 @@ def create_facebook_reel_from_batch(processed_files, output_reel_path, photo_dur
 
     filter_complex = ";".join(filter_parts)
 
-    # 3. ЄДИНИЙ Фінальний рендеринг Reel: високий бітрейт (9-12M), CRF 18, колірний простір BT.709
     concat_cmd = (
         f'ffmpeg -y {inputs_str} -filter_complex "{filter_complex}" '
-        f'-map "[v_out]" -map "[a_out]" -c:v libx264 -preset medium -crf 18 '
-        f'-b:v 9M -maxrate 12M -bufsize 24M -pix_fmt yuv420p '
-        f'-colorspace bt709 -color_trc bt709 -color_primaries bt709 '
-        f'-c:a aac -b:a 192k "{output_reel_path}"'
+        f'-map "[v_out]" -map "[a_out]" -c:v libx264 -pix_fmt yuv420p -r 30 '
+        f'-b:v 3000k -maxrate 4500k -bufsize 9000k -video_track_timescale 90000 '
+        f'-c:a aac -b:a 128k -ar 44100 -ac 2 "{output_reel_path}"'
     )
 
-    print("🎬 [Reels Builder] Збірка та рендеринг фінального HQ Reel з перехідними ефектами...")
+    print("🎬 [Reels Builder] Рендеринг фінального HQ Reel з переходами...")
     subprocess.run(concat_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     for c in temp_clips:
