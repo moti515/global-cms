@@ -32,8 +32,8 @@ jobs:
         GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
       run: python convert_all_to_png.py --scan
 
-    - name: Встановлення LibreOffice для офісних документів
-      if: steps.scan_step.outputs.has_office == 'true'
+    - name: Встановлення LibreOffice для офісних документів та XML
+      if: steps.scan_step.outputs.has_office == 'true' || steps.scan_step.outputs.has_xml == 'true'
       run: |
         sudo apt-get update
         sudo apt-get install -y libreoffice
@@ -64,9 +64,9 @@ jobs:
       if: steps.scan_step.outputs.has_dxf == 'true' || steps.scan_step.outputs.has_dwg == 'true' || steps.scan_step.outputs.has_office == 'true' || steps.scan_step.outputs.has_tif == 'true'
       run: pip install ezdxf matplotlib pillow
 
-    # PDF, Офісні формати та MHTML потребують PyMuPDF для нарізки PDF сторінок
+    # PDF, Офісні формати, MHTML та XML потребують PyMuPDF для нарізки PDF сторінок
     - name: Встановлення PDF бібліотек Python
-      if: steps.scan_step.outputs.has_pdf == 'true' || steps.scan_step.outputs.has_office == 'true' || steps.scan_step.outputs.has_mhtml == 'true'
+      if: steps.scan_step.outputs.has_pdf == 'true' || steps.scan_step.outputs.has_office == 'true' || steps.scan_step.outputs.has_mhtml == 'true' || steps.scan_step.outputs.has_xml == 'true'
       run: pip install pymupdf
 
     - name: Запуск скрипту конвертації
