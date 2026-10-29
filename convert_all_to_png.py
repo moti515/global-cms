@@ -1,11 +1,13 @@
 import os
 import sys
+import time
 import subprocess
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+from googleapiclient.errors import HttpError
 
 # ID папки на Google Диску
 FOLDER_ID = '1NW5iKh6fkzXhvrHUmVVjJL5YJTmHGA7E'
@@ -16,8 +18,10 @@ OFFICE_EXTS = ['.doc', '.docx', '.ods', '.odt', '.txt', '.xls', '.xlsx', '.csv']
 MHTML_EXTS = ['.mhtml', '.mht']
 TIFF_EXTS = ['.tif', '.tiff']
 CAD_EXTS = ['.dxf', '.dwg']
-# MHTML конвертується в PDF, а потім нарізається як багатосторінковий документ
-MULTI_PAGE_EXTS = ['.pdf'] + OFFICE_EXTS + TIFF_EXTS + MHTML_EXTS
+XML_EXTS = ['.xml']
+
+# Файли, що можуть мати декілька сторінок (автоматично розбиваються)
+MULTI_PAGE_EXTS = ['.pdf'] + OFFICE_EXTS + TIFF_EXTS + MHTML_EXTS + XML_EXTS
 
 def get_drive_service():
     """Авторизація через особистий OAuth2 Refresh Token."""
@@ -31,6 +35,55 @@ def get_drive_service():
     creds.refresh(Request())
     return build('drive', 'v3', credentials=creds)
 
+def upload_file_with_retry(service, file_metadata, media, retries=5):
+    """Завантажує файл на Google Диск з повторними спробами (Exponential Backoff) при помилках мережі/5xx."""
+    for attempt in range(1, retries + 1):
+        try:
+            return service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        except HttpError as error:
+            if error.resp.status in [500, 502, 503, 504, 429] and attempt < retries:
+                sleep_time = 2 ** attempt
+                print(f"  [Попередження]: Помилка мережі Google Drive ({error.resp.status}). Повтор через {sleep_time}сек... (Спроба {attempt}/{retries})")
+                time.sleep(sleep_time)
+            else:
+                raise error
+        except Exception as e:
+            if attempt < retries:
+                sleep_time = 2 ** attempt
+                print(f"  [Попередження]: Збій запиту: {e}. Повтор через {sleep_time}сек...")
+                time.sleep(sleep_time)
+            else:
+                raise e
+
+def convert_xml_to_pdf(input_path, out_dir):
+    """Красиво форматує XML код з підсвічуванням/відступами та конвертує його в PDF через LibreOffice."""
+    try:
+        import xml.dom.minidom
+        print("  -> Форматування XML документа...")
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        temp_txt_path = os.path.join(out_dir, f"{base_name}_pretty.txt")
+        
+        with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+            
+        try:
+            dom = xml.dom.minidom.parseString(content)
+            pretty_xml = dom.toprettyxml(indent="  ")
+            lines = [line for line in pretty_xml.split('\n') if line.strip()]
+            formatted_text = '\n'.join(lines)
+        except Exception:
+            formatted_text = content
+
+        with open(temp_txt_path, 'w', encoding='utf-8') as f:
+            f.write(formatted_text)
+
+        pdf_path = convert_office_to_pdf(temp_txt_path, out_dir)
+        if os.path.exists(temp_txt_path): os.remove(temp_txt_path)
+        return pdf_path
+    except Exception as e:
+        print(f"  [Помилка обробки XML]: {e}")
+        return None
+
 def get_chrome_path():
     """Шукає доступний виконуваний файл Chrome/Chromium на сервері."""
     for cmd in ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"]:
@@ -39,10 +92,7 @@ def get_chrome_path():
     return None
 
 def convert_mhtml_to_pdf(input_path, out_dir):
-    """
-    Конвертує MHTML у PDF за допомогою headless Google Chrome.
-    Це єдиний надійний спосіб зберегти стилі, картинки та розмітку MHTML.
-    """
+    """Конвертує MHTML у PDF за допомогою headless Google Chrome."""
     chrome_cmd = get_chrome_path()
     if not chrome_cmd:
         print("  [Помилка]: Google Chrome або Chromium не знайдено в системі!")
@@ -55,8 +105,6 @@ def convert_mhtml_to_pdf(input_path, out_dir):
         
         abs_input = os.path.abspath(input_path)
         abs_output = os.path.abspath(expected_pdf)
-        
-        # Chrome найкраще зчитує локальні файли через протокол file://
         input_url = f"file://{abs_input}"
         
         cmd = [
@@ -73,7 +121,7 @@ def convert_mhtml_to_pdf(input_path, out_dir):
         if os.path.exists(expected_pdf) and os.path.getsize(expected_pdf) > 0:
             return expected_pdf
         else:
-            print(f"  [Помилка Chrome]: PDF не створено. Код повернення: {result.returncode}. Лог: {result.stderr}")
+            print(f"  [Помилка Chrome]: PDF не створено. Лог: {result.stderr}")
             return None
     except Exception as e:
         print(f"  [Помилка виклику Chrome]: {e}")
@@ -182,7 +230,7 @@ def convert_dxf_to_png(dxf_path, png_path):
         return False, False
 
 def process_pdf_pages(pdf_path, base_name, folder_id, service, mod_time_str):
-    """Нарізає PDF-файл на окремі PNG сторінки та завантажує їх."""
+    """Нарізає PDF-файл на окремі PNG сторінки та завантажує їх із підтримкою повторних спроб."""
     import pymupdf
     doc = pymupdf.open(pdf_path)
     for page_num in range(len(doc)):
@@ -194,7 +242,9 @@ def process_pdf_pages(pdf_path, base_name, folder_id, service, mod_time_str):
         
         file_metadata = {'name': img_name, 'parents': [folder_id], 'modifiedTime': mod_time_str}
         media = MediaFileUpload(img_path, mimetype='image/png')
-        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        
+        # Використовуємо функцію з обробкою помилок 502
+        upload_file_with_retry(service, file_metadata, media)
         print(f"  -> Завантажено сторінку: {img_name}")
         if os.path.exists(img_path): os.remove(img_path)
     doc.close()
@@ -223,9 +273,10 @@ def main():
     need_office = False
     need_tif = False
     need_mhtml = False
+    need_xml = False
     valid_files = []
 
-    all_supported_exts = ['.pdf'] + CAD_EXTS + OFFICE_EXTS + TIFF_EXTS + MHTML_EXTS
+    all_supported_exts = ['.pdf'] + CAD_EXTS + OFFICE_EXTS + TIFF_EXTS + MHTML_EXTS + XML_EXTS
 
     for f in all_files:
         base_name, ext = os.path.splitext(f['name'].lower())
@@ -239,9 +290,10 @@ def main():
                 elif ext in OFFICE_EXTS: need_office = True
                 elif ext in TIFF_EXTS: need_tif = True
                 elif ext in MHTML_EXTS: need_mhtml = True
+                elif ext in XML_EXTS: need_xml = True
 
     if is_scan_mode:
-        print(f"Потребують обробки: PDF={need_pdf}, DXF={need_dxf}, DWG={need_dwg}, Office={need_office}, TIFF={need_tif}, MHTML={need_mhtml}")
+        print(f"Потребують обробки: PDF={need_pdf}, DXF={need_dxf}, DWG={need_dwg}, Office={need_office}, TIFF={need_tif}, MHTML={need_mhtml}, XML={need_xml}")
         if 'GITHUB_OUTPUT' in os.environ:
             with open(os.environ['GITHUB_OUTPUT'], 'a') as github_output:
                 github_output.write(f"has_pdf={str(need_pdf).lower()}\n")
@@ -250,6 +302,7 @@ def main():
                 github_output.write(f"has_office={str(need_office).lower()}\n")
                 github_output.write(f"has_tif={str(need_tif).lower()}\n")
                 github_output.write(f"has_mhtml={str(need_mhtml).lower()}\n")
+                github_output.write(f"has_xml={str(need_xml).lower()}\n")
         return
 
     if not valid_files:
@@ -279,7 +332,7 @@ def main():
         if ext == '.pdf':
             process_pdf_pages(temp_input_path, base_name, FOLDER_ID, service, mod_time_str)
 
-        # --- СЦЕНАРІЙ 2: ОФІСНІ ДОКУМЕНТИ ТА ТЕКСТ (DOC, DOCX, XLSX, CSV тощо) ---
+        # --- СЦЕНАРІЙ 2: ОФІСНІ ДОКУМЕНТИ ТА ТЕКСТ ---
         elif ext in OFFICE_EXTS:
             generated_pdf = convert_office_to_pdf(temp_input_path, TEMP_DIR)
             if generated_pdf:
@@ -293,7 +346,14 @@ def main():
                 process_pdf_pages(generated_pdf, base_name, FOLDER_ID, service, mod_time_str)
                 os.remove(generated_pdf)
 
-        # --- СЦЕНАРІЙ 4: БАГАТОСТОРІНКОВІ ТА ЗВИЧАЙНІ TIFF ---
+        # --- СЦЕНАРІЙ 4: XML ФАЙЛИ ---
+        elif ext in XML_EXTS:
+            generated_pdf = convert_xml_to_pdf(temp_input_path, TEMP_DIR)
+            if generated_pdf:
+                process_pdf_pages(generated_pdf, base_name, FOLDER_ID, service, mod_time_str)
+                os.remove(generated_pdf)
+
+        # --- СЦЕНАРІЙ 5: БАГАТОСТОРІНКОВІ ТА ЗВИЧАЙНІ TIFF ---
         elif ext in TIFF_EXTS:
             from PIL import Image, ImageSequence
             try:
@@ -309,13 +369,13 @@ def main():
                         
                         file_metadata = {'name': img_name, 'parents': [FOLDER_ID], 'modifiedTime': mod_time_str}
                         media = MediaFileUpload(img_path, mimetype='image/png')
-                        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+                        upload_file_with_retry(service, file_metadata, media)
                         print(f"  -> Завантажено сторінку TIFF: {img_name}")
                         if os.path.exists(img_path): os.remove(img_path)
             except Exception as e:
                 print(f"  [Помилка обробки TIFF]: {e}")
 
-        # --- СЦЕНАРІЙ 5: CAD ФАЙЛИ (DXF / DWG) ---
+        # --- СЦЕНАРІЙ 6: CAD ФАЙЛИ (DXF / DWG) ---
         elif ext in CAD_EXTS:
             dxf_to_render = temp_input_path
             original_dwg_path = temp_input_path if ext == '.dwg' else None
@@ -346,7 +406,7 @@ def main():
             if success and os.path.exists(img_path):
                 file_metadata = {'name': img_name, 'parents': [FOLDER_ID], 'modifiedTime': mod_time_str}
                 media = MediaFileUpload(img_path, mimetype='image/png')
-                service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+                upload_file_with_retry(service, file_metadata, media)
                 print(f"  -> Завантажено малюнок на Google Drive: {img_name}")
                 os.remove(img_path)
             
