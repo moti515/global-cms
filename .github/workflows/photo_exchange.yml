@@ -3,6 +3,10 @@ name: Weekly Photo Exchange Sync
 on:
   workflow_dispatch: # Дозволяє запуск через API або кнопку
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  PYTHONUNBUFFERED: "1"
+  
 jobs:
   run-bot:
     runs-on: ubuntu-latest
