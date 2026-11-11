@@ -143,38 +143,43 @@ def get_video_metadata(video_path):
 def get_location_data(lat, lon, mode='family'):
     if lat is None or lon is None: 
         return "", ""
-    try:
-        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=13&accept-language=uk"
-        headers = {'User-Agent': 'FurnitureArchive_TelegramBot_2026'}
-        res = requests.get(url, headers=headers, timeout=10).json()
-        address = res.get('address', {})
-        
-        city_town = (
-            address.get('city') or 
-            address.get('town') or 
-            address.get('village') or 
-            address.get('municipality') or
-            address.get('county')
-        )
-        country = address.get('country') or ""
-        
-        if city_town and country:
-            clean_location = f"{city_town}, {country}"
-        elif country:
-            clean_location = country
-        else:
-            clean_location = city_town or ""
+    
+    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=13&accept-language=uk"
+    headers = {'User-Agent': 'FurnitureArchive_TelegramBot_2026'}
+    
+    for attempt in range(3):
+        try:
+            res = requests.get(url, headers=headers, timeout=15).json()
+            address = res.get('address', {})
             
-        group_location = clean_location
-        display_location = clean_location
+            city_town = (
+                address.get('city') or 
+                address.get('town') or 
+                address.get('village') or 
+                address.get('municipality') or
+                address.get('county')
+            )
+            country = address.get('country') or ""
+            
+            if city_town and country:
+                clean_location = f"{city_town}, {country}"
+            elif country:
+                clean_location = country
+            else:
+                clean_location = city_town or ""
+                
+            group_location = clean_location
+            display_location = clean_location
 
-        if mode == 'exchange' and display_location:
-            google_maps_url = f"https://www.google.com/maps/?q={lat},{lon}"
-            display_location = f'<a href="{google_maps_url}">{clean_location}</a>'
+            if mode == 'exchange' and display_location:
+                google_maps_url = f"https://www.google.com/maps/?q={lat},{lon}"
+                display_location = f'<a href="{google_maps_url}">{clean_location}</a>'
+                
+            return display_location, group_location
+        except Exception as e:
+            print(f"⚠️ Спроба {attempt+1} - Помилка геокодування OSM: {e}")
+            time.sleep(2)
             
-        return display_location, group_location
-    except Exception as e:
-        print(f"⚠️ Помилка геокодування OSM: {e}")
     return "", ""
 
 def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
@@ -237,9 +242,13 @@ def optimize_image(input_path, max_size_bytes=10 * 1024 * 1024):
     
     try:
         with Image.open(input_path) as img:
+            # Конвертуємо у стандартний RGB для сумісності з JPEG
+            if img.mode in ('RGBA', 'P', 'LA'):
+                img = img.convert('RGB')
+                
             # Крок 1: Знижуємо якість стиснення JPEG
             for q in [85, 70, 50, 30]:
-                img.save(output_path, 'JPEG', quality=q)
+                img.save(output_path, 'JPEG', quality=q, optimize=True)
                 if os.path.getsize(output_path) <= max_size_bytes:
                     print(f"✅ Фото успішно оптимізовано до {os.path.getsize(output_path)/1024/1024:.2f} MB з якістю {q}")
                     return output_path
@@ -247,7 +256,7 @@ def optimize_image(input_path, max_size_bytes=10 * 1024 * 1024):
             # Крок 2: Якщо якість не допомогла, додатково зменшуємо роздільну здатність удвічі
             w, h = img.size
             img_resized = img.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
-            img_resized.save(output_path, 'JPEG', quality=70)
+            img_resized.save(output_path, 'JPEG', quality=70, optimize=True)
             if os.path.getsize(output_path) <= max_size_bytes:
                 print(f"✅ Фото ресайзнуто та оптимізовано до {os.path.getsize(output_path)/1024/1024:.2f} MB")
                 return output_path
@@ -537,6 +546,7 @@ def main():
             if opt_image_path != local_path:
                 local_files_to_clean.append(opt_image_path)
                 local_path = opt_image_path
+                mime_type = 'image/jpeg'
                 
             current_size = os.path.getsize(local_path)
             send_as_doc = False
