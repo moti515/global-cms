@@ -3,9 +3,9 @@ name: Telegram Family Media Sync
 on:
   workflow_dispatch:      # Дозволяє запускати вручну або через віддалений API-запит
 
-# Переводимо екшени на Node 24, щоб прибрати попередження GitHub
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  PYTHONUNBUFFERED: "1"  # ⚡ Вивід логів без затримок у реальному часі
 
 jobs:
   sync-media:
