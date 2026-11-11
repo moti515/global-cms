@@ -12,7 +12,7 @@ import requests
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from PIL import Image
+from PIL import Image, ImageOps
 from PIL.ExifTags import TAGS, GPSTAGS
 from pillow_heif import register_heif_opener
 
@@ -232,38 +232,44 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
 # ⚙️ ФУНКЦІЇ ОБРОБКИ МЕДІА ТА НАДСИЛАННЯ
 # =====================================================================
 
-def optimize_image(input_path, max_size_bytes=10 * 1024 * 1024):
-    current_size = os.path.getsize(input_path)
-    if current_size <= max_size_bytes:
-        return input_path
-        
-    print(f"📸 Оптимізуємо фото {input_path} (Розмір: {current_size/1024/1024:.2f} MB)...")
-    output_path = os.path.join('downloaded', 'opt_' + os.path.basename(input_path))
+def prepare_image_for_telegram(input_path, max_size_bytes=10 * 1024 * 1024):
+    print(fmt_msg := f"📸 Нормалізуємо фото для Telegram: {input_path}...")
+    output_path = os.path.join('downloaded', 'ready_' + os.path.basename(input_path).rsplit('.', 1)[0] + '.jpg')
     
     try:
         with Image.open(input_path) as img:
-            # Конвертуємо у стандартний RGB для сумісності з JPEG
-            if img.mode in ('RGBA', 'P', 'LA'):
+            # Виправляємо орієнтацію за EXIF
+            img = ImageOps.exif_transpose(img)
+            
+            # Переводимо у стандартний RGB (усуває проблеми з CMYK, RGBA, Palette тощо)
+            if img.mode in ('RGBA', 'P', 'LA', 'CMYK'):
                 img = img.convert('RGB')
                 
-            # Крок 1: Знижуємо якість стиснення JPEG
-            for q in [85, 70, 50, 30]:
-                img.save(output_path, 'JPEG', quality=q, optimize=True)
-                if os.path.getsize(output_path) <= max_size_bytes:
-                    print(f"✅ Фото успішно оптимізовано до {os.path.getsize(output_path)/1024/1024:.2f} MB з якістю {q}")
-                    return output_path
-            
-            # Крок 2: Якщо якість не допомогла, додатково зменшуємо роздільну здатність удвічі
+            # Обмежуємо максимальну сторону до 4000 пікселів (запобігає PHOTO_INVALID_DIMENSIONS)
             w, h = img.size
-            img_resized = img.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
-            img_resized.save(output_path, 'JPEG', quality=70, optimize=True)
-            if os.path.getsize(output_path) <= max_size_bytes:
-                print(f"✅ Фото ресайзнуто та оптимізовано до {os.path.getsize(output_path)/1024/1024:.2f} MB")
-                return output_path
+            max_dim = 4000
+            if w > max_dim or h > max_dim:
+                if w > h:
+                    new_w = max_dim
+                    new_h = int(h * (max_dim / w))
+                else:
+                    new_h = max_dim
+                    new_w = int(w * (max_dim / h))
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            
+            quality = 85
+            img.save(output_path, 'JPEG', quality=quality, optimize=True)
+            
+            # Зменшуємо якість, якщо файл все ще більший за 10 МБ
+            while os.path.getsize(output_path) > max_size_bytes and quality > 20:
+                quality -= 15
+                img.save(output_path, 'JPEG', quality=quality, optimize=True)
+                
+            print(f"✅ Фото успішно підготовлено. Розмір: {os.path.getsize(output_path)/1024/1024:.2f} MB")
+            return output_path
     except Exception as e:
-        print(f"⚠️ Помилка під час спроби оптимізації фото: {e}")
-        
-    return input_path
+        print(f"⚠️ Помилка підготовки фото {input_path}: {e}")
+        return input_path
 
 def get_video_duration(video_path):
     cmd = ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
@@ -278,7 +284,7 @@ def split_video(input_path, max_size_bytes=50 * 1024 * 1024):
     if current_size <= max_size_bytes:
         return [input_path]
         
-    print(f"✂️ Відео все одно більше 50 MB ({current_size/1024/1024:.2f} MB). Нарізаємо на частини...")
+    print(f"✂️ Відео більше 50 MB ({current_size/1024/1024:.2f} MB). Нарізаємо на частини...")
     duration = get_video_duration(input_path)
     if duration == 0:
         print("⚠️ Не вдалося визначити тривалість відео для нарізання.")
@@ -295,7 +301,6 @@ def split_video(input_path, max_size_bytes=50 * 1024 * 1024):
         start_time = i * part_duration
         output_part = f"{base_name}_part{i+1}.{ext}"
         
-        # Нарізаємо без перекодування за ключовими кадрами (швидкий метод)
         cmd = [
             'ffmpeg', '-y', '-ss', str(start_time), '-i', input_path,
             '-t', str(part_duration), '-c', 'copy', output_part
@@ -305,7 +310,6 @@ def split_video(input_path, max_size_bytes=50 * 1024 * 1024):
         if os.path.exists(output_part) and os.path.getsize(output_part) > 0:
             parts.append(output_part)
         else:
-            # Надійний фолбек з перекодуванням, якщо швидке копіювання дало збій
             cmd_reencode = [
                 'ffmpeg', '-y', '-ss', str(start_time), '-i', input_path,
                 '-t', str(part_duration), '-vcodec', 'libx264', '-crf', '28',
@@ -499,10 +503,10 @@ def main():
 
         local_files_to_clean.append(local_path)
 
-        # Перевірка ліміту 2 ГБ (Абсолютний максимум для Telegram)
+        # Перевірка ліміту 2 ГБ
         file_size = os.path.getsize(local_path)
         if file_size > 2 * 1024 * 1024 * 1024:
-            print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ: Файл {f['name']} перевищує 2 ГБ і не може бути надісланий.")
+            print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ: Файл {f['name']} перевищує 2 ГБ.")
             clean_local_files(local_files_to_clean)
             sys.exit(1)
 
@@ -513,7 +517,7 @@ def main():
         if not group_loc:
             group_loc = "Невідоме місце"
 
-        # Обробка спецформатів (GIF)
+        # Обробка GIF
         if mime_type == 'image/gif' or lower_name.endswith('.gif'):
             mp4_path = os.path.join('downloaded', f['name'].rsplit('.', 1)[0] + '_gif.mp4')
             gif_to_mp4(local_path, mp4_path)
@@ -524,45 +528,36 @@ def main():
                 
         # Обробка HEIC
         elif mime_type in ['image/heic', 'image/heif'] or lower_name.endswith(('.heic', '.heif')):
-            print(f"📸 Конвертуємо HEIC-фото в JPG для Telegram...")
+            print(f"📸 Конвертуємо HEIC-фото в JPG...")
             jpg_path = os.path.join('downloaded', f['name'].rsplit('.', 1)[0] + '.jpg')
             try:
                 with Image.open(local_path) as img:
+                    img = ImageOps.exif_transpose(img)
                     img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
                 local_files_to_clean.append(jpg_path)
                 local_path = jpg_path
                 mime_type = 'image/jpeg'
             except Exception as e:
-                print(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка конвертації HEIC {f['name']}: {e}")
+                print(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка HEIC {f['name']}: {e}")
                 clean_local_files(local_files_to_clean)
                 sys.exit(1)
 
-        # Оновлюємо ім'я після можливих конвертацій форматів
         lower_name = os.path.basename(local_path).lower()
 
-        # 🚨 ОБРОБКА ТА ОПТИМІЗАЦІЯ ФОТО
+        # 🚨 НОРМАЛІЗАЦІЯ ТА ОПТИМІЗАЦІЯ ФОТО
         if mime_type.startswith('image/'):
-            opt_image_path = optimize_image(local_path)
-            if opt_image_path != local_path:
-                local_files_to_clean.append(opt_image_path)
-                local_path = opt_image_path
+            prepared_path = prepare_image_for_telegram(local_path)
+            if prepared_path != local_path:
+                local_files_to_clean.append(prepared_path)
+                local_path = prepared_path
                 mime_type = 'image/jpeg'
                 
             current_size = os.path.getsize(local_path)
             send_as_doc = False
             
-            if current_size > 10 * 1024 * 1024:  # Якщо навіть після оптимізації більше 10 MB
-                print(f"⚠️ Фото після оптимізації все одно більше 10 MB. Відправляємо як файл.")
+            if current_size > 10 * 1024 * 1024:
+                print(f"⚠️ Фото після оптимізації більше 10 MB. Відправляємо як файл.")
                 send_as_doc = True
-            else:
-                try:
-                    with Image.open(local_path) as img:
-                        w, h = img.size
-                        if w > 10000 or h > 10000 or (w / h) > 19 or (h / w) > 19:
-                            print(f"📐 Виявлено панораму або велике фото ({w}x{h}). Буде надіслано як файл.")
-                            send_as_doc = True
-                except Exception as e:
-                    print(f"⚠️ Помилка аналізу геометрії фото: {e}")
 
             processed_items.append({
                 'id': f['id'],
@@ -581,7 +576,6 @@ def main():
             is_mp4 = lower_name.endswith('.mp4') and mime_type == 'video/mp4'
             current_size = os.path.getsize(local_path)
             
-            # Стискаємо відео, якщо це не-MP4 або його розмір перевищує 50 MB
             if current_size > 50 * 1024 * 1024 or not is_mp4 or lower_name.endswith('.swf'):
                 compressed_path = os.path.join('downloaded', 'opt_' + f['name'].rsplit('.', 1)[0] + '.mp4')
                 convert_to_mp4(local_path, compressed_path)
@@ -591,7 +585,6 @@ def main():
                     mime_type = 'video/mp4'
                     current_size = os.path.getsize(local_path)
 
-            # Перевіряємо ліміт після оптимізації. Якщо більше 50 MB — ріжемо на частини
             if current_size > 50 * 1024 * 1024:
                 video_parts = split_video(local_path)
                 for idx, part_path in enumerate(video_parts):
@@ -606,7 +599,7 @@ def main():
                         'date': file_date,
                         'group_location': group_loc,
                         'display_location': display_loc,
-                        'send_as_doc': False  # Нарізані частини гарантовано < 50MB, шлемо як звичайне медіа
+                        'send_as_doc': False
                     })
             else:
                 processed_items.append({
@@ -626,7 +619,7 @@ def main():
         clean_local_files(local_files_to_clean)
         sys.exit(1)
 
-    # Розумне групування за [Дата + МістоДляГрупування]
+    # Розумне групування за [Дата + Місто]
     groups = {}
     for item in processed_items:
         key = (item['date'], item['group_location'])
@@ -637,20 +630,19 @@ def main():
         items = groups[first_key]
         date, group_loc = first_key
         
-        print(f"\n💎 Знайдено декілька дат. Публікуємо тільки ОДНУ групу: {date} | {group_loc}")
+        print(f"\n💎 Публікуємо групу: {date} | {group_loc}")
         
         sample_display_loc = items[0]['display_location']
         base_caption = f"📅 {date}"
         if sample_display_loc:
             base_caption += f" 📍 {sample_display_loc}"
             
-        # Розділяємо групу на альбомні медіа та документи
         album_items = [i for i in items if not i['send_as_doc']]
         doc_items = [i for i in items if i['send_as_doc']]
         
         success_ids = set()
         
-        # 1️⃣ НАДСИЛАННЯ СТАНДАРТНОГО АЛЬБОМУ
+        # 1️⃣ НАДСИЛАННЯ АЛЬБОМУ
         if album_items:
             sub_batches = []
             current_batch = []
@@ -673,21 +665,21 @@ def main():
                 if len(sub_batches) > 1:
                     caption += f" (Частина {s_idx + 1}/{len(sub_batches)})"
                     
-                print(f"\n📡 Надсилання альбому для {date} (Елементів: {len(sb)})...")
+                print(f"\n📡 Надсилання альбому (Елементів: {len(sb)})...")
                 if send_media_group(sb, caption, CHAT_ID):
                     for uploaded_item in sb:
                         if uploaded_item['id'] not in success_ids:
                             move_to_gdrive_trash(service, uploaded_item['id'], uploaded_item['original_name'], FOLDER_ID)
                             success_ids.add(uploaded_item['id'])
                 else:
-                    print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося опублікувати альбом для {date}!")
+                    print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося опублікувати альбом!")
                     clean_local_files(local_files_to_clean)
                     sys.exit(1)
                     
-        # 2️⃣ НАДСИЛАННЯ ФАЙЛІВ ОКРЕМO (Панорами, важкі фото)
+        # 2️⃣ НАДСИЛАННЯ ФАЙЛІВ ОКРЕМО
         for doc_item in doc_items:
             caption = f"{base_caption}\n📄 Файл: <code>{doc_item['name']}</code>"
-            print(f"\n📡 Надсилання файлу: {doc_item['name']} ({os.path.getsize(doc_item['local_path'])/1024/1024:.2f} MB)...")
+            print(f"\n📡 Надсилання файлу: {doc_item['name']}...")
             
             if send_document(doc_item['local_path'], caption, CHAT_ID):
                 if doc_item['id'] not in success_ids:
@@ -699,7 +691,7 @@ def main():
                 sys.exit(1)
 
     clean_local_files(local_files_to_clean)
-    print(f"\n🏁 Синхронізацію однієї поточної групи успішно завершено.")
+    print(f"\n🏁 Синхронізацію успішно завершено.")
     sys.exit(0)
 
 if __name__ == '__main__':
