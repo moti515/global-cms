@@ -41,7 +41,8 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
 
 def get_google_drive_direct_url(file_id, local_file_path=None):
     """
-    Каскадний завантажувач: Litterbox (через curl) -> ImageKit -> Tmpfiles -> ImgBB.
+    Розширений каскадний завантажувач: 
+    Litterbox -> GoFile -> 0x0.st -> ImageKit -> Tmpfiles -> ImgBB -> Google Drive.
     """
     if not local_file_path or not os.path.exists(local_file_path):
         print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
@@ -53,40 +54,69 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     mime_type = "video/mp4" if is_video else "image/jpeg"
     remote_filename = "story.mp4" if is_video else "story.jpg"
 
-    # --- 1️⃣ СПРОБА: Litterbox.moe (через офіційний curl-виклик) ---
-    print(f"☁️ [Каскад 1/4] Пробуємо завантажити {filename} на Litterbox.moe...")
+    # --- 1️⃣ СПРОБА: Litterbox.moe (Виправлено за офіційним Python-прикладом) ---
+    print(f"☁️ [Каскад 1/6] Пробуємо завантажити {filename} на Litterbox.moe...")
     try:
-        cmd = [
-            "curl",
-            "-s",  # Тихий режим
-            "-F", "reqtype=fileupload",
-            "-F", "time=1h",
-            "-F", f"fileToUpload=@{local_file_path};filename={remote_filename}",
-            "https://litterbox.catbox.moe/resources/internals/api.php"
-        ]
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-        
-        response_text = result.stdout.strip()
-        if result.returncode == 0 and response_text.startswith("http"):
-            print(f"✅ Успішно завантажено на Litterbox: {response_text}")
-            return response_text, None
-        else:
-            err_msg = response_text[:150] if response_text else result.stderr.strip()[:150]
-            print(f"⚠️ Litterbox відмовив (Код {result.returncode}): {err_msg}")
-            
+        with open(local_file_path, 'rb') as f:
+            files = {'fileToUpload': (remote_filename, f, mime_type)}
+            data = {'reqtype': 'fileupload', 'time': '72h'}
+            res = requests.post(
+                "https://litterbox.catbox.moe/resources/internals/api.php",
+                files=files,
+                data=data,
+                timeout=60
+            )
+            response_text = res.text.strip()
+            if res.status_code == 200 and response_text.startswith("https://"):
+                print(f"✅ Успішно завантажено на Litterbox: {response_text}")
+                return response_text, None
+            else:
+                print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {response_text[:150]}")
     except Exception as e:
-        print(f"⚠️ Помилка під час запуску curl для Litterbox: {e}")
+        print(f"⚠️ Помилка завантаження на Litterbox: {e}")
 
-    # --- 2️⃣ СПРОБА: ImageKit.io ---
+    # --- 2️⃣ СПРОБА: GoFile (Безлімітний хостинг) ---
+    print(f"☁️ [Каскад 2/6] Пробуємо завантажити {filename} на GoFile...")
+    try:
+        with open(local_file_path, 'rb') as f:
+            files = {'file': (remote_filename, f, mime_type)}
+            res = requests.post(
+                "https://store1.gofile.io/uploadFile",
+                files=files,
+                timeout=60
+            )
+            if res.status_code == 200:
+                data = res.json()
+                if data.get('status') == 'ok':
+                    gofile_url = data['data']['downloadPage']
+                    print(f"✅ Успішно завантажено на GoFile: {gofile_url}")
+                    return gofile_url, None
+            print(f"⚠️ GoFile відмовив: {res.text[:150]}")
+    except Exception as e:
+        print(f"⚠️ Помилка завантаження на GoFile: {e}")
+
+    # --- 3️⃣ СПРОБА: 0x0.st ---
+    print(f"☁️ [Каскад 3/6] Пробуємо завантажити {filename} на 0x0.st...")
+    try:
+        with open(local_file_path, 'rb') as f:
+            files = {'file': (remote_filename, f, mime_type)}
+            res = requests.post(
+                "https://0x0.st",
+                files=files,
+                timeout=60
+            )
+            response_text = res.text.strip()
+            if res.status_code == 200 and response_text.startswith("https://"):
+                print(f"✅ Успішно завантажено на 0x0.st: {response_text}")
+                return response_text, None
+            print(f"⚠️ 0x0.st відмовив (Статус {res.status_code})")
+    except Exception as e:
+        print(f"⚠️ Помилка завантаження на 0x0.st: {e}")
+
+    # --- 4️⃣ СПРОБА: ImageKit.io ---
     imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
     if imagekit_key:
-        print(f"☁️ [Каскад 2/4] Пробуємо завантажити {filename} на ImageKit.io...")
+        print(f"☁️ [Каскад 4/6] Пробуємо завантажити {filename} на ImageKit.io...")
         try:
             with open(local_file_path, 'rb') as f:
                 res = requests.post(
@@ -107,8 +137,8 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         except Exception as e:
             print(f"⚠️ Помилка завантаження на ImageKit: {e}")
 
-    # --- 3️⃣ СПРОБА: Tmpfiles.org ---
-    print(f"☁️ [Каскад 3/4] Пробуємо завантажити {filename} на Tmpfiles.org...")
+    # --- 5️⃣ СПРОБА: Tmpfiles.org ---
+    print(f"☁️ [Каскад 5/6] Пробуємо завантажити {filename} на Tmpfiles.org...")
     try:
         with open(local_file_path, 'rb') as f:
             files = {'file': (remote_filename, f, mime_type)}
@@ -126,10 +156,10 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     except Exception as e:
         print(f"⚠️ Помилка завантаження на Tmpfiles: {e}")
 
-    # --- 4️⃣ СПРОБА: ImgBB API (Тільки для зображень) ---
+    # --- 6️⃣ СПРОБА: ImgBB API (Тільки для зображень) ---
     imgbb_key = os.environ.get("IMGBB_API_KEY")
     if imgbb_key and not is_video:
-        print(f"☁️ [Каскад 4/4] Пробуємо завантажити фото {filename} на ImgBB...")
+        print(f"☁️ [Каскад 6/6] Пробуємо завантажити фото {filename} на ImgBB...")
         try:
             with open(local_file_path, 'rb') as f:
                 img_bytes = f.read()
