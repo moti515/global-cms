@@ -41,8 +41,8 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
 
 def get_google_drive_direct_url(file_id, local_file_path=None):
     """
-    Розширений каскадний завантажувач: 
-    Litterbox -> GoFile -> 0x0.st -> ImageKit -> Tmpfiles -> ImgBB -> Google Drive.
+    Оптимізований каскадний завантажувач для Instagram (тільки прямі лінки):
+    Litterbox -> 0x0.st -> ImageKit -> Tmpfiles -> ImgBB -> GoFile (як фолбек) -> Google Drive.
     """
     if not local_file_path or not os.path.exists(local_file_path):
         print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
@@ -54,7 +54,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     mime_type = "video/mp4" if is_video else "image/jpeg"
     remote_filename = "story.mp4" if is_video else "story.jpg"
 
-    # --- 1️⃣ СПРОБА: Litterbox.moe (Виправлено за офіційним Python-прикладом) ---
+    # --- 1️⃣ СПРОБА: Litterbox.moe ---
     print(f"☁️ [Каскад 1/6] Пробуємо завантажити {filename} на Litterbox.moe...")
     try:
         with open(local_file_path, 'rb') as f:
@@ -75,28 +75,8 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     except Exception as e:
         print(f"⚠️ Помилка завантаження на Litterbox: {e}")
 
-    # --- 2️⃣ СПРОБА: GoFile (Безлімітний хостинг) ---
-    print(f"☁️ [Каскад 2/6] Пробуємо завантажити {filename} на GoFile...")
-    try:
-        with open(local_file_path, 'rb') as f:
-            files = {'file': (remote_filename, f, mime_type)}
-            res = requests.post(
-                "https://store1.gofile.io/uploadFile",
-                files=files,
-                timeout=60
-            )
-            if res.status_code == 200:
-                data = res.json()
-                if data.get('status') == 'ok':
-                    gofile_url = data['data']['downloadPage']
-                    print(f"✅ Успішно завантажено на GoFile: {gofile_url}")
-                    return gofile_url, None
-            print(f"⚠️ GoFile відмовив: {res.text[:150]}")
-    except Exception as e:
-        print(f"⚠️ Помилка завантаження на GoFile: {e}")
-
-    # --- 3️⃣ СПРОБА: 0x0.st ---
-    print(f"☁️ [Каскад 3/6] Пробуємо завантажити {filename} на 0x0.st...")
+    # --- 2️⃣ СПРОБА: 0x0.st (Дає прямий лінк) ---
+    print(f"☁️ [Каскад 2/6] Пробуємо завантажити {filename} на 0x0.st...")
     try:
         with open(local_file_path, 'rb') as f:
             files = {'file': (remote_filename, f, mime_type)}
@@ -113,10 +93,10 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     except Exception as e:
         print(f"⚠️ Помилка завантаження на 0x0.st: {e}")
 
-    # --- 4️⃣ СПРОБА: ImageKit.io ---
+    # --- 3️⃣ СПРОБА: ImageKit.io ---
     imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
     if imagekit_key:
-        print(f"☁️ [Каскад 4/6] Пробуємо завантажити {filename} на ImageKit.io...")
+        print(f"☁️ [Каскад 3/6] Пробуємо завантажити {filename} на ImageKit.io...")
         try:
             with open(local_file_path, 'rb') as f:
                 res = requests.post(
@@ -137,8 +117,8 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         except Exception as e:
             print(f"⚠️ Помилка завантаження на ImageKit: {e}")
 
-    # --- 5️⃣ СПРОБА: Tmpfiles.org ---
-    print(f"☁️ [Каскад 5/6] Пробуємо завантажити {filename} на Tmpfiles.org...")
+    # --- 4️⃣ СПРОБА: Tmpfiles.org ---
+    print(f"☁️ [Каскад 4/6] Пробуємо завантажити {filename} на Tmpfiles.org...")
     try:
         with open(local_file_path, 'rb') as f:
             files = {'file': (remote_filename, f, mime_type)}
@@ -156,10 +136,10 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     except Exception as e:
         print(f"⚠️ Помилка завантаження на Tmpfiles: {e}")
 
-    # --- 6️⃣ СПРОБА: ImgBB API (Тільки для зображень) ---
+    # --- 5️⃣ СПРОБА: ImgBB API (Тільки для зображень) ---
     imgbb_key = os.environ.get("IMGBB_API_KEY")
     if imgbb_key and not is_video:
-        print(f"☁️ [Каскад 6/6] Пробуємо завантажити фото {filename} на ImgBB...")
+        print(f"☁️ [Каскад 5/6] Пробуємо завантажити фото {filename} на ImgBB...")
         try:
             with open(local_file_path, 'rb') as f:
                 img_bytes = f.read()
@@ -178,6 +158,26 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                     print(f"⚠️ ImgBB відмовив: {res}")
         except Exception as e:
             print(f"⚠️ Помилка завантаження на ImgBB: {e}")
+
+    # --- 6️⃣ СПРОБА: GoFile (Останньою, бо дає сторінку, а не прямий лінк) ---
+    print(f"☁️ [Каскад 6/6] Пробуємо завантажити {filename} на GoFile...")
+    try:
+        with open(local_file_path, 'rb') as f:
+            files = {'file': (remote_filename, f, mime_type)}
+            res = requests.post(
+                "https://store1.gofile.io/uploadFile",
+                files=files,
+                timeout=60
+            )
+            if res.status_code == 200:
+                data = res.json()
+                if data.get('status') == 'ok':
+                    gofile_url = data['data']['downloadPage']
+                    print(f"⚠️ Увага: GoFile повернув сторінку, а не прямий лінк: {gofile_url}")
+                    # Гофайл не підходить для прямого api Instagram, але залишаємо як останній варіант
+                    return gofile_url, None
+    except Exception as e:
+        print(f"⚠️ Помилка завантаження на GoFile: {e}")
 
     # 🚨 Аварійний фолбек на Google Drive
     print(f"🚨 Усі хостинги каскаду недоступні! Використовуємо аварійний режим Google Drive ID: {file_id}")
