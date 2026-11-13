@@ -53,36 +53,37 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     mime_type = "video/mp4" if is_video else "image/jpeg"
     remote_filename = "story.mp4" if is_video else "story.jpg"
 
-    # --- 1️⃣ СПРОБА: Litterbox.moe ---
+        # --- 1️⃣ СПРОБА: Litterbox.moe ---
     print(f"☁️ [Каскад 1/4] Пробуємо завантажити {filename} на Litterbox.moe...")
     try:
         with open(local_file_path, 'rb') as f:
+            # Передаємо файл у форматі (ім'я_файлу, файловий_об'єкт), як це робить curl -F
             files = {
-                'fileToUpload': (remote_filename, f, mime_type)
+                'fileToUpload': (remote_filename, f)
             }
+            # Обов'язкові поля згідно з документацією API
             data = {
                 'reqtype': 'fileupload',
-                'time': '1h'
+                'time': '1h'  # Доступні значення: '1h', '12h', '24h', '72h'
             }
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Referer': 'https://litterbox.catbox.moe/'
-            }
+            
             res = requests.post(
                 'https://litterbox.catbox.moe/resources/internals/api.php',
                 data=data,
                 files=files,
-                headers=headers,
-                timeout=30
+                timeout=60  # Збільшено для стабільного завантаження великих файлів (до 1 ГБ)
             )
-            if res.status_code == 200 and res.text.strip().startswith('http'):
-                direct_url = res.text.strip()
-                print(f"✅ Успішно завантажено на Litterbox: {direct_url}")
-                return direct_url, None
+            
+            response_text = res.text.strip()
+            if res.status_code == 200 and response_text.startswith('http'):
+                print(f"✅ Успішно завантажено на Litterbox: {response_text}")
+                return response_text, None
             else:
-                print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text.strip()[:150]}")
-    except Exception as e:
+                print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {response_text[:150]}")
+                
+    except requests.exceptions.RequestException as e:
         print(f"⚠️ Помилка мережі/SSL під час завантаження на Litterbox: {e}")
+
         
     # --- 2️⃣ СПРОБА: ImageKit.io ---
     imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
