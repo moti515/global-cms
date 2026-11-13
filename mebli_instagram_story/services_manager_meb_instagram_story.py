@@ -241,7 +241,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
             f"Зміни ракурс, вибери іншу деталь на фото або інший контекст!"
         )
 
-    # 🧠 Промт (без змін)
+    # 🧠 Промт (ПОВНІСТЮ ЗБЕРЕЖЕНО БЕЗ ЖОДНИХ ЗМІН)
     prompt = (
         f"Ти — досвідчений меблевий конструктор, майстер виробництва та іронічний копірайтер для Instagram Stories.\n"
         f"Проаналізуй це зображення (або кадр з відео) і придумай ОДНУ коротку, влучну та чіпляючу фразу (1-2 короткі речення) "
@@ -263,10 +263,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     )
 
     try:
-        # Ініціалізація офіційного SDK (автоматично бере GEMINI_API_KEY з os.environ)
         client = genai.Client()
-        
-        # Готуємо масив contents
         contents = [prompt]
 
         for img_path in image_paths:
@@ -283,7 +280,6 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                         else:
                             temp_frame_path = None
                             
-                    # 🛡️ Тепер відкриваємо виключно зображення або витягнутий із відео кадр
                     img = PILImage.open(target_path)
                     if img.mode in ("RGBA", "P"):
                         img = img.convert("RGB")
@@ -296,10 +292,8 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                         try: os.remove(temp_frame_path)
                         except: pass
 
-        # 🔍 Динамічно отримуємо доступні моделі через офіційний API
         models_to_try = []
         try:
-            # Виключаємо спеціалізовані моделі, які не підходять для текстового/мультимодального копірайтингу
             excluded_keywords = [
                 "image", "tts", "live", "transcribe", "translate", 
                 "audio", "veo", "lyria", "embedding", "robotics", "omni"
@@ -309,38 +303,36 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 model_name = m.name.replace("models/", "")
                 model_name_lower = model_name.lower()
                 
-                # Перевіряємо підтримку generateContent
                 supported_actions = getattr(m, 'supported_actions', [])
                 if "generateContent" in supported_actions or not supported_actions:
                     if "flash" in model_name_lower and not any(kw in model_name_lower for kw in excluded_keywords):
                         models_to_try.append(model_name)
             
-            # Сортуємо у зворотному порядку, щоб найновіші версії йшли першими
+            # Сортуємо динамічний список у зворотному порядку
             models_to_try.sort(reverse=True)
         except Exception as list_err:
             print(f"⚠️ Не вдалося автоматично завантажити перелік моделей: {list_err}")
 
-        # Запасний точний список моделей згідно з актуальною документацією Gemini
+        # 🔄 Запасний список у зворотному порядку згідно з вашим запитом
         if not models_to_try:
             models_to_try = [
-                # --- Gemini 3 (Stable & Preview) ---
-                "gemini-3.8-flash",
-                "gemini-3.7-flash",
-                "gemini-3.6-flash",
-                "gemini-3.5-flash",
-                "gemini-3.5-flash-lite",
-                "gemini-3.1-flash-lite",
-                "gemini-3.1-pro-preview",
-                "gemini-3-flash-preview",
-                # --- Gemini 2.5 (Legacy/Fallback) ---
-                "gemini-2.5-flash",
-                "gemini-2.5-flash-lite",
-                "gemini-2.5-pro",
                 # --- General Alias ---
-                "gemini-flash-latest"
+                "gemini-flash-latest",
+                # --- Gemini 2.5 (Legacy/Fallback) ---
+                "gemini-2.5-pro",
+                "gemini-2.5-flash-lite",
+                "gemini-2.5-flash",
+                # --- Gemini 3 (Stable & Preview) ---
+                "gemini-3-flash-preview",
+                "gemini-3.1-pro-preview",
+                "gemini-3.1-flash-lite",
+                "gemini-3.5-flash-lite",
+                "gemini-3.5-flash",
+                "gemini-3.6-flash",
+                "gemini-3.7-flash",
+                "gemini-3.8-flash"
             ]
 
-        # ⚙️ Формуємо конфігурацію з ЕКСПЛІЦИТНИМ ВИМКНЕННЯМ AFC (згідно з Issue #2902)
         gen_config = types.GenerateContentConfig(
             temperature=0.7,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(
@@ -348,20 +340,25 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
             )
         )
 
-        # Перебираємо актуальні моделі до першої успішної відповіді
+        # Перебираємо моделі з блоком повторних спроб (Retry Loop)
         for model_id in models_to_try:
-            print(f"🚀 Генерація підпису через модель {model_id}...")
-            try:
-                response = client.models.generate_content(
-                    model=model_id,
-                    contents=contents,
-                    config=gen_config
-                )
-                if response and response.text:
-                    return response.text.strip()
-            except Exception as model_err:
-                print(f"⚠️ Помилка моделі {model_id}: {model_err}")
-                continue
+            for attempt in range(1, 3): # 2 спроби на кожну модель
+                try:
+                    print(f"🚀 Генерація підпису через модель {model_id} (Спроба {attempt}/2)...")
+                    response = client.models.generate_content(
+                        model=model_id,
+                        contents=contents,
+                        config=gen_config
+                    )
+                    if response and response.text:
+                        return response.text.strip()
+                except Exception as model_err:
+                    print(f"⚠️ Помилка моделі {model_id} (Спроба {attempt}): {model_err}")
+                    if attempt < 2:
+                        time.sleep(2)
+                        continue
+                    else:
+                        break
 
     except Exception as general_err:
         print(f"⚠️ Загальна помилка генерації: {general_err}")
