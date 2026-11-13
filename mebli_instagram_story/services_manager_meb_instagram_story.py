@@ -53,20 +53,26 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     mime_type = "video/mp4" if is_video else "image/jpeg"
     remote_filename = "story.mp4" if is_video else "story.jpg"
 
-    # --- 1️⃣ СПРОБА: Litterbox.moe (Виправлені параметри без зайвих завад у заголовках) ---
+    # --- 1️⃣ СПРОБА: Litterbox.moe (Суворо за офіційною документацією API) ---
     print(f"☁️ [Каскад 1/4] Пробуємо завантажити {filename} на Litterbox.moe...")
     try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
         with open(local_file_path, 'rb') as f:
-            files = {'fileToUpload': (remote_filename, f, mime_type)}
+            # Згідно з cURL прикладом: -F "reqtype=fileupload" -F "time=1h" -F "fileToUpload=@..."
+            files = {
+                'fileToUpload': (remote_filename, f, mime_type)
+            }
             data = {
                 'reqtype': 'fileupload',
                 'time': '1h'
             }
-            # Надсилаємо без ручних Origin/Referer, щоб не тригерити захист 412
             res = requests.post(
                 'https://litterbox.catbox.moe/resources/internals/api.php',
                 data=data,
                 files=files,
+                headers=headers,
                 timeout=30
             )
             if res.status_code == 200 and res.text.strip().startswith('http'):
@@ -74,7 +80,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 print(f"✅ Успішно завантажено на Litterbox: {direct_url}")
                 return direct_url, None
             else:
-                print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text[:150]}")
+                print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text.strip()[:150]}")
     except Exception as e:
         print(f"⚠️ Помилка мережі/SSL під час завантаження на Litterbox: {e}")
 
