@@ -53,14 +53,10 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     mime_type = "video/mp4" if is_video else "image/jpeg"
     remote_filename = "story.mp4" if is_video else "story.jpg"
 
-    # --- 1️⃣ СПРОБА: Litterbox.moe (Суворо за офіційною документацією API) ---
+    # --- 1️⃣ СПРОБА: Litterbox.moe ---
     print(f"☁️ [Каскад 1/4] Пробуємо завантажити {filename} на Litterbox.moe...")
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
         with open(local_file_path, 'rb') as f:
-            # Згідно з cURL прикладом: -F "reqtype=fileupload" -F "time=1h" -F "fileToUpload=@..."
             files = {
                 'fileToUpload': (remote_filename, f, mime_type)
             }
@@ -72,7 +68,6 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 'https://litterbox.catbox.moe/resources/internals/api.php',
                 data=data,
                 files=files,
-                headers=headers,
                 timeout=30
             )
             if res.status_code == 200 and res.text.strip().startswith('http'):
