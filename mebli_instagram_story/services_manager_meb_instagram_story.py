@@ -64,10 +64,15 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 'reqtype': 'fileupload',
                 'time': '1h'
             }
+            # Захист nginx на Litterbox блокує Python-агент (412), тому імітуємо стандартний curl з документації
+            headers = {
+                'User-Agent': 'curl/7.68.0'
+            }
             res = requests.post(
                 'https://litterbox.catbox.moe/resources/internals/api.php',
                 data=data,
                 files=files,
+                headers=headers,
                 timeout=30
             )
             if res.status_code == 200 and res.text.strip().startswith('http'):
