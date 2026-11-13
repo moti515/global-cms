@@ -64,7 +64,6 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 'reqtype': 'fileupload',
                 'time': '1h'
             }
-            # Імітуємо реальний браузер на Windows із Chrome, щоб пройти внутрішню перевірку uploader'а
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Referer': 'https://litterbox.catbox.moe/'
@@ -84,7 +83,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text.strip()[:150]}")
     except Exception as e:
         print(f"⚠️ Помилка мережі/SSL під час завантаження на Litterbox: {e}")
-
+        
     # --- 2️⃣ СПРОБА: ImageKit.io ---
     imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
     if imagekit_key:
