@@ -64,9 +64,10 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 'reqtype': 'fileupload',
                 'time': '1h'
             }
-            # Захист nginx на Litterbox блокує Python-агент (412), тому імітуємо стандартний curl з документації
+            # Імітуємо реальний браузер на Windows із Chrome, щоб пройти внутрішню перевірку uploader'а
             headers = {
-                'User-Agent': 'curl/7.68.0'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Referer': 'https://litterbox.catbox.moe/'
             }
             res = requests.post(
                 'https://litterbox.catbox.moe/resources/internals/api.php',
@@ -82,7 +83,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             else:
                 print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text.strip()[:150]}")
     except Exception as e:
-        print(f"⚠️ Помилка мережі/SSL під час завантаження на Litterbox: {e}")
+        print(f>⚠️ Помилка мережі/SSL під час завантаження на Litterbox: {e}")
 
     # --- 2️⃣ СПРОБА: ImageKit.io ---
     imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
