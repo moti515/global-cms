@@ -53,25 +53,28 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     mime_type = "video/mp4" if is_video else "image/jpeg"
     remote_filename = "story.mp4" if is_video else "story.jpg"
 
-        # --- 1️⃣ СПРОБА: Litterbox.moe ---
+    # --- 1️⃣ СПРОБА: Litterbox.moe ---
     print(f"☁️ [Каскад 1/4] Пробуємо завантажити {filename} на Litterbox.moe...")
     try:
         with open(local_file_path, 'rb') as f:
-            # Передаємо файл у форматі (ім'я_файлу, файловий_об'єкт), як це робить curl -F
             files = {
                 'fileToUpload': (remote_filename, f)
             }
-            # Обов'язкові поля згідно з документацією API
             data = {
                 'reqtype': 'fileupload',
-                'time': '1h'  # Доступні значення: '1h', '12h', '24h', '72h'
+                'time': '1h'
+            }
+            # Маскуємося під curl, оскільки nginx блокує дефолтний User-Agent від python-requests (помилка 412)
+            headers = {
+                'User-Agent': 'curl/8.5.0'
             }
             
             res = requests.post(
-                'https://litterbox.catbox.moe/resources/internals/api.php',
+                'https://catbox.moe',
                 data=data,
                 files=files,
-                timeout=60  # Збільшено для стабільного завантаження великих файлів (до 1 ГБ)
+                headers=headers,
+                timeout=60
             )
             
             response_text = res.text.strip()
@@ -83,6 +86,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 
     except requests.exceptions.RequestException as e:
         print(f"⚠️ Помилка мережі/SSL під час завантаження на Litterbox: {e}")
+
 
         
     # --- 2️⃣ СПРОБА: ImageKit.io ---
