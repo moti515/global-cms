@@ -41,7 +41,7 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
 
 def get_google_drive_direct_url(file_id, local_file_path=None):
     """
-    Каскадний завантажувач: Litterbox -> ImageKit -> Tmpfiles -> ImgBB.
+    Каскадний завантажувач: Litterbox (через curl) -> ImageKit -> Tmpfiles -> ImgBB.
     """
     if not local_file_path or not os.path.exists(local_file_path):
         print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
@@ -53,42 +53,36 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     mime_type = "video/mp4" if is_video else "image/jpeg"
     remote_filename = "story.mp4" if is_video else "story.jpg"
 
-    # --- 1️⃣ СПРОБА: Litterbox.moe ---
+    # --- 1️⃣ СПРОБА: Litterbox.moe (через офіційний curl-виклик) ---
     print(f"☁️ [Каскад 1/4] Пробуємо завантажити {filename} на Litterbox.moe...")
     try:
-        with open(local_file_path, 'rb') as f:
-            files = {
-                'fileToUpload': (remote_filename, f)
-            }
-            data = {
-                'reqtype': 'fileupload',
-                'time': '1h'
-            }
-            # Маскуємося під curl, оскільки nginx блокує дефолтний User-Agent від python-requests (помилка 412)
-            headers = {
-                'User-Agent': 'curl/8.5.0'
-            }
-            
-            res = requests.post(
-                'https://catbox.moe',
-                data=data,
-                files=files,
-                headers=headers,
-                timeout=60
-            )
-            
-            response_text = res.text.strip()
-            if res.status_code == 200 and response_text.startswith('http'):
-                print(f"✅ Успішно завантажено на Litterbox: {response_text}")
-                return response_text, None
-            else:
-                print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {response_text[:150]}")
-                
-    except requests.exceptions.RequestException as e:
-        print(f"⚠️ Помилка мережі/SSL під час завантаження на Litterbox: {e}")
-
-
+        cmd = [
+            "curl",
+            "-s",  # Тихий режим
+            "-F", "reqtype=fileupload",
+            "-F", "time=1h",
+            "-F", f"fileToUpload=@{local_file_path};filename={remote_filename}",
+            "https://litterbox.catbox.moe/resources/internals/api.php"
+        ]
         
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        response_text = result.stdout.strip()
+        if result.returncode == 0 and response_text.startswith("http"):
+            print(f"✅ Успішно завантажено на Litterbox: {response_text}")
+            return response_text, None
+        else:
+            err_msg = response_text[:150] if response_text else result.stderr.strip()[:150]
+            print(f"⚠️ Litterbox відмовив (Код {result.returncode}): {err_msg}")
+            
+    except Exception as e:
+        print(f"⚠️ Помилка під час запуску curl для Litterbox: {e}")
+
     # --- 2️⃣ СПРОБА: ImageKit.io ---
     imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
     if imagekit_key:
