@@ -41,8 +41,7 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
 
 def get_google_drive_direct_url(file_id, local_file_path=None):
     """
-    Каскадний завантажувач: послідовно пробує Litterbox -> ImageKit -> Tmpfiles -> ImgBB.
-    Якщо один із сервісів падає, автоматично переходить до наступного.
+    Каскадний завантажувач із виправленими заголовками для Litterbox та надійним фолбеком.
     """
     if not local_file_path or not os.path.exists(local_file_path):
         print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
@@ -54,11 +53,13 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     mime_type = "video/mp4" if is_video else "image/jpeg"
     remote_filename = "story.mp4" if is_video else "story.jpg"
 
-    # --- 1️⃣ СПРОБА: Litterbox.moe (Згідно з офіційною документацією ShareX API) ---
+    # --- 1️⃣ СПРОБА: Litterbox.moe (Оновлені заголовки обходу захисту 412) ---
     print(f"☁️ [Каскад 1/4] Пробуємо завантажити {filename} на Litterbox.moe...")
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Referer': 'https://litterbox.catbox.moe/',
+            'Origin': 'https://litterbox.catbox.moe'
         }
         with open(local_file_path, 'rb') as f:
             files = {'fileToUpload': (remote_filename, f, mime_type)}
@@ -102,7 +103,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                     print(f"✅ Успішно завантажено на ImageKit: {url}")
                     return url, file_id_ik
                 else:
-                    print(f"⚠️ ImageKit відмовив (Статус {res.status_code}): {res.text[:150]}</h2>")
+                    print(f"⚠️ ImageKit відмовив (Статус {res.status_code}): {res.text[:150]}")
         except Exception as e:
             print(f"⚠️ Помилка завантаження на ImageKit: {e}")
 
@@ -148,7 +149,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         except Exception as e:
             print(f"⚠️ Помилка завантаження на ImgBB: {e}")
 
-    # 🚨 Аварійний фолбек на Google Drive (якщо всі сервери недоступні)
+    # 🚨 Аварійний фолбек на Google Drive
     print(f"🚨 Усі хостинги каскаду недоступні! Використовуємо аварійний режим Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}", None
     
