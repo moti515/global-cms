@@ -83,7 +83,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
             else:
                 print(f"⚠️ Litterbox відмовив (Статус {res.status_code}): {res.text.strip()[:150]}")
     except Exception as e:
-        print(f>⚠️ Помилка мережі/SSL під час завантаження на Litterbox: {e}")
+        print(f"⚠️ Помилка мережі/SSL під час завантаження на Litterbox: {e}")
 
     # --- 2️⃣ СПРОБА: ImageKit.io ---
     imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
