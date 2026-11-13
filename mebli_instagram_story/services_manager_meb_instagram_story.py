@@ -41,7 +41,7 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
 
 def get_google_drive_direct_url(file_id, local_file_path=None):
     """
-    Каскадний завантажувач із виправленими заголовками для Litterbox та надійним фолбеком.
+    Каскадний завантажувач: Litterbox -> ImageKit -> Tmpfiles -> ImgBB.
     """
     if not local_file_path or not os.path.exists(local_file_path):
         print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
@@ -53,25 +53,20 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     mime_type = "video/mp4" if is_video else "image/jpeg"
     remote_filename = "story.mp4" if is_video else "story.jpg"
 
-    # --- 1️⃣ СПРОБА: Litterbox.moe (Оновлені заголовки обходу захисту 412) ---
+    # --- 1️⃣ СПРОБА: Litterbox.moe (Виправлені параметри без зайвих завад у заголовках) ---
     print(f"☁️ [Каскад 1/4] Пробуємо завантажити {filename} на Litterbox.moe...")
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Referer': 'https://litterbox.catbox.moe/',
-            'Origin': 'https://litterbox.catbox.moe'
-        }
         with open(local_file_path, 'rb') as f:
             files = {'fileToUpload': (remote_filename, f, mime_type)}
             data = {
                 'reqtype': 'fileupload',
-                'time': '1h'  # Доступні значення: 1h, 12h, 24h, 72h
+                'time': '1h'
             }
+            # Надсилаємо без ручних Origin/Referer, щоб не тригерити захист 412
             res = requests.post(
                 'https://litterbox.catbox.moe/resources/internals/api.php',
                 data=data,
                 files=files,
-                headers=headers,
                 timeout=30
             )
             if res.status_code == 200 and res.text.strip().startswith('http'):
@@ -83,7 +78,7 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     except Exception as e:
         print(f"⚠️ Помилка мережі/SSL під час завантаження на Litterbox: {e}")
 
-    # --- 2️⃣ СПРОБА: ImageKit.io (Надійний бізнес-бекенд) ---
+    # --- 2️⃣ СПРОБА: ImageKit.io ---
     imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
     if imagekit_key:
         print(f"☁️ [Каскад 2/4] Пробуємо завантажити {filename} на ImageKit.io...")
@@ -308,29 +303,29 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                     if "flash" in model_name_lower and not any(kw in model_name_lower for kw in excluded_keywords):
                         models_to_try.append(model_name)
             
-            # Сортуємо динамічний список у зворотному порядку
-            models_to_try.sort(reverse=True)
+            # Сортуємо динамічний список у прямому порядку (від легких/стабільних)
+            models_to_try.sort()
         except Exception as list_err:
             print(f"⚠️ Не вдалося автоматично завантажити перелік моделей: {list_err}")
 
-        # 🔄 Запасний список у зворотному порядку згідно з вашим запитом
+        # 🔄 Пріоритетний список у правильному порядку (зменшуємо ліміти нових моделей)
         if not models_to_try:
             models_to_try = [
-                # --- General Alias ---
-                "gemini-flash-latest",
-                # --- Gemini 2.5 (Legacy/Fallback) ---
-                "gemini-2.5-pro",
+                # --- Легкі та стабільні моделі (спочатку) ---
                 "gemini-2.5-flash-lite",
                 "gemini-2.5-flash",
-                # --- Gemini 3 (Stable & Preview) ---
-                "gemini-3-flash-preview",
-                "gemini-3.1-pro-preview",
                 "gemini-3.1-flash-lite",
                 "gemini-3.5-flash-lite",
+                # --- Основні робочі конячки ---
+                "gemini-flash-latest",
                 "gemini-3.5-flash",
                 "gemini-3.6-flash",
                 "gemini-3.7-flash",
-                "gemini-3.8-flash"
+                "gemini-3.8-flash",
+                # --- Preview та Pro версії як фолбек ---
+                "gemini-3-flash-preview",
+                "gemini-3.1-pro-preview",
+                "gemini-2.5-pro"
             ]
 
         gen_config = types.GenerateContentConfig(
