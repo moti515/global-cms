@@ -32,10 +32,10 @@ def sanitize_filename(filename: str) -> str:
     name, ext = os.path.splitext(filename)
     sanitized_name = re.sub(r'[^a-zA-Z0-9_\-]', '-', name)
     sanitized_name = re.sub(r'-+', '-', sanitized_name).strip('-')
-    
+
     if not sanitized_name:
         sanitized_name = f"media_{int(time.time())}"
-        
+
     return f"{sanitized_name}{ext.lower()}"
 
 
@@ -45,7 +45,7 @@ def rotate_language(lang_value):
     Гнучко приймає як текстові коди ("UK", "EN", "DE"), так і цифри (0, 1, 2).
     """
     lang_clean = str(lang_value).strip().upper()
-    
+
     if lang_clean in ["1", "EN", "ENG", "АНГЛ", "ENGLISH"]:
         return 1, "DE"
     elif lang_clean in ["2", "DE", "GER", "НІМ", "DEUTSCH"]:
@@ -115,60 +115,79 @@ def parse_location(location_str: str, lang_idx: int) -> str:
         return str(location_str)
 
 
+def _wait_until_url_reachable(pub_url: str, max_checks: int = 5) -> bool:
+    """
+    Перевіряє, що тимчасовий URL (наприклад, raw.githubusercontent.com) вже віддає HTTP 200
+    перед тим, як передавати його краулеру Meta.
+    """
+    for attempt in range(1, max_checks + 1):
+        try:
+            r = requests.head(pub_url, allow_redirects=True, timeout=10)
+            if r.status_code == 200:
+                return True
+        except Exception:
+            pass
+        time.sleep(1.5)
+    return False
+
+
 def publish_story_to_meta(ig_user_id: str, meta_access_token: str, pub_url: str, is_video: bool):
     """
-    Відправляє медіафайл у Meta API (Створення контейнера -> Очікування готовності (тільки для відео) -> Публікація).
+    Відправляє медіафайл у Meta API (Перевірка доступності URL -> Створення контейнера ->
+    Очікування статусу FINISHED для фото та відео -> Публікація).
     Використовує Graph API v26.0.
     Повертає кортеж: (bool_успіх, string_id_або_помилка)
     """
+    _wait_until_url_reachable(pub_url)
+
     param_type = "video_url" if is_video else "image_url"
     payload = {
         "media_type": "STORIES",
         param_type: pub_url,
         "access_token": meta_access_token
     }
-    
+
     try:
         # 1️⃣ Створення медіа-контейнера
         container_endpoint = f"https://graph.facebook.com/v26.0/{ig_user_id}/media"
         response = requests.post(container_endpoint, data=payload, timeout=(10, 120))
         res = response.json()
-        
+
         if not res or "id" not in res:
             return False, f"Помилка створення контейнера сторіз: {res}"
-            
+
         creation_id = res["id"]
-        
-        # 2️⃣ Очікування обробки медіа — ВИКЛЮЧНО ДЛЯ ВІДЕО!
-        # Для фотографій очікування статусу не потрібне, контейнер готовий миттєво.
-        if is_video:
-            if not wait_for_meta_container(creation_id, meta_access_token, max_attempts=36):
-                return False, "Контейнер відео не перейшов у стан готовності (Таймаут/Помилка Meta)."
-        
-        # 3️⃣ Фінальна публікація з ретраями на випадок тимчасової зайнятості сервери Meta
+
+        # 2️⃣ Очікування обробки медіа для ВІДЕО і для ФОТО (щоб уникнути 2207006 / 9007)
+        attempts_limit = 36 if is_video else 12
+        if not wait_for_meta_container(creation_id, meta_access_token, max_attempts=attempts_limit):
+            return False, "Контейнер медіа не перейшов у стан готовності (Таймаут/Помилка Meta)."
+
+        # 3️⃣ Фінальна публікація з ретраями на випадок тимчасової зайнятості серверів Meta
         publish_endpoint = f"https://graph.facebook.com/v26.0/{ig_user_id}/media_publish"
         pub_payload = {
-            "creation_id": creation_id, 
+            "creation_id": creation_id,
             "access_token": meta_access_token
         }
-        
+
+        transient_subcodes = {2207027, 2207006}
         for attempt in range(1, 6):
             pub_response = requests.post(publish_endpoint, data=pub_payload, timeout=(10, 120))
             publish_res = pub_response.json()
-            
+
             if "id" in publish_res:
                 return True, publish_res["id"]
-            
+
             err = publish_res.get("error", {})
-            if err.get("error_subcode") == 2207027 or err.get("code") == 9007:
-                print(f"⏳ Сервери Meta зайняті (Спроба {attempt}/5). Очікування 10 сек...")
-                time.sleep(10)
+            if err.get("error_subcode") in transient_subcodes or err.get("code") == 9007:
+                print(f"⏳ Сервери Meta ще обробляють контейнер (Спроба {attempt}/5). Очікування 8 сек...")
+                time.sleep(8)
                 continue
             else:
                 return False, f"Помилка публікації сторіз в Meta API: {publish_res}"
-        
+
         return False, "Вичерпано спроби публікації в Meta API."
-            
+
     except requests.exceptions.Timeout:
         return False, "Перевищено час очікування відповіді від Meta API (Timeout)."
     except Exception as e:
@@ -190,6 +209,7 @@ def cleanup_temp_dir(directory: str = "temp_mebli"):
             print(f"🧹 Тимчасова папка '{directory}' успішно очищена.")
         except Exception as e:
             print(f"⚠️ Не вдалося повністю очистити '{directory}': {e}")
+
 
 def publish_facebook_reel(page_id: str, access_token: str, video_path_or_url: str, description: str = ""):
     """
@@ -249,7 +269,7 @@ def publish_facebook_reel(page_id: str, access_token: str, video_path_or_url: st
             "description": description,
             "access_token": access_token
         }
-        
+
         # Коротка пауза для обробки бінарного файлу сервером Meta перед фіналізацією
         time.sleep(3)
         r_pub = requests.post(publish_url, data=publish_payload, timeout=30).json()
@@ -262,12 +282,14 @@ def publish_facebook_reel(page_id: str, access_token: str, video_path_or_url: st
     except Exception as e:
         return False, f"Збій публікації Facebook Reel: {e}"
 
+
 # 💬 ЛОКАЛІЗОВАНІ СЛОГАНИ ДЛЯ FACEBOOK REELS
 REEL_SLOGANS = {
     0: "Меблі як вони є ✨",
     1: "Furniture as it is ✨",
     2: "Möbel wie sie sind ✨"
 }
+
 
 def get_reel_description(lang_idx: int) -> str:
     """
