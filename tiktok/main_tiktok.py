@@ -55,21 +55,22 @@ def main():
         print("☕ [ШТАТНИЙ ПРОПУСК] Папка вхідних медіа порожня.")
         sys.exit(0)
 
-    print(f"Знайдено файлів для поточної збірки: {len(gdrive_files)}")
+    # Попередньо відфільтровуємо валідні медіафайли, щоб знати точний лічильник [X/Y]
+    valid_gdrive_files = [
+        f for f in gdrive_files
+        if f.get('mimeType', '').startswith(('image/', 'video/')) or f['name'].lower().endswith(VALID_EXTENSIONS)
+    ]
+
+    total_media = len(valid_gdrive_files)
+    print(f"Знайдено файлів для поточної збірки: {total_media}")
     processed_items = []
     os.makedirs('downloaded', exist_ok=True)
     
-    for f in gdrive_files:
+    for idx, f in enumerate(valid_gdrive_files, start=1):
         mime_type = f.get('mimeType', '')
         lower_name = f['name'].lower()
-        
-        is_valid_media = mime_type.startswith(('image/', 'video/')) or lower_name.endswith(VALID_EXTENSIONS)
-        if not is_valid_media:
-            continue
             
         local_path = os.path.join('downloaded', f['name'])
-        print(f"Завантаження {f['name']}...")
-        
         download_file(service, f['id'], f['name'], local_path)
 
         now = datetime.now()
@@ -78,8 +79,12 @@ def main():
         
         display_loc, group_loc = "", ""
         if lat and lon:
-            time.sleep(1)  # Захист від блокування лімітів OSM
+            time.sleep(1.1)  # Дотримуємось політики OSM (не більше 1 запиту на секунду)
             display_loc, group_loc = get_location_data(lat, lon)
+            
+        # Виводимо інформативний рядок прогресу: [1/50] Назва — Дата — Локація
+        loc_log = display_loc if display_loc else "Локація не визначена"
+        print(f"📥 [{idx}/{total_media}] {f['name']} — 📅 {file_date} — 📍 {loc_log}")
             
         # Конвертація GIF
         if mime_type == 'image/gif' or lower_name.endswith('.gif'):
