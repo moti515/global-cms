@@ -1,30 +1,3 @@
-"""
-========================================================================================
-📦 МОДУЛЬНА АРХІТЕКТУРА ПРОЄКТУ АВТОПУБЛІКАЦІЇ INSTAGRAM STORIES (mebli_instagram_story)
-========================================================================================
-
-1. publish_content_mebli_storys.py (Цей модуль)
-   - Головний оркестратор конвеєра публікації.
-   - Сценарій 1: Отримує 50 кандидатів з Гарячої папки Google Drive, здійснює аналіз EXIF/GPS,
-     групує по датах і містах, публікує перші 4 файли з 1-ї групи та переміщує в Кошик.
-   - Сценарій 2 (Фолбек): Якщо Гаряча папка порожня, читає реєстр з вкладки Google Таблиці,
-     вибирає найменш опубліковані елементи, публікує їх та оновлює лічильник.
-   - Автоматично керує ротацією мови через комірку '⚙️ Налаштування Папок'!H2.
-
-2. config_meb_insta_story.py
-   - Централізований конфігураційний файл проєкту (ID папок, ключі, бази брендів).
-
-3. media_processor_meb_instagram_story.py
-   - Спеціалізований модуль обробки фото, відео (1080x1920), EXIF, геолокації (OSM) та оверлеїв.
-
-4. services_manager_meb_instagram_story.py
-   - Менеджер зовнішніх API (Google Auth, Gemini API, Litterbox/ImageKit, Meta Graph API).
-
-5. utils_meb_instagram_story.py
-   - Допоміжні утиліти (очищення temp-папок, санітаризація імен, ротація мов, публікація в Meta).
-========================================================================================
-"""
-
 import os
 import sys
 from datetime import datetime
@@ -40,6 +13,7 @@ try:
         log_unsupported_to_service,
         get_google_drive_direct_url,
         delete_from_imagekit,
+        cleanup_staging_media,
         generate_story_caption,
     )
     from media_processor_meb_instagram_story import (
@@ -70,6 +44,7 @@ except ImportError:
         log_unsupported_to_service,
         get_google_drive_direct_url,
         delete_from_imagekit,
+        cleanup_staging_media,
         generate_story_caption,
     )
     from mebli_instagram_story.media_processor_meb_instagram_story import (
@@ -97,16 +72,10 @@ except ImportError:
 
 
 def fetch_hot_folder_candidates(drive_service, hot_folder_id, limit=50):
-    """
-    Отримує список до `limit` файлів з Гарячої папки Google Drive.
-    Логіка сортування:
-    - До 20:00 -> Найстаріші файли першими (createdTime asc)
-    - Після 20:00 -> Найновіші файли першими (createdTime desc)
-    """
     now_hour = datetime.now().hour
     is_evening = now_hour >= 20
     order_by = 'createdTime desc' if is_evening else 'createdTime asc'
-    
+
     print(f"🕒 Поточний час: {datetime.now().strftime('%H:%M')}. Режим вибірки: {'НАЙНОВІШІ (вечір)' if is_evening else 'НАЙСТАРІШІ (ранок/день)'}")
 
     query = f"'{hot_folder_id}' in parents and trashed = false"
@@ -126,9 +95,6 @@ def fetch_hot_folder_candidates(drive_service, hot_folder_id, limit=50):
 
 
 def download_and_analyze_hot_files(drive_service, candidate_files):
-    """
-    Завантажує кандидати з Гарячої папки та аналізує їх EXIF, дату зйомки та геолокацію.
-    """
     os.makedirs('temp_mebli', exist_ok=True)
     analyzed_items = []
 
@@ -137,7 +103,7 @@ def download_and_analyze_hot_files(drive_service, candidate_files):
     for idx, f_info in enumerate(candidate_files, 1):
         file_id = f_info['id']
         raw_name = f_info['name']
-        
+
         if not raw_name.lower().endswith(config.VALID_MEDIA_EXTENSIONS):
             continue
 
@@ -179,15 +145,11 @@ def download_and_analyze_hot_files(drive_service, candidate_files):
 
 
 def fetch_registry_candidates(drive_service, sheets_service, target_tab="Меблі"):
-    """
-    Сценарій 2 (Фолбек): Отримує чергу публікацій із реєстру Google Таблиці,
-    коли Гаряча папка порожня.
-    """
     print(f"📊 Гаряча папка порожня. Активуємо Сценарій 2 (Реєстр вкладки '{target_tab}')...")
-    
+
     try:
         res = sheets_service.spreadsheets().values().get(
-            spreadsheetId=config.SPREADSHEET_ID, 
+            spreadsheetId=config.SPREADSHEET_ID,
             range=f"'{target_tab}'!A2:I"
         ).execute()
         rows = res.get('values', [])
@@ -200,7 +162,7 @@ def fetch_registry_candidates(drive_service, sheets_service, target_tab="Меб�
         return []
 
     valid_rows = []
-    col_idx = 4 
+    col_idx = 4
     col_letter = "E"
 
     for i, r in enumerate(rows):
@@ -233,7 +195,7 @@ def fetch_registry_candidates(drive_service, sheets_service, target_tab="Меб�
     first_key = list(groups.keys())[0]
     selected_group_items = groups[first_key][:4]
     category_name, target_date, target_city_json = first_key
-    
+
     print(f"📂 Обрано групу з Реєстру: [{category_name}]. Елементів у черзі: {len(selected_group_items)}")
 
     os.makedirs('temp_mebli', exist_ok=True)
@@ -271,9 +233,6 @@ def fetch_registry_candidates(drive_service, sheets_service, target_tab="Меб�
 
 
 def group_analyzed_files(analyzed_items):
-    """
-    Групує проаналізовані файли за датою зйомки та локацією.
-    """
     grouped_dict = defaultdict(list)
     for item in analyzed_items:
         group_key = f"{item['date_key']}_{item['location_key']}"
@@ -282,13 +241,10 @@ def group_analyzed_files(analyzed_items):
 
 
 def move_file_to_trash_folder(drive_service, file_id, file_name, trash_folder_id):
-    """
-    Переміщує опублікований файл із Гарячої папки у Кошик на Google Диску.
-    """
     try:
         file = drive_service.files().get(fileId=file_id, fields='parents').execute()
         previous_parents = ",".join(file.get('parents', []))
-        
+
         drive_service.files().update(
             fileId=file_id,
             addParents=trash_folder_id,
@@ -305,11 +261,11 @@ def move_file_to_trash_folder(drive_service, file_id, file_name, trash_folder_id
 
 
 def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, target_tab="Меблі"):
-    access_token = os.environ.get("META_ACCESS_TOKEN") or config.META_ACCESS_TOKEN
-    ig_user_id = os.environ.get("INSTAGRAM_ACCOUNT_ID") or config.IG_USER_ID
+    access_token = os.environ.get("META_ACCESS_TOKEN") or getattr(config, 'META_ACCESS_TOKEN', None)
+    ig_user_id = os.environ.get("INSTAGRAM_ACCOUNT_ID") or os.environ.get("IG_USER_ID") or getattr(config, 'IG_USER_ID', None)
 
     if not access_token or not ig_user_id:
-        print("⚠️ Відсутні ключі META_ACCESS_TOKEN або INSTAGRAM_ACCOUNT_ID.")
+        print("⚠️ Відсутні ключі META_ACCESS_TOKEN або IG_USER_ID / INSTAGRAM_ACCOUNT_ID.")
         return False
 
     previous_captions = []
@@ -345,7 +301,7 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
         is_video = lower_name.endswith(('.mp4', '.mov', '.avi'))
         year_val = parse_year(date_str)
         loc_val = parse_location(display_loc, lang_idx)
-        
+
         if is_video:
             processed_files = optimize_video_story(local_path, file_name, caption_text, year=year_val, location=loc_val)
         else:
@@ -354,75 +310,75 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
             processed_files = [padded_img_path]
 
         for ready_file in processed_files:
-            direct_url, imagekit_id = get_google_drive_direct_url(file_id, local_file_path=ready_file)
-            
-            if not direct_url:
-                print(f"🚨 Не вдалося отримати URL для Meta API ({file_name}).")
-                log_unsupported_to_service(sheets_service, target_tab, raw_file_name, "Помилка генерації URL")
-                continue
+            media_ref = None
+            try:
+                direct_url, media_ref = get_google_drive_direct_url(file_id, local_file_path=ready_file)
 
-            print(f"📡 Надсилання в Instagram Stories...")
-            success, result_msg = publish_story_to_meta(
-                ig_user_id=ig_user_id,
-                meta_access_token=access_token,
-                pub_url=direct_url,
-                is_video=is_video
-            )
+                if not direct_url:
+                    print(f"🚨 Не вдалося отримати URL для Meta API ({file_name}).")
+                    log_unsupported_to_service(sheets_service, target_tab, raw_file_name, "Помилка генерації URL")
+                    continue
 
-            if success:
-                print(f"✅ УСПІШНО ОПУБЛІКОВАНО В IG! Story ID: {result_msg}")
-                published_any = True
-                processed_reel_sources.append(ready_file)  # 👈 Додаємо ТІЛЬКИ успішно опубліковані файли
-                
-                if item.get('mode') == 'hot_folder':
-                    move_file_to_trash_folder(drive_service, file_id, raw_file_name, config.TRASH_FOLDER_ID)
-                elif item.get('mode') == 'sheet' and item.get('counter_cell'):
-                    new_count = item['counter_val'] + 1
-                    try:
-                        sheets_service.spreadsheets().values().update(
-                            spreadsheetId=config.SPREADSHEET_ID,
-                            range=item['counter_cell'],
-                            valueInputOption='RAW',
-                            body={'values': [[new_count]]}
-                        ).execute()
-                        print(f"✍️ Лічильник реєстру {item['counter_cell']} оновлено на {new_count}.")
-                    except Exception as sheet_err:
-                        print(f"⚠️ Не вдалося оновити лічильник реєстру: {sheet_err}")
+                print(f"📡 Надсилання в Instagram Stories...")
+                success, result_msg = publish_story_to_meta(
+                    ig_user_id=ig_user_id,
+                    meta_access_token=access_token,
+                    pub_url=direct_url,
+                    is_video=is_video
+                )
 
-            else:
-                print(f"❌ ПОМИЛКА ПУБЛІКАЦІЇ В IG: {result_msg}")
-                log_unsupported_to_service(sheets_service, target_tab, raw_file_name, f"Помилка Meta: {result_msg}")
+                if success:
+                    print(f"✅ УСПІШНО ОПУБЛІКОВАНО В IG! Story ID: {result_msg}")
+                    published_any = True
+                    processed_reel_sources.append(ready_file)
 
-            if imagekit_id:
-                delete_from_imagekit(imagekit_id)
+                    if item.get('mode') == 'hot_folder':
+                        move_file_to_trash_folder(drive_service, file_id, raw_file_name, config.TRASH_FOLDER_ID)
+                    elif item.get('mode') == 'sheet' and item.get('counter_cell'):
+                        new_count = item['counter_val'] + 1
+                        try:
+                            sheets_service.spreadsheets().values().update(
+                                spreadsheetId=config.SPREADSHEET_ID,
+                                range=item['counter_cell'],
+                                valueInputOption='RAW',
+                                body={'values': [[new_count]]}
+                            ).execute()
+                            print(f"✍️ Лічильник реєстру {item['counter_cell']} оновлено на {new_count}.")
+                        except Exception as sheet_err:
+                            print(f"⚠️ Не вдалося оновити лічильник реєстру: {sheet_err}")
+                else:
+                    print(f"❌ ПОМИЛКА ПУБЛІКАЦІЇ В IG: {result_msg}")
+                    log_unsupported_to_service(sheets_service, target_tab, raw_file_name, f"Помилка Meta: {result_msg}")
+            finally:
+                if media_ref:
+                    if str(media_ref).startswith("github:"):
+                        cleanup_staging_media(media_ref)
+                    else:
+                        delete_from_imagekit(media_ref)
 
     # 🎬 --- ДОДАТКОВИЙ ЕТАП: ПУБЛІКАЦІЯ FACEBOOK REEL З ФОНОВОЮ МУЗИКОЮ ---
     if published_any and processed_reel_sources:
         print("\n==================================================")
         print("🎬 [FACEBOOK REELS] МОНТАЖ ТА ПУБЛІКАЦІЮ REEL З МУЗИКОЮ...")
-        
+
         output_reel_raw = "temp_mebli/raw_facebook_reel.mp4"
         output_reel_final = "temp_mebli/final_facebook_reel_with_music.mp4"
 
-        # 1. Склеюємо фрагменти сторіз у сирий Reel
         raw_reel_file = create_facebook_reel_from_batch(
-            processed_reel_sources, 
-            output_reel_raw, 
+            processed_reel_sources,
+            output_reel_raw,
             photo_duration=getattr(config, 'REEL_PHOTO_DURATION', 4.0)
         )
 
         if raw_reel_file and os.path.exists(raw_reel_file):
-            # 2. Завантажуємо випадкову фонову музику з Google Диску (Jamendo Pool)
-            music_folder_id = getattr(config, 'MUSIC_FOLDER_ID', os.environ.get("MUSIC_FOLDER_ID"))
+            music_folder_id = getattr(config, 'MUSIC_FOLDER_ID', None) or os.environ.get("MUSIC_FOLDER_ID")
             local_music = fetch_random_music_from_drive(drive_service, music_folder_id)
 
-            # 3. Накладаємо музику на Reel з урахуванням його тривалості
             final_reel_file = add_background_music_to_reel(raw_reel_file, output_reel_final, local_music)
 
-            # 4. Публікація у Facebook з системою повторних спроб (Direct Upload)
             reel_description = get_reel_description(lang_idx)
-            fb_page_id = getattr(config, 'FB_PAGE_ID', os.environ.get("FB_PAGE_ID"))
-            fb_token = getattr(config, 'META_ACCESS_TOKEN', access_token)
+            fb_page_id = os.environ.get("FB_PAGE_ID") or getattr(config, 'FB_PAGE_ID', None)
+            fb_token = os.environ.get("META_ACCESS_TOKEN") or getattr(config, 'META_ACCESS_TOKEN', access_token)
 
             max_reel_retries = 3
             reel_published_successfully = False
@@ -431,9 +387,9 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
                 print(f"📡 Спроба {attempt}/{max_reel_retries}: Пряме завантаження файлу у Facebook Reels API...")
 
                 fb_success, fb_res = publish_facebook_reel(
-                    fb_page_id, 
-                    fb_token, 
-                    final_reel_file,  # 👈 Передаємо безпосередньо локальний шлях
+                    fb_page_id,
+                    fb_token,
+                    final_reel_file,
                     description=reel_description
                 )
 
@@ -447,11 +403,12 @@ def publish_batch_group(drive_service, sheets_service, batch_items, lang_idx, ta
                         print("⏳ Очікування 15 секунд перед наступною спробою...")
                         time.sleep(15)
 
-            # Прибираємо тимчасові файли монтажу
             for tmp_f in [raw_reel_file, final_reel_file, local_music]:
                 if tmp_f and os.path.exists(tmp_f):
-                    try: os.remove(tmp_f)
-                    except: pass
+                    try:
+                        os.remove(tmp_f)
+                    except Exception:
+                        pass
 
             if not reel_published_successfully:
                 print("🚨 КРИТИЧНА ПОМИЛКА: Не вдалося опублікувати Facebook Reel після всіх спроб.")
@@ -474,36 +431,36 @@ def run_story_publisher():
 
     target_batch = []
 
-    hot_candidates = fetch_hot_folder_candidates(drive_s, config.HOT_FOLDER_ID, limit=50)
-    if hot_candidates:
-        print(f"🔥 Знайдено {len(hot_candidates)} кандидатів у Гарячій папці.")
-        analyzed_items = download_and_analyze_hot_files(drive_s, hot_candidates)
-        if analyzed_items:
-            grouped_batches = group_analyzed_files(analyzed_items)
-            print(f"🧩 Сформовано {len(grouped_batches)} тематичних/часових груп з Гарячої папки.")
-            target_batch = grouped_batches[0][:4]
+    try:
+        hot_candidates = fetch_hot_folder_candidates(drive_s, config.HOT_FOLDER_ID, limit=50)
+        if hot_candidates:
+            print(f"🔥 Знайдено {len(hot_candidates)} кандидатів у Гарячій папці.")
+            analyzed_items = download_and_analyze_hot_files(drive_s, hot_candidates)
+            if analyzed_items:
+                grouped_batches = group_analyzed_files(analyzed_items)
+                print(f"🧩 Сформовано {len(grouped_batches)} тематичних/часових груп з Гарячої папки.")
+                target_batch = grouped_batches[0][:4]
 
-    if not target_batch:
-        target_batch = fetch_registry_candidates(drive_s, sheets_s, target_tab=current_tab)
+        if not target_batch:
+            target_batch = fetch_registry_candidates(drive_s, sheets_s, target_tab=current_tab)
 
-    if not target_batch:
-        print("ℹ️ Немає доступних матеріалів для публікації. Завершення роботи.")
+        if not target_batch:
+            print("ℹ️ Немає доступних матеріалів для публікації. Завершення роботи.")
+            return
+
+        print(f"🎯 Обрано {len(target_batch)} файлів для публікації.")
+
+        success_published = publish_batch_group(
+            drive_s, sheets_s, target_batch, lang_idx=lang_idx, target_tab=current_tab
+        )
+
+        if success_published:
+            update_saved_language(sheets_s, next_lang_code)
+        else:
+            print("🚨 КРИТИЧНА ПОМИЛКА: Жодної сторіз не вдалося опублікувати!")
+            sys.exit(1)
+    finally:
         cleanup_temp_dir("temp_mebli")
-        return
-
-    print(f"🎯 Обрано {len(target_batch)} файлів для публікації.")
-
-    success_published = publish_batch_group(
-        drive_s, sheets_s, target_batch, lang_idx=lang_idx, target_tab=current_tab
-    )
-
-    if success_published:
-        update_saved_language(sheets_s, next_lang_code)
-        cleanup_temp_dir("temp_mebli")
-    else:
-        print("🚨 КРИТИЧНА ПОМИЛКА: Жодної сторіз не вдалося опублікувати!")
-        cleanup_temp_dir("temp_mebli")
-        sys.exit(1)  # 👈 Гарантує червоний хрестик/збій у CI/CD
 
 
 if __name__ == "__main__":
