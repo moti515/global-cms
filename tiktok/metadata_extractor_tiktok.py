@@ -1,10 +1,14 @@
 import re
 import json
+import time
 import subprocess
 import requests
 from datetime import datetime
 from PIL import Image
 from PIL.ExifTags import TAGS, GPSTAGS
+
+# Кеш геокодування, щоб не робити зайві запити для однакових координат
+_GEO_CACHE = {}
 
 # =====================================================================
 # 🧠 ІНТЕЛЕКТУАЛЬНИЙ БЛОК АНАЛІЗУ МЕТАДАНИХ ТА ГЕОЛОКАЦІЇ (TIKTOK ENGINE)
@@ -115,73 +119,91 @@ def get_video_metadata(video_path):
         print(f"⚠️ Попередження відео-метаданих для {video_path}: {e}")
     return date_str, lat, lon
 
-def get_location_data(lat, lon):
+def get_location_data(lat, lon, retries=3):
     """
-    Повертає локалізацію мовою країни перебування (без примусового accept-language).
+    Повертає локалізацію мовою країни перебування з повторними спробами при збоях мережі / Rate Limit OSM.
     Результат: кортеж (ДетальнаНазваДляВідео, ШирокаНазваДляГрупування)
     """
-    if lat is None or lon is None: 
+    if lat is None or lon is None:
         return "", ""
-    try:
-        # 1️⃣ Запит робимо із zoom=15 для максимальної деталізації підпису.
-        # Вилучено параметр accept-language, щоб назви поверталися мовою оригіналу (нативно).
-        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15"
+
+    # Округлюємо до 4 знаків (~11 метрів точності) для кешування сусідніх кадрів
+    cache_key = (round(float(lat), 4), round(float(lon), 4))
+    if cache_key in _GEO_CACHE:
+        return _GEO_CACHE[cache_key]
         
-        # Оновили User-Agent під твій новий тревел-бренд
-        headers = {'User-Agent': 'PixelbeardTravel_Automation_2026'}
-        res = requests.get(url, headers=headers, timeout=10).json()
-        address = res.get('address', {})
-        
-        # 2️⃣ Витягуємо точковий об'єкт, історичне місце або мікрорайон (наприклад, Поділ або l'Eixample)
-        exact_place = (
-            address.get('tourism') or 
-            address.get('amenity') or 
-            address.get('historic') or
-            address.get('neighbourhood') or
-            address.get('suburb')
-        )
-        
-        # 3️⃣ Витягуємо місто або великий населений пункт (наприклад, Київ або Barcelona)
-        city_town = (
-            address.get('city') or 
-            address.get('town') or 
-            address.get('village') or 
-            address.get('municipality') or
-            address.get('county')
-        )
-        
-        country = address.get('country') or ""
-        
-        # --- ФОРМУВАННЯ ДЕТАЛЬНОГО ПІДПИСУ (Для нанесення на відео) ---
-        # Динамічно збираємо ланцюжок: [Мікрорайон] -> [Місто] -> [Країна] (без дублів)
-        display_parts = []
-        if exact_place:
-            display_parts.append(exact_place)
-        if city_town and city_town != exact_place:
-            display_parts.append(city_town)
-        if country:
-            display_parts.append(country)
-        
-        display_location = ", ".join(display_parts)
-        
-        # --- ФОРМУВАННЯ СТАБІЛЬНОГО КЛАТЕРА (Аналог zoom=10 для групування) ---
-        # Ігноруємо мікрорайони та вулиці. Беремо лише місто/регіон + країну.
-        # Завдяки цьому файли з різних вулиць одного міста отримають ідентичний group_location.
-        group_parts = []
-        if city_town:
-            group_parts.append(city_town)
-        elif address.get('state'):
-            group_parts.append(address.get('state'))
-        if country:
-            group_parts.append(country)
+    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=15"
+    headers = {'User-Agent': 'PixelbeardTravel_Automation_2026'}
+
+    for attempt in range(1, retries + 1):
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
             
-        group_location = ", ".join(group_parts)
-        
-        return display_location, group_location
-        
-    except Exception as e:
-        print(f"⚠️ Помилка геокодування OSM: {e}")
-        return "", ""
+            # Якщо OSM тимчасово блокує через часті запити (429) або перевантажений (5xx)
+            if response.status_code in (429, 500, 502, 503, 504):
+                wait_sec = attempt * 2
+                print(f"⚠️ OSM повернув статус {response.status_code}. Повторна спроба {attempt}/{retries} через {wait_sec} с...")
+                time.sleep(wait_sec)
+                continue
+
+            response.raise_for_status()
+            res = response.json()
+            address = res.get('address', {})
+
+            exact_place = (
+                address.get('tourism') or 
+                address.get('amenity') or 
+                address.get('historic') or 
+                address.get('neighbourhood') or 
+                address.get('suburb')
+            )
+
+            city_town = (
+                address.get('city') or 
+                address.get('town') or 
+                address.get('village') or 
+                address.get('municipality') or 
+                address.get('county')
+            )
+
+            country = address.get('country') or ""
+
+            display_parts = []
+            if exact_place:
+                display_parts.append(exact_place)
+            if city_town and city_town != exact_place:
+                display_parts.append(city_town)
+            if country:
+                display_parts.append(country)
+
+            display_location = ", ".join(display_parts)
+
+            group_parts = []
+            if city_town:
+                group_parts.append(city_town)
+            elif address.get('state'):
+                group_parts.append(address.get('state'))
+            if country:
+                group_parts.append(country)
+
+            group_location = ", ".join(group_parts)
+
+            result = (display_location, group_location)
+            _GEO_CACHE[cache_key] = result
+            return result
+
+        except requests.exceptions.RequestException as e:
+            if attempt < retries:
+                wait_sec = attempt * 2
+                print(f"⚠️ Збій мережі OSM ({e}). Повторна спроба {attempt}/{retries} через {wait_sec} с...")
+                time.sleep(wait_sec)
+            else:
+                print(f"❌ Помилка геокодування OSM після {retries} спроб: {e}")
+        except Exception as e:
+            print(f"⚠️ Непередбачена помилка геокодування OSM: {e}")
+            break
+
+    return "", ""
 
 def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
     """
