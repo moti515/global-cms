@@ -16,7 +16,10 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # ⏱️ Автоматично зупинить workflow, якщо він висить понад 30 хвилин
+    timeout-minutes: 30
+
+    permissions:
+      contents: write
 
     steps:
     - name: Перевірка коду репозиторію
@@ -42,7 +45,7 @@ jobs:
       if: github.event.inputs.forced_mode != 'ig_story'
       working-directory: mebli_insta_facebook_post
       env:
-        PYTHONUNBUFFERED: "1"  # ⚡ Вивід логів без затримок у реальному часі
+        PYTHONUNBUFFERED: "1"
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
@@ -59,7 +62,7 @@ jobs:
       if: github.event.inputs.forced_mode == 'ig_story'
       working-directory: mebli_instagram_story
       env:
-        PYTHONUNBUFFERED: "1"  # ⚡ Вивід логів без затримок у реальному часі
+        PYTHONUNBUFFERED: "1"
         GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
@@ -68,5 +71,9 @@ jobs:
         FB_PAGE_ID: ${{ secrets.MEBLI_FB_PAGE_ID }}
         META_ACCESS_TOKEN: ${{ secrets.MEBLI_META_ACCESS_TOKEN }}
         MUSIC_FOLDER_ID: ${{ secrets.MUSIC_FOLDER_ID }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        GITHUB_STAGING_BRANCH: "tmp-story-assets"
       run: |
         python publish_content_mebli_storys.py ${{ github.event.inputs.forced_mode }} "Меблі"
