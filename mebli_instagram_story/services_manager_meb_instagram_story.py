@@ -2,6 +2,7 @@ import os
 import json
 import time
 import base64
+import uuid
 import requests
 import io
 import subprocess
@@ -15,10 +16,12 @@ from googleapiclient.discovery import build
 # Централізований конфіг проекту
 import config_meb_insta_story as config
 
+
 def get_services():
     key_dict = json.loads(os.environ['GDRIVE_SERVICE_ACCOUNT_KEY'])
     creds = service_account.Credentials.from_service_account_info(key_dict, scopes=config.SCOPES)
     return build('drive', 'v3', credentials=creds), build('sheets', 'v4', credentials=creds)
+
 
 def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="непідтримуваний формат"):
     try:
@@ -26,7 +29,7 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
             spreadsheetId=config.SPREADSHEET_ID, range="'⚙️ Налаштування Папок'!A2:E"
         ).execute()
         rows = res.get('values', [])
-        
+
         for idx, row in enumerate(rows):
             if len(row) > 1 and row[1] == folder_name:
                 range_to_update = f"'⚙️ Налаштування Папок'!E{idx + 2}"
@@ -39,10 +42,96 @@ def log_unsupported_to_service(sheets_service, folder_name, file_name, reason="�
     except Exception as e:
         print(f"❌ Не вдалося записати помилку на службовий аркуш: {e}")
 
+
+def _upload_to_github_staging(local_file_path, remote_filename):
+    """
+    Тимчасово завантажує підготовлений файл у технічну гілку GitHub репозиторію
+    та повертає (raw_url, staging_ref) для прямого доступу Meta Graph API.
+    """
+    gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    repo_full = os.environ.get("GITHUB_STAGING_REPO") or os.environ.get("GITHUB_REPOSITORY")
+    branch = os.environ.get("GITHUB_STAGING_BRANCH", "tmp-story-assets")
+
+    if not gh_token or not repo_full:
+        return None, None
+
+    ext = os.path.splitext(remote_filename)[1] or ".jpg"
+    run_id = os.environ.get("GITHUB_RUN_ID", "local")
+    unique_name = f"story_{run_id}_{int(time.time())}_{uuid.uuid4().hex[:8]}{ext}"
+    repo_path = f".staging_stories/{unique_name}"
+
+    headers = {
+        "Authorization": f"Bearer {gh_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+
+    with open(local_file_path, "rb") as f:
+        encoded_content = base64.b64encode(f.read()).decode("utf-8")
+
+    api_url = f"https://api.github.com/repos/{repo_full}/contents/{repo_path}"
+    payload = {
+        "message": f"chore(staging): temp story media {unique_name}",
+        "content": encoded_content,
+        "branch": branch
+    }
+
+    res = requests.put(api_url, headers=headers, json=payload, timeout=60)
+    if res.status_code in (200, 201):
+        raw_url = f"https://raw.githubusercontent.com/{repo_full}/{branch}/{repo_path}"
+        print(f"✅ Успішно підготовлено тимчасовий URL через GitHub: {raw_url}")
+        return raw_url, f"github:{repo_path}"
+
+    raise RuntimeError(f"GitHub staging PUT {res.status_code}: {res.text[:200]}")
+
+
+def cleanup_staging_media(staging_ref):
+    """
+    Видаляє тимчасовий медіафайл із технічної гілки GitHub після публікації або помилки.
+    """
+    if not staging_ref or not str(staging_ref).startswith("github:"):
+        return
+
+    gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    repo_full = os.environ.get("GITHUB_STAGING_REPO") or os.environ.get("GITHUB_REPOSITORY")
+    branch = os.environ.get("GITHUB_STAGING_BRANCH", "tmp-story-assets")
+    repo_path = str(staging_ref).split("github:", 1)[1]
+
+    if not gh_token or not repo_full or not repo_path:
+        return
+
+    headers = {
+        "Authorization": f"Bearer {gh_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+    api_url = f"https://api.github.com/repos/{repo_full}/contents/{repo_path}"
+
+    try:
+        get_res = requests.get(api_url, headers=headers, params={"ref": branch}, timeout=30)
+        if get_res.status_code == 200:
+            sha = get_res.json().get("sha")
+            if sha:
+                del_res = requests.delete(
+                    api_url,
+                    headers=headers,
+                    json={
+                        "message": f"chore(staging): cleanup {os.path.basename(repo_path)}",
+                        "sha": sha,
+                        "branch": branch
+                    },
+                    timeout=30
+                )
+                if del_res.status_code in (200, 204):
+                    print(f"🧹 Тимчасовий файл {repo_path} видалено з гілки {branch}.")
+    except Exception as e:
+        print(f"⚠️ Не вдалося очистити тимчасовий файл {repo_path}: {e}")
+
+
 def get_google_drive_direct_url(file_id, local_file_path=None):
     """
-    Оптимізований каскадний завантажувач для Instagram (тільки прямі лінки):
-    Litterbox -> 0x0.st -> ImageKit -> Tmpfiles -> ImgBB -> GoFile (як фолбек) -> Google Drive.
+    Основний шлях для GitHub Actions: пряма тимчасова віддача через гілку GitHub (raw.githubusercontent.com).
+    Резервний каскад: Litterbox -> 0x0.st -> ImageKit -> Tmpfiles -> ImgBB -> GoFile -> Google Drive.
     """
     if not local_file_path or not os.path.exists(local_file_path):
         print(f"🚨 Аварійний режим посилань для Google Drive ID: {file_id}")
@@ -54,8 +143,17 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     mime_type = "video/mp4" if is_video else "image/jpeg"
     remote_filename = "story.mp4" if is_video else "story.jpg"
 
-    # --- 1️⃣ СПРОБА: Litterbox.moe ---
-    print(f"☁️ [Каскад 1/6] Пробуємо завантажити {filename} на Litterbox.moe...")
+    # --- 0️⃣ ОСНОВНИЙ ШЛЯХ: Тимчасова пряма віддача через GitHub Actions ---
+    print(f"☁️ [Основний шлях] Публікуємо тимчасовий файл {filename} через GitHub staging...")
+    try:
+        gh_url, staging_ref = _upload_to_github_staging(local_file_path, remote_filename)
+        if gh_url:
+            return gh_url, staging_ref
+    except Exception as e:
+        print(f"⚠️ GitHub staging недоступний, переходимо до резервного каскаду: {e}")
+
+    # --- 1️⃣ СПРОБА (Резерв): Litterbox.moe ---
+    print(f"☁️ [Резерв 1/6] Пробуємо завантажити {filename} на Litterbox.moe...")
     try:
         with open(local_file_path, 'rb') as f:
             files = {'fileToUpload': (remote_filename, f, mime_type)}
@@ -75,8 +173,8 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     except Exception as e:
         print(f"⚠️ Помилка завантаження на Litterbox: {e}")
 
-    # --- 2️⃣ СПРОБА: 0x0.st (Дає прямий лінк) ---
-    print(f"☁️ [Каскад 2/6] Пробуємо завантажити {filename} на 0x0.st...")
+    # --- 2️⃣ СПРОБА (Резерв): 0x0.st ---
+    print(f"☁️ [Резерв 2/6] Пробуємо завантажити {filename} на 0x0.st...")
     try:
         with open(local_file_path, 'rb') as f:
             files = {'file': (remote_filename, f, mime_type)}
@@ -93,10 +191,10 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     except Exception as e:
         print(f"⚠️ Помилка завантаження на 0x0.st: {e}")
 
-    # --- 3️⃣ СПРОБА: ImageKit.io ---
+    # --- 3️⃣ СПРОБА (Резерв): ImageKit.io ---
     imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
     if imagekit_key:
-        print(f"☁️ [Каскад 3/6] Пробуємо завантажити {filename} на ImageKit.io...")
+        print(f"☁️ [Резерв 3/6] Пробуємо завантажити {filename} на ImageKit.io...")
         try:
             with open(local_file_path, 'rb') as f:
                 res = requests.post(
@@ -117,8 +215,8 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         except Exception as e:
             print(f"⚠️ Помилка завантаження на ImageKit: {e}")
 
-    # --- 4️⃣ СПРОБА: Tmpfiles.org ---
-    print(f"☁️ [Каскад 4/6] Пробуємо завантажити {filename} на Tmpfiles.org...")
+    # --- 4️⃣ СПРОБА (Резерв): Tmpfiles.org ---
+    print(f"☁️ [Резерв 4/6] Пробуємо завантажити {filename} на Tmpfiles.org...")
     try:
         with open(local_file_path, 'rb') as f:
             files = {'file': (remote_filename, f, mime_type)}
@@ -136,10 +234,10 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     except Exception as e:
         print(f"⚠️ Помилка завантаження на Tmpfiles: {e}")
 
-    # --- 5️⃣ СПРОБА: ImgBB API (Тільки для зображень) ---
+    # --- 5️⃣ СПРОБА (Резерв): ImgBB API (Тільки для зображень) ---
     imgbb_key = os.environ.get("IMGBB_API_KEY")
     if imgbb_key and not is_video:
-        print(f"☁️ [Каскад 5/6] Пробуємо завантажити фото {filename} на ImgBB...")
+        print(f"☁️ [Резерв 5/6] Пробуємо завантажити фото {filename} на ImgBB...")
         try:
             with open(local_file_path, 'rb') as f:
                 img_bytes = f.read()
@@ -159,8 +257,8 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
         except Exception as e:
             print(f"⚠️ Помилка завантаження на ImgBB: {e}")
 
-    # --- 6️⃣ СПРОБА: GoFile (Останньою, бо дає сторінку, а не прямий лінк) ---
-    print(f"☁️ [Каскад 6/6] Пробуємо завантажити {filename} на GoFile...")
+    # --- 6️⃣ СПРОБА (Резерв): GoFile ---
+    print(f"☁️ [Резерв 6/6] Пробуємо завантажити {filename} на GoFile...")
     try:
         with open(local_file_path, 'rb') as f:
             files = {'file': (remote_filename, f, mime_type)}
@@ -174,7 +272,6 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
                 if data.get('status') == 'ok':
                     gofile_url = data['data']['downloadPage']
                     print(f"⚠️ Увага: GoFile повернув сторінку, а не прямий лінк: {gofile_url}")
-                    # Гофайл не підходить для прямого api Instagram, але залишаємо як останній варіант
                     return gofile_url, None
     except Exception as e:
         print(f"⚠️ Помилка завантаження на GoFile: {e}")
@@ -182,26 +279,32 @@ def get_google_drive_direct_url(file_id, local_file_path=None):
     # 🚨 Аварійний фолбек на Google Drive
     print(f"🚨 Усі хостинги каскаду недоступні! Використовуємо аварійний режим Google Drive ID: {file_id}")
     return f"https://docs.google.com/uc?export=download&id={file_id}", None
-    
+
+
 def delete_from_imagekit(file_id: str):
-    if not file_id: return
+    if not file_id:
+        return
+    if str(file_id).startswith("github:"):
+        cleanup_staging_media(file_id)
+        return
     imagekit_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
-    if not imagekit_key: return
-    try: 
+    if not imagekit_key:
+        return
+    try:
         requests.delete(f"https://api.imagekit.io/v1/files/{file_id}", auth=(imagekit_key, ''), timeout=15)
-    except: 
+    except Exception:
         pass
+
 
 def extract_frame_from_video(video_path, output_image_path):
     """Витягує один кадр із середини відео для аналізу ШІ."""
     try:
-        # Швидкий фолбек довжини через ffprobe
         cmd_dur = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
         res = subprocess.run(cmd_dur, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         duration = float(res.stdout.strip()) if res.returncode == 0 and res.stdout.strip() else 5.0
     except Exception:
         duration = 5.0
-        
+
     ss_time = max(0.5, duration / 2)
     cmd = [
         'ffmpeg', '-y', '-ss', str(ss_time), '-i', video_path,
@@ -209,16 +312,17 @@ def extract_frame_from_video(video_path, output_image_path):
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return os.path.exists(output_image_path)
-    
+
+
 def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc, previous_captions=None):
     gemini_key = os.environ.get("GEMINI_API_KEY")
     year = date_str.split(".")[2] if date_str and len(date_str.split(".")) == 3 else str(datetime.now().year)
-    
+
     if previous_captions is None:
         previous_captions = []
-    
+
     pref = config.LANG_CONFIG.get(lang_idx, config.LANG_CONFIG[0])
-    
+
     resolved_loc = ""
     if target_loc:
         try:
@@ -237,13 +341,13 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
     cat_lower = category.lower()
     real_manufacturer = category
     matched_special = False
-    
+
     for spec_key, spec_translation in pref.get("categories", {}).items():
         if spec_key in cat_lower:
             real_manufacturer = spec_translation
             matched_special = True
             break
-            
+
     if not matched_special:
         for key, names_dict in config.COMPANIES_DB.items():
             if key in cat_lower:
@@ -258,7 +362,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
         1: "Write the text exclusively in ENGLISH. You may include 1 emoji.",
         2: "Schreibe den Text ausschließlich auf DEUTSCH. Du darfst 1 Emoji hinzufügen."
     }
-    
+
     # 🚫 Блок заборони повторів
     prev_captions_block = ""
     if previous_captions:
@@ -301,7 +405,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                 target_path = img_path
                 temp_frame_path = None
                 is_video = img_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.3gp', '.gif'))
-                
+
                 try:
                     if is_video:
                         temp_frame_path = img_path + "_caption_target.jpg"
@@ -309,7 +413,7 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                             target_path = temp_frame_path
                         else:
                             temp_frame_path = None
-                            
+
                     img = PILImage.open(target_path)
                     if img.mode in ("RGBA", "P"):
                         img = img.convert("RGB")
@@ -319,45 +423,42 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
                     print(f"⚠️ Не вдалося обробити кадр для Gemini {img_path}: {img_err}")
                 finally:
                     if temp_frame_path and os.path.exists(temp_frame_path):
-                        try: os.remove(temp_frame_path)
-                        except: pass
+                        try:
+                            os.remove(temp_frame_path)
+                        except Exception:
+                            pass
 
         models_to_try = []
         try:
             excluded_keywords = [
-                "image", "tts", "live", "transcribe", "translate", 
+                "image", "tts", "live", "transcribe", "translate",
                 "audio", "veo", "lyria", "embedding", "robotics", "omni"
             ]
-            
+
             for m in client.models.list():
                 model_name = m.name.replace("models/", "")
                 model_name_lower = model_name.lower()
-                
+
                 supported_actions = getattr(m, 'supported_actions', [])
                 if "generateContent" in supported_actions or not supported_actions:
                     if "flash" in model_name_lower and not any(kw in model_name_lower for kw in excluded_keywords):
                         models_to_try.append(model_name)
-            
-            # Сортуємо динамічний список у прямому порядку (від легких/стабільних)
+
             models_to_try.sort()
         except Exception as list_err:
             print(f"⚠️ Не вдалося автоматично завантажити перелік моделей: {list_err}")
 
-        # 🔄 Пріоритетний список у правильному порядку (зменшуємо ліміти нових моделей)
         if not models_to_try:
             models_to_try = [
-                # --- Легкі та стабільні моделі (спочатку) ---
                 "gemini-2.5-flash-lite",
                 "gemini-2.5-flash",
                 "gemini-3.1-flash-lite",
                 "gemini-3.5-flash-lite",
-                # --- Основні робочі конячки ---
                 "gemini-flash-latest",
                 "gemini-3.5-flash",
                 "gemini-3.6-flash",
                 "gemini-3.7-flash",
                 "gemini-3.8-flash",
-                # --- Preview та Pro версії як фолбек ---
                 "gemini-3-flash-preview",
                 "gemini-3.1-pro-preview",
                 "gemini-2.5-pro"
@@ -370,9 +471,8 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
             )
         )
 
-        # Перебираємо моделі з блоком повторних спроб (Retry Loop)
         for model_id in models_to_try:
-            for attempt in range(1, 3): # 2 спроби на кожну модель
+            for attempt in range(1, 3):
                 try:
                     print(f"🚀 Генерація підпису через модель {model_id} (Спроба {attempt}/2)...")
                     response = client.models.generate_content(
@@ -392,39 +492,38 @@ def generate_story_caption(image_paths, category, date_str, lang_idx, target_loc
 
     except Exception as general_err:
         print(f"⚠️ Загальна помилка генерації: {general_err}")
-        
+
     return pref.get("fallback_caption", "Точний розрахунок та увага до кожної деталі!")
-    
+
+
 def wait_for_meta_container(container_id, access_token, max_attempts=36):
     check_url = f"https://graph.facebook.com/v26.0/{container_id}"
-    # 🛠 ВИПРАВЛЕНО: залишаємо лише справжні поля Graph API для контейнера сторіз
     params = {"fields": "status_code,status", "access_token": access_token}
-    
+
     for attempt in range(1, max_attempts + 1):
         try:
             response = requests.get(check_url, params=params, timeout=(10, 30))
             r = response.json()
-            
-            # Якщо Meta повернула помилку на рівні самого API
+
             if "error" in r:
                 print(f"❌ Помилка Meta API під час перевірки статусу: {r['error']}")
                 return False
-                
+
             status = r.get("status_code", "").upper()
-            
+
             if status == "FINISHED":
                 print(f"✅ Контейнер успішно скомпіровано Meta на спробі {attempt}.")
                 return True
             elif status == "ERROR":
                 print(f"❌ Мета повернула статус ERROR для контейнера: {r}")
                 return False
-            
+
             print(f"⏳ [Спроба {attempt}/{max_attempts}] Обробка медіафайлу в Meta... Статус: {status or 'IN_PROGRESS'}")
-            
+
         except Exception as e:
             print(f"⚠️ Помилка перевірки статусу контейнера Meta: {e}")
-            
+
         time.sleep(5)
-        
+
     print("⏰ Вичерпано ліміт часу (таймаут) очікування готовності медіа в Meta.")
     return False
