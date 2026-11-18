@@ -231,7 +231,7 @@ def fetch_registry_candidates(drive_service, sheets_service, target_tab="Меб�
 
     return registry_queue
 
-
+# Більше не використовую цю функцію
 def group_analyzed_files(analyzed_items):
     grouped_dict = defaultdict(list)
     for item in analyzed_items:
@@ -437,9 +437,13 @@ def run_story_publisher():
             print(f"🔥 Знайдено {len(hot_candidates)} кандидатів у Гарячій папці.")
             analyzed_items = download_and_analyze_hot_files(drive_s, hot_candidates)
             if analyzed_items:
-                grouped_batches = group_analyzed_files(analyzed_items)
-                print(f"🧩 Сформовано {len(grouped_batches)} тематичних/часових груп з Гарячої папки.")
-                target_batch = grouped_batches[0][:4]
+                # 🔄 Сортування: 1-й рівень — дата (datetime), 2-й рівень — локація
+                analyzed_items.sort(key=lambda x: (
+                    x['datetime'] if isinstance(x['datetime'], datetime) else datetime.min,
+                    str(x.get('display_loc') or x.get('group_loc') or '')
+                ))
+                print(f"📋 Відсортовано {len(analyzed_items)} файлів за датою та локацією.")
+                target_batch = analyzed_items[:4]
 
         if not target_batch:
             target_batch = fetch_registry_candidates(drive_s, sheets_s, target_tab=current_tab)
