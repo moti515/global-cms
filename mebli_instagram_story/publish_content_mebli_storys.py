@@ -105,6 +105,7 @@ def download_and_analyze_hot_files(drive_service, candidate_files):
         raw_name = f_info['name']
 
         if not raw_name.lower().endswith(config.VALID_MEDIA_EXTENSIONS):
+            print(f"  ⏭️ [{idx}/{len(candidate_files)}] Пропущено (непідтримуваний тип/папка): {raw_name} ({f_info.get('mimeType', '')})")
             continue
 
         sanitized_name = sanitize_filename(f"{file_id}_{raw_name}")
