@@ -43,7 +43,6 @@ def extract_date_from_filename(filename):
     min_year = 2000  
     name_part = filename.rsplit('.', 1)[0]
 
-    # Формат РРРР-ММ-ДД або РРРРММДД
     match_yyyy = re.search(r'\b(\d{4})[-._]?(0[1-9]|1[0-2])[-._]?([0-2]\d|3[01])', name_part)
     if match_yyyy:
         year, month, day = match_yyyy.groups()
@@ -54,7 +53,6 @@ def extract_date_from_filename(filename):
         except ValueError: 
             pass
 
-    # Формат ДД-ММ-РРРР або ДДММРРРР
     match_dd = re.search(r'\b(0[1-9]|[12]\d|3[01])[-._]?(0[1-9]|1[0-2])[-._]?(\d{4})', name_part)
     if match_dd:
         day, month, year = match_dd.groups()
@@ -229,39 +227,77 @@ def download_file_with_retry(service, file_id, local_path, file_name, retries=3)
     return False
 
 def compress_photo_like_telegram(input_path, max_dim=2560, max_size_bytes=9.5 * 1024 * 1024):
-    """Імітує стандартне стиснення фото додатком Telegram (до 2560px по довшій стороні, чистий sRGB JPEG)."""
-    output_path = os.path.join('downloaded', 'tg_' + os.path.basename(input_path).rsplit('.', 1)[0] + '.jpg')
+    """
+    Перекодовує фото у залізобетонний baseline JPEG (yuvj420p) через FFmpeg (або Pillow як фолбек).
+    Повертає (шлях_до_файлу, send_as_doc).
+    """
+    base_out = os.path.join('downloaded', 'tg_' + os.path.basename(input_path).rsplit('.', 1)[0])
+    ffmpeg_out = base_out + '_ff.jpg'
+    pil_out = base_out + '_pil.jpg'
+    
+    # 1. Спроба через FFmpeg — створює ідеально сумісний з Telegram baseline JPEG без битих блоків
+    vf_scale = f"scale='if(gt(iw,ih),min({max_dim},iw),-2)':'if(gt(iw,ih),-2,min({max_dim},ih))'"
+    cmd = [
+        'ffmpeg', '-y', '-i', input_path,
+        '-vf', vf_scale,
+        '-pix_fmt', 'yuvj420p',
+        '-q:v', '4',
+        '-map_metadata', '-1',
+        ffmpeg_out
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    final_path = None
+    if os.path.exists(ffmpeg_out) and os.path.getsize(ffmpeg_out) > 1024:
+        final_path = ffmpeg_out
+    else:
+        # 2. Фолбек через Pillow (для HEIC та інших форматів, які FFmpeg може не прочитати)
+        try:
+            with Image.open(input_path) as img:
+                img = ImageOps.exif_transpose(img)
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                    
+                w, h = img.size
+                if w > max_dim or h > max_dim:
+                    if w > h:
+                        new_w = max_dim
+                        new_h = max(2, (int(h * (max_dim / w)) // 2) * 2)
+                    else:
+                        new_h = max_dim
+                        new_w = max(2, (int(w * (max_dim / h)) // 2) * 2)
+                    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                
+                clean_img = Image.new('RGB', img.size)
+                clean_img.paste(img)
+                clean_img.save(pil_out, 'JPEG', quality=82, progressive=False, optimize=False)
+                final_path = pil_out
+        except Exception as e:
+            print(f"   ⚠️ Помилка оптимізації фото {os.path.basename(input_path)}: {e}")
+            return input_path, True
+
+    # Перевіряємо геометрію та розмір готового файлу
+    send_as_doc = False
     try:
-        with Image.open(input_path) as img:
-            img = ImageOps.exif_transpose(img)
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
+        with Image.open(final_path) as check_img:
+            w, h = check_img.size
+            # Telegram відхиляє панорами в альбомах (співвідношення сторін > 10) або занадто вузькі фото
+            if w < 10 or h < 10 or (w / h) > 10 or (h / w) > 10:
+                send_as_doc = True
                 
-            w, h = img.size
-            if w > max_dim or h > max_dim:
-                if w > h:
-                    new_w = max_dim
-                    new_h = max(1, int(h * (max_dim / w)))
-                else:
-                    new_h = max_dim
-                    new_w = max(1, int(w * (max_dim / h)))
-                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-            
-            # Чисте полотно без EXIF / ICC-профілів для 100% сумісності
-            clean_img = Image.new('RGB', img.size)
-            clean_img.paste(img)
-            
-            quality = 82
-            clean_img.save(output_path, 'JPEG', quality=quality, optimize=True)
-            
-            while os.path.getsize(output_path) > max_size_bytes and quality > 30:
-                quality -= 15
-                clean_img.save(output_path, 'JPEG', quality=quality, optimize=True)
-                
-            return output_path
-    except Exception as e:
-        print(f"   ⚠️ Помилка оптимізації фото {os.path.basename(input_path)}: {e}")
-        return input_path
+        # Якщо файл все ще > 9.5 MB (наприклад, дуже деталізоване зображення), додатково стискаємо
+        if os.path.getsize(final_path) > max_size_bytes and not send_as_doc:
+            with Image.open(final_path) as img:
+                q = 70
+                while os.path.getsize(final_path) > max_size_bytes and q >= 30:
+                    img.save(final_path, 'JPEG', quality=q, progressive=False, optimize=False)
+                    q -= 15
+            if os.path.getsize(final_path) > max_size_bytes:
+                send_as_doc = True
+    except Exception:
+        send_as_doc = True
+
+    return final_path, send_as_doc
 
 def compress_video_like_telegram(input_path, output_path):
     """Імітує стандартне стиснення відео додатком Telegram (H.264, AAC, 720p max, faststart)."""
@@ -354,12 +390,41 @@ def send_media_group(media_batch, caption, chat_id):
             print(f"❌ Помилка Telegram API: {res.get('description')}")
             for idx_err, it in enumerate(media_batch, 1):
                 sz = os.path.getsize(it['local_path']) / (1024 * 1024)
-                print(f"   Деталі файлу #{idx_err}: {it['original_name']} ({it['mime']}, {sz:.2f} MB)")
+                dims = ""
+                if it['mime'].startswith('image/'):
+                    try:
+                        with Image.open(it['local_path']) as im:
+                            dims = f", {im.size[0]}x{im.size[1]}"
+                    except Exception:
+                        pass
+                print(f"   Деталі файлу #{idx_err}: {it['original_name']} ({it['mime']}{dims}, {sz:.2f} MB)")
             return False
         return True
     except Exception as e:
         print(f"❌ Мережева помилка відправки в Telegram: {e}")
         for f in files.values(): f.close()
+        return False
+
+def send_document(local_path, caption, chat_id):
+    token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    if not token or not chat_id:
+        return False
+        
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    try:
+        with open(local_path, 'rb') as f:
+            res = requests.post(
+                url,
+                data={'chat_id': chat_id, 'caption': caption, 'parse_mode': 'HTML'},
+                files={'document': f},
+                timeout=300
+            ).json()
+        if not res.get('ok'):
+            print(f"❌ Помилка Telegram API (sendDocument): {res.get('description')}")
+            return False
+        return True
+    except Exception as e:
+        print(f"❌ Мережева помилка відправки документа: {e}")
         return False
 
 def move_to_gdrive_trash(service, file_id, file_name, current_folder_id):
@@ -457,7 +522,6 @@ def main():
         if not group_loc:
             group_loc = "Невідоме місце"
 
-        # Компактний лог в один рядок
         print(f"📥 [{idx}/{total_files}] {f['name']} — 📅 {file_date} — 📍 {log_loc}")
 
         # 1. GIF -> MP4
@@ -469,9 +533,9 @@ def main():
                 local_path = mp4_path
                 mime_type = 'video/mp4'
                 
-        # 2. Будь-яке фото (включно з HEIC, PNG, WEBP, JPG) -> стандартний JPEG до 2560px
+        # 2. Будь-яке фото -> стандартний baseline JPEG до 2560px
         if mime_type.startswith('image/') or lower_name.endswith(('.heic', '.heif')):
-            prepared_path = compress_photo_like_telegram(local_path)
+            prepared_path, send_as_doc = compress_photo_like_telegram(local_path)
             if prepared_path != local_path:
                 local_files_to_clean.append(prepared_path)
                 local_path = prepared_path
@@ -484,7 +548,8 @@ def main():
                 'local_path': local_path,
                 'date': file_date,
                 'group_location': group_loc,
-                'display_location': display_loc
+                'display_location': display_loc,
+                'send_as_doc': send_as_doc
             })
 
         # 3. Будь-яке відео -> стискаємо як у Telegram (720p H.264)
@@ -507,7 +572,8 @@ def main():
                     'local_path': part_path,
                     'date': file_date,
                     'group_location': group_loc,
-                    'display_location': display_loc
+                    'display_location': display_loc,
+                    'send_as_doc': False
                 })
 
     # Групування за [Дата + Місто]
@@ -528,39 +594,55 @@ def main():
         if sample_display_loc:
             base_caption += f" 📍 {sample_display_loc}"
             
-        sub_batches = []
-        current_batch = []
-        current_batch_size = 0
-        
-        for item in items:
-            f_size = os.path.getsize(item['local_path'])
-            if len(current_batch) >= 10 or (current_batch_size + f_size) > 45 * 1024 * 1024:
-                if current_batch:
-                    sub_batches.append(current_batch)
-                current_batch = []
-                current_batch_size = 0
-            current_batch.append(item)
-            current_batch_size += f_size
-        if current_batch:
-            sub_batches.append(current_batch)
-            
+        album_items = [i for i in items if not i['send_as_doc']]
+        doc_items = [i for i in items if i['send_as_doc']]
         success_ids = set()
-        for s_idx, sb in enumerate(sub_batches):
-            caption = base_caption
-            if len(sub_batches) > 1:
-                caption += f" (Частина {s_idx + 1}/{len(sub_batches)})"
+        
+        if album_items:
+            sub_batches = []
+            current_batch = []
+            current_batch_size = 0
+            
+            for item in album_items:
+                f_size = os.path.getsize(item['local_path'])
+                if len(current_batch) >= 10 or (current_batch_size + f_size) > 45 * 1024 * 1024:
+                    if current_batch:
+                        sub_batches.append(current_batch)
+                    current_batch = []
+                    current_batch_size = 0
+                current_batch.append(item)
+                current_batch_size += f_size
+            if current_batch:
+                sub_batches.append(current_batch)
                 
-            print(f"📡 Відправка альбому {s_idx + 1}/{len(sub_batches)} ({len(sb)} медіа)...")
-            if send_media_group(sb, caption, CHAT_ID):
-                moved_count = 0
-                for uploaded_item in sb:
-                    if uploaded_item['id'] not in success_ids:
-                        if move_to_gdrive_trash(service, uploaded_item['id'], uploaded_item['original_name'], FOLDER_ID):
-                            moved_count += 1
-                        success_ids.add(uploaded_item['id'])
-                print(f"📦 Успішно надіслано та переміщено в кошик: {moved_count} файл(ів)")
+            for s_idx, sb in enumerate(sub_batches):
+                caption = base_caption
+                if len(sub_batches) > 1:
+                    caption += f" (Частина {s_idx + 1}/{len(sub_batches)})"
+                    
+                print(f"📡 Відправка альбому {s_idx + 1}/{len(sub_batches)} ({len(sb)} медіа)...")
+                if send_media_group(sb, caption, CHAT_ID):
+                    moved_count = 0
+                    for uploaded_item in sb:
+                        if uploaded_item['id'] not in success_ids:
+                            if move_to_gdrive_trash(service, uploaded_item['id'], uploaded_item['original_name'], FOLDER_ID):
+                                moved_count += 1
+                            success_ids.add(uploaded_item['id'])
+                    print(f"📦 Успішно надіслано та переміщено в кошик: {moved_count} файл(ів)")
+                else:
+                    print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ під час відправки альбому!")
+                    clean_local_files(local_files_to_clean)
+                    sys.exit(1)
+
+        for doc_item in doc_items:
+            caption = f"{base_caption}\n📄 <code>{doc_item['original_name']}</code>"
+            print(f"📡 Відправка панорами/файлу: {doc_item['original_name']}...")
+            if send_document(doc_item['local_path'], caption, CHAT_ID):
+                if doc_item['id'] not in success_ids:
+                    move_to_gdrive_trash(service, doc_item['id'], doc_item['original_name'], FOLDER_ID)
+                    success_ids.add(doc_item['id'])
             else:
-                print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ під час відправки альбому!")
+                print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ під час відправки файлу {doc_item['original_name']}!")
                 clean_local_files(local_files_to_clean)
                 sys.exit(1)
 
