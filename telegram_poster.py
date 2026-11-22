@@ -124,40 +124,73 @@ def get_video_metadata(video_path):
         pass
     return date_str, lat, lon
 
-def get_location_data(lat, lon, mode='family'):
-    if lat is None or lon is None: 
+_GEO_CACHE = {}
+
+def get_location_data(lat, lon, mode='family', retries=3):
+    if lat is None or lon is None:
         return "", ""
-    
-    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=13&accept-language=uk"
+
+    cache_key = (round(float(lat), 4), round(float(lon), 4), mode)
+    if cache_key in _GEO_CACHE:
+        return _GEO_CACHE[cache_key]
+
+    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=14&accept-language=uk"
     headers = {'User-Agent': 'FurnitureArchive_TelegramBot_2026'}
-    
-    for attempt in range(3):
+
+    for attempt in range(1, retries + 1):
         try:
-            res = requests.get(url, headers=headers, timeout=15).json()
-            address = res.get('address', {})
+            response = requests.get(url, headers=headers, timeout=12)
+            if response.status_code in (429, 500, 502, 503, 504):
+                time.sleep(attempt * 2)
+                continue
+
+            response.raise_for_status()
+            address = response.json().get('address', {})
+
+            exact_place = (
+                address.get('tourism') or address.get('amenity') or
+                address.get('historic') or address.get('neighbourhood') or
+                address.get('suburb')
+            )
             city_town = (
-                address.get('city') or address.get('town') or 
-                address.get('village') or address.get('municipality') or 
+                address.get('city') or address.get('town') or
+                address.get('village') or address.get('municipality') or
                 address.get('county')
             )
             country = address.get('country') or ""
-            
-            if city_town and country:
-                clean_location = f"{city_town}, {country}"
-            elif country:
-                clean_location = country
-            else:
-                clean_location = city_town or ""
-                
-            display_location = clean_location
-            if mode == 'exchange' and display_location:
+
+            display_parts = []
+            if exact_place and exact_place != city_town:
+                display_parts.append(exact_place)
+            if city_town:
+                display_parts.append(city_town)
+            if country:
+                display_parts.append(country)
+            clean_display = ", ".join(display_parts)
+
+            group_parts = []
+            if city_town:
+                group_parts.append(city_town)
+            elif address.get('state'):
+                group_parts.append(address.get('state'))
+            if country:
+                group_parts.append(country)
+            group_location = ", ".join(group_parts)
+
+            display_location = clean_display
+            if mode == 'exchange' and clean_display:
                 google_maps_url = f"https://www.google.com/maps/?q={lat},{lon}"
-                display_location = f'<a href="{google_maps_url}">{clean_location}</a>'
-                
-            return display_location, clean_location
-        except Exception:
-            time.sleep(2)
-            
+                display_location = f'<a href="{google_maps_url}">{clean_display}</a>'
+
+            res_tuple = (display_location, group_location)
+            _GEO_CACHE[cache_key] = res_tuple
+            return res_tuple
+        except Exception as e:
+            if attempt < retries:
+                time.sleep(attempt * 2)
+            else:
+                print(f"   ⚠️ OSM геокодування не вдалося: {e}")
+
     return "", ""
 
 def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
@@ -355,6 +388,26 @@ def split_video_if_needed(input_path, max_size_bytes=49 * 1024 * 1024):
 # 📡 ВІДПРАВКА В TELEGRAM ТА АРХІВАЦІЯ
 # =====================================================================
 
+def send_single_document(file_path, filename, caption, chat_id, token, mime_type='image/jpeg'):
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    data = {'chat_id': chat_id}
+    if caption:
+        data['caption'] = caption
+        data['parse_mode'] = 'HTML'
+    try:
+        with open(file_path, 'rb') as f:
+            res = requests.post(
+                url,
+                data=data,
+                files={'document': (filename, f, mime_type)},
+                timeout=180
+            ).json()
+        if res.get('ok'):
+            return True, None
+        return False, res.get('description')
+    except Exception as e:
+        return False, str(e)
+
 def send_single_item(item, caption, chat_id, token):
     is_video = item['mime'].startswith('video/')
     endpoint = "sendVideo" if is_video else "sendPhoto"
@@ -368,10 +421,25 @@ def send_single_item(item, caption, chat_id, token):
         
     try:
         with open(item['local_path'], 'rb') as f:
-            res = requests.post(url, data=data, files={field_name: f}, timeout=180).json()
+            res = requests.post(
+                url,
+                data=data,
+                files={field_name: (os.path.basename(item['local_path']), f, item['mime'])},
+                timeout=180
+            ).json()
         if res.get('ok'):
             return True, None
-        return False, res.get('description')
+        err = res.get('description', '')
+        # Якщо Telegram не може обробити фото як фото — пробуємо надіслати як документ
+        if not is_video and "IMAGE_PROCESS_FAILED" in err:
+            ok_doc, doc_err = send_single_document(
+                item['local_path'], item['original_name'], caption, chat_id, token, item['mime']
+            )
+            if ok_doc:
+                print(f"   📎 Надіслано як документ (обхід IMAGE_PROCESS_FAILED): {item['original_name']}")
+                return True, None
+            return False, f"{err} | doc: {doc_err}"
+        return False, err
     except Exception as e:
         return False, str(e)
 
