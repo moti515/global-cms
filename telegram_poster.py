@@ -5,7 +5,6 @@ import io
 import time
 import subprocess
 import re
-import glob
 import math
 from datetime import datetime
 import requests
@@ -16,7 +15,6 @@ from PIL import Image, ImageOps
 from PIL.ExifTags import TAGS, GPSTAGS
 from pillow_heif import register_heif_opener
 
-# Реєструємо підтримку HEIC форматів для Pillow
 register_heif_opener()
 
 TRASH_FOLDER_ID = '1L3veD90e7Fr1acwlK7PmhSs_JrofyT6N'
@@ -31,19 +29,13 @@ def get_gdrive_service():
     try:
         key_dict = json.loads(os.environ['GDRIVE_SERVICE_ACCOUNT_KEY'])
         creds = service_account.Credentials.from_service_account_info(key_dict, scopes=SCOPES)
-        return build('drive', 'v3', credentials=creds)
-    except KeyError:
-        print("❌ ПОМИЛКА: Секрет GDRIVE_SERVICE_ACCOUNT_KEY не знадено в GitHub Secrets!")
-        sys.exit(1)
-    except json.JSONDecodeError:
-        print("❌ ПОМИЛКА: Вміст GDRIVE_SERVICE_ACCOUNT_KEY не є коректним JSON файлом!")
-        sys.exit(1)
+        return build('drive', 'v3', credentials=creds, cache_discovery=False)
     except Exception as e:
-        print(f"❌ ПОМИЛКА ініціалізації Google Drive сервісу: {e}")
+        print(f"❌ ПОМИЛКА ініціалізації Google Drive: {e}")
         sys.exit(1)
 
 # =====================================================================
-# 🧠 ІНТЕЛЕКТУАЛЬНИЙ БЛОК АНАЛІЗУ МЕТАДАНИХ ТА ГЕОЛОКАЦІЇ
+# 🧠 АНАЛІЗ МЕТАДАНИХ ТА ГЕОЛОКАЦІЇ
 # =====================================================================
 
 def extract_date_from_filename(filename):
@@ -51,10 +43,10 @@ def extract_date_from_filename(filename):
     min_year = 2000  
     name_part = filename.rsplit('.', 1)[0]
 
-    # 1️⃣ Формат РРРР-ММ-ДД або РРРРММДД
-    match_yyyy_mm_dd = re.search(r'\b(\d{4})[-._]?(0[1-9]|1[0-2])[-._]?([0-2]\d|3[01])', name_part)
-    if match_yyyy_mm_dd:
-        year, month, day = match_yyyy_mm_dd.groups()
+    # Формат РРРР-ММ-ДД або РРРРММДД
+    match_yyyy = re.search(r'\b(\d{4})[-._]?(0[1-9]|1[0-2])[-._]?([0-2]\d|3[01])', name_part)
+    if match_yyyy:
+        year, month, day = match_yyyy.groups()
         try: 
             dt = datetime(int(year), int(month), int(day))
             if min_year <= dt.year <= current_year:
@@ -62,10 +54,10 @@ def extract_date_from_filename(filename):
         except ValueError: 
             pass
 
-    # 2️⃣ Формат ДД-ММ-РРРР або ДДММРРРР
-    match_dd_mm_yyyy = re.search(r'\b(0[1-9]|[12]\d|3[01])[-._]?(0[1-9]|1[0-2])[-._]?(\d{4})', name_part)
-    if match_dd_mm_yyyy:
-        day, month, year = match_dd_mm_yyyy.groups()
+    # Формат ДД-ММ-РРРР або ДДММРРРР
+    match_dd = re.search(r'\b(0[1-9]|[12]\d|3[01])[-._]?(0[1-9]|1[0-2])[-._]?(\d{4})', name_part)
+    if match_dd:
+        day, month, year = match_dd.groups()
         try: 
             dt = datetime(int(year), int(month), int(day))
             if min_year <= dt.year <= current_year:
@@ -98,21 +90,16 @@ def get_exif_data(image_path):
 
             gps_ifd = exif.get_ifd(34853)
             if gps_ifd:
-                geotagging = {}
-                for t, value in gps_ifd.items():
-                    sub_decoded = GPSTAGS.get(t, t)
-                    geotagging[sub_decoded] = value
-                
+                geotagging = {GPSTAGS.get(t, t): value for t, value in gps_ifd.items()}
                 if 'GPSLatitude' in geotagging and 'GPSLongitude' in geotagging:
-                    def _to_degrees(value):
-                        return float(value[0]) + (float(value[1]) / 60.0) + (float(value[2]) / 3600.0)
-                    
-                    lat = _to_degrees(geotagging['GPSLatitude'])
-                    lon = _to_degrees(geotagging['GPSLongitude'])
+                    def _to_deg(v):
+                        return float(v[0]) + (float(v[1]) / 60.0) + (float(v[2]) / 3600.0)
+                    lat = _to_deg(geotagging['GPSLatitude'])
+                    lon = _to_deg(geotagging['GPSLongitude'])
                     if geotagging.get('GPSLatitudeRef') == 'S': lat = -lat
                     if geotagging.get('GPSLongitudeRef') == 'W': lon = -lon
-    except Exception as e:
-        print(f"⚠️ Попередження EXIF для {image_path}: {e}")
+    except Exception:
+        pass
     return date_str, lat, lon
 
 def get_video_metadata(video_path):
@@ -121,14 +108,13 @@ def get_video_metadata(video_path):
         cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', video_path]
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode == 0:
-            data = json.loads(result.stdout)
-            tags = data.get('format', {}).get('tags', {})
+            tags = json.loads(result.stdout).get('format', {}).get('tags', {})
             creation_time = tags.get('creation_time')
             if creation_time:
                 try:
                     dt = datetime.strptime(creation_time[:19], '%Y-%m-%dT%H:%M:%S')
                     date_str = dt.strftime('%Y:%m:%d %H:%M:%S')
-                except: 
+                except Exception: 
                     pass
             
             loc_str = tags.get('location') or tags.get('location-eng')
@@ -136,8 +122,8 @@ def get_video_metadata(video_path):
                 match = re.match(r'([+-]\d+\.\d+)([+-]\d+\.\d+)', loc_str)
                 if match:
                     lat, lon = float(match.group(1)), float(match.group(2))
-    except Exception as e:
-        print(f"⚠️ Попередження відео-метаданих для {video_path}: {e}")
+    except Exception:
+        pass
     return date_str, lat, lon
 
 def get_location_data(lat, lon, mode='family'):
@@ -151,12 +137,9 @@ def get_location_data(lat, lon, mode='family'):
         try:
             res = requests.get(url, headers=headers, timeout=15).json()
             address = res.get('address', {})
-            
             city_town = (
-                address.get('city') or 
-                address.get('town') or 
-                address.get('village') or 
-                address.get('municipality') or
+                address.get('city') or address.get('town') or 
+                address.get('village') or address.get('municipality') or 
                 address.get('county')
             )
             country = address.get('country') or ""
@@ -168,16 +151,13 @@ def get_location_data(lat, lon, mode='family'):
             else:
                 clean_location = city_town or ""
                 
-            group_location = clean_location
             display_location = clean_location
-
             if mode == 'exchange' and display_location:
                 google_maps_url = f"https://www.google.com/maps/?q={lat},{lon}"
                 display_location = f'<a href="{google_maps_url}">{clean_location}</a>'
                 
-            return display_location, group_location
-        except Exception as e:
-            print(f"⚠️ Спроба {attempt+1} - Помилка геокодування OSM: {e}")
+            return display_location, clean_location
+        except Exception:
             time.sleep(2)
             
     return "", ""
@@ -188,9 +168,6 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
     min_year = 2000  
 
     fn_date = extract_date_from_filename(filename)
-    if fn_date:
-        print(f"🎯 Дату розпізнано з назви файлу '{filename}': {fn_date.strftime('%d.%m.%Y')}")
-    
     meta_date, lat, lon = None, None, None
     mime_type = gdrive_file.get('mimeType', '')
     lower_name = filename.lower()
@@ -209,144 +186,148 @@ def get_intellectual_date(local_path, filename, gdrive_file, now_time=None):
                 clean_meta = str(meta_date).strip()[:19].replace('T', ' ')
                 clean_fmt = date_format.replace('T', ' ')
                 dt_parsed = datetime.strptime(clean_meta, clean_fmt)
-                
                 if min_year <= dt_parsed.year <= now_time.year:
                     return dt_parsed, lat, lon
             except ValueError:
                 continue
-        print(f"⚠️ Метадані {filename} нелогічні ({meta_date}). Шукаємо в системі Drive.")
 
     try:
         dt_created = datetime.strptime(gdrive_file['createdTime'][:19], '%Y-%m-%dT%H:%M:%S')
         dt_modified = datetime.strptime(gdrive_file['modifiedTime'][:19], '%Y-%m-%dT%H:%M:%S')
         earliest_gdrive = min(dt_created, dt_modified)
-        
         if min_year <= earliest_gdrive.year <= now_time.year:
             return earliest_gdrive, lat, lon
-    except Exception as e:
-        print(f"⚠️ Помилка зчитування дат Google Drive: {e}")
+    except Exception:
+        pass
 
     return now_time, lat, lon
 
 # =====================================================================
-# ⚙️ ФУНКЦІЇ ОБРОБКИ МЕДІА ТА НАДСИЛАННЯ
+# ⚙️ ОБРОБКА МЕДІА ЯК У КЛІЄНТІ TELEGRAM ("СКРІПКА")
 # =====================================================================
 
-def prepare_image_for_telegram(input_path, max_size_bytes=10 * 1024 * 1024):
-    print(fmt_msg := f"📸 Нормалізуємо фото для Telegram: {input_path}...")
-    output_path = os.path.join('downloaded', 'ready_' + os.path.basename(input_path).rsplit('.', 1)[0] + '.jpg')
-    
+def download_file_with_retry(service, file_id, local_path, file_name, retries=3):
+    for attempt in range(retries):
+        try:
+            current_service = service if attempt == 0 else get_gdrive_service()
+            request = current_service.files().get_media(fileId=file_id)
+            with io.FileIO(local_path, 'wb') as fh:
+                downloader = MediaIoBaseDownload(fh, request, chunksize=10 * 1024 * 1024)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+            return True
+        except Exception as e:
+            if attempt == retries - 1:
+                print(f"   ❌ Помилка завантаження {file_name}: {e}")
+            if os.path.exists(local_path):
+                try:
+                    os.remove(local_path)
+                except Exception:
+                    pass
+            time.sleep(2 * (attempt + 1))
+    return False
+
+def compress_photo_like_telegram(input_path, max_dim=2560, max_size_bytes=9.5 * 1024 * 1024):
+    """Імітує стандартне стиснення фото додатком Telegram (до 2560px по довшій стороні, чистий sRGB JPEG)."""
+    output_path = os.path.join('downloaded', 'tg_' + os.path.basename(input_path).rsplit('.', 1)[0] + '.jpg')
     try:
         with Image.open(input_path) as img:
-            # Виправляємо орієнтацію за EXIF
             img = ImageOps.exif_transpose(img)
-            
-            # Переводимо у стандартний RGB (усуває проблеми з CMYK, RGBA, Palette тощо)
-            if img.mode in ('RGBA', 'P', 'LA', 'CMYK'):
+            if img.mode != 'RGB':
                 img = img.convert('RGB')
                 
-            # Обмежуємо максимальну сторону до 4000 пікселів (запобігає PHOTO_INVALID_DIMENSIONS)
             w, h = img.size
-            max_dim = 4000
             if w > max_dim or h > max_dim:
                 if w > h:
                     new_w = max_dim
-                    new_h = int(h * (max_dim / w))
+                    new_h = max(1, int(h * (max_dim / w)))
                 else:
                     new_h = max_dim
-                    new_w = int(w * (max_dim / h))
+                    new_w = max(1, int(w * (max_dim / h)))
                 img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
             
-            quality = 85
-            img.save(output_path, 'JPEG', quality=quality, optimize=True)
+            # Чисте полотно без EXIF / ICC-профілів для 100% сумісності
+            clean_img = Image.new('RGB', img.size)
+            clean_img.paste(img)
             
-            # Зменшуємо якість, якщо файл все ще більший за 10 МБ
-            while os.path.getsize(output_path) > max_size_bytes and quality > 20:
+            quality = 82
+            clean_img.save(output_path, 'JPEG', quality=quality, optimize=True)
+            
+            while os.path.getsize(output_path) > max_size_bytes and quality > 30:
                 quality -= 15
-                img.save(output_path, 'JPEG', quality=quality, optimize=True)
+                clean_img.save(output_path, 'JPEG', quality=quality, optimize=True)
                 
-            print(f"✅ Фото успішно підготовлено. Розмір: {os.path.getsize(output_path)/1024/1024:.2f} MB")
             return output_path
     except Exception as e:
-        print(f"⚠️ Помилка підготовки фото {input_path}: {e}")
+        print(f"   ⚠️ Помилка оптимізації фото {os.path.basename(input_path)}: {e}")
         return input_path
+
+def compress_video_like_telegram(input_path, output_path):
+    """Імітує стандартне стиснення відео додатком Telegram (H.264, AAC, 720p max, faststart)."""
+    cmd = [
+        'ffmpeg', '-y', '-i', input_path,
+        '-vcodec', 'libx264', '-crf', '26',
+        '-preset', 'faster', '-acodec', 'aac',
+        '-b:a', '128k', '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        '-vf', "scale='min(1280,iw)':-2",
+        output_path
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def gif_to_mp4(input_path, output_path):
+    cmd = [
+        'ffmpeg', '-y', '-i', input_path,
+        '-movflags', '+faststart', '-pix_fmt', 'yuv420p',
+        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        output_path
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def get_video_duration(video_path):
     cmd = ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
     try:
         return float(result.stdout.strip())
-    except:
+    except Exception:
         return 0.0
 
-def split_video(input_path, max_size_bytes=50 * 1024 * 1024):
+def split_video_if_needed(input_path, max_size_bytes=49 * 1024 * 1024):
     current_size = os.path.getsize(input_path)
     if current_size <= max_size_bytes:
         return [input_path]
         
-    print(f"✂️ Відео більше 50 MB ({current_size/1024/1024:.2f} MB). Нарізаємо на частини...")
     duration = get_video_duration(input_path)
     if duration == 0:
-        print("⚠️ Не вдалося визначити тривалість відео для нарізання.")
         return [input_path]
         
     num_parts = math.ceil(current_size / max_size_bytes)
     part_duration = duration / num_parts
-    
     parts = []
     base_name = input_path.rsplit('.', 1)[0]
-    ext = input_path.rsplit('.', 1)[1] if '.' in input_path else 'mp4'
     
     for i in range(num_parts):
         start_time = i * part_duration
-        output_part = f"{base_name}_part{i+1}.{ext}"
-        
+        output_part = f"{base_name}_part{i+1}.mp4"
         cmd = [
             'ffmpeg', '-y', '-ss', str(start_time), '-i', input_path,
-            '-t', str(part_duration), '-c', 'copy', output_part
+            '-t', str(part_duration), '-c', 'copy', '-movflags', '+faststart', output_part
         ]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
         if os.path.exists(output_part) and os.path.getsize(output_part) > 0:
             parts.append(output_part)
-        else:
-            cmd_reencode = [
-                'ffmpeg', '-y', '-ss', str(start_time), '-i', input_path,
-                '-t', str(part_duration), '-vcodec', 'libx264', '-crf', '28',
-                '-acodec', 'aac', output_part
-            ]
-            subprocess.run(cmd_reencode, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if os.path.exists(output_part):
-                parts.append(output_part)
-                
+            
     return parts if parts else [input_path]
 
-def convert_to_mp4(input_path, output_path):
-    print(f"🎬 Оптимізуємо відео {input_path} в стандартний MP4...")
-    cmd = [
-        'ffmpeg', '-y', '-i', input_path,
-        '-vcodec', 'libx264', '-crf', '28',  
-        '-preset', 'faster', '-acodec', 'aac',
-        '-b:a', '128k', '-pix_fmt', 'yuv420p',
-        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-        output_path
-    ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-def gif_to_mp4(input_path, output_path):
-    print(f"🎞️ Конвертуємо анімацію GIF {input_path} в MP4...")
-    cmd = [
-        'ffmpeg', '-y', '-i', input_path,
-        '-movflags', 'faststart', '-pix_fmt', 'yuv420p',
-        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-        output_path
-    ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# =====================================================================
+# 📡 ВІДПРАВКА В TELEGRAM ТА АРХІВАЦІЯ
+# =====================================================================
 
 def send_media_group(media_batch, caption, chat_id):
     token = os.environ.get('TELEGRAM_BOT_TOKEN')
     if not token or not chat_id:
-        print("❌ ПОМИЛКА: Відсутній TELEGRAM_BOT_TOKEN або цільовий CHAT_ID!")
+        print("❌ ПОМИЛКА: Відсутній TELEGRAM_BOT_TOKEN або CHAT_ID!")
         return False
         
     url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
@@ -356,80 +337,54 @@ def send_media_group(media_batch, caption, chat_id):
     for idx, item in enumerate(media_batch):
         attach_name = f"media_{idx}"
         m_type = "video" if item['mime'].startswith('video/') else "photo"
-        
         media_obj = {"type": m_type, "media": f"attach://{attach_name}"}
         if idx == 0:
             media_obj["caption"] = caption
             media_obj["parse_mode"] = "HTML"  
-            
         media.append(media_obj)
         files[attach_name] = open(item['local_path'], 'rb')
         
     payload = {'chat_id': chat_id, 'media': json.dumps(media)}
     
     try:
-        res = requests.post(url, data=payload, files=files, timeout=120).json()
+        res = requests.post(url, data=payload, files=files, timeout=180).json()
         for f in files.values(): f.close()
             
         if not res.get('ok'):
-            print(f"❌ Помилка Telegram API (sendMediaGroup): {res.get('description')}")
+            print(f"❌ Помилка Telegram API: {res.get('description')}")
+            for idx_err, it in enumerate(media_batch, 1):
+                sz = os.path.getsize(it['local_path']) / (1024 * 1024)
+                print(f"   Деталі файлу #{idx_err}: {it['original_name']} ({it['mime']}, {sz:.2f} MB)")
             return False
         return True
     except Exception as e:
-        print(f"❌ Помилка відправки альбому в Telegram: {e}")
+        print(f"❌ Мережева помилка відправки в Telegram: {e}")
         for f in files.values(): f.close()
-        return False
-
-def send_document(local_path, caption, chat_id):
-    token = os.environ.get('TELEGRAM_BOT_TOKEN')
-    if not token or not chat_id:
-        print("❌ ПОМИЛКА: Відсутній TELEGRAM_BOT_TOKEN або цільовий CHAT_ID!")
-        return False
-        
-    url = f"https://api.telegram.org/bot{token}/sendDocument"
-    
-    try:
-        with open(local_path, 'rb') as f:
-            files = {'document': f}
-            payload = {
-                'chat_id': chat_id,
-                'caption': caption,
-                'parse_mode': 'HTML'
-            }
-            res = requests.post(url, data=payload, files=files, timeout=300).json()
-            
-        if not res.get('ok'):
-            print(f"❌ Помилка Telegram API (sendDocument): {res.get('description')}")
-            return False
-        return True
-    except Exception as e:
-        print(f"❌ Помилка відправки документа в Telegram: {e}")
         return False
 
 def move_to_gdrive_trash(service, file_id, file_name, current_folder_id):
-    try:
-        service.files().update(
-            fileId=file_id,
-            addParents=TRASH_FOLDER_ID,
-            removeParents=current_folder_id,
-            fields='id, parents'
-        ).execute()
-        print(f"📦 Переміщено в архівний кошик на Диску: {file_name}")
-        return True
-    except Exception as e:
-        print(f"❌ Не вдалося перемістити в кошик {file_name}: {e}")
-        return False
+    for attempt in range(3):
+        try:
+            current_service = service if attempt == 0 else get_gdrive_service()
+            current_service.files().update(
+                fileId=file_id,
+                addParents=TRASH_FOLDER_ID,
+                removeParents=current_folder_id,
+                fields='id, parents'
+            ).execute()
+            return True
+        except Exception:
+            time.sleep(2)
+    print(f"   ⚠️ Не вдалося перемістити в кошик: {file_name}")
+    return False
 
 def clean_local_files(files_list):
-    if not files_list:
-        return
-    for f in files_list:
+    for f in (files_list or []):
         if os.path.exists(f):
             try:
                 os.remove(f)
-            except:
+            except Exception:
                 pass
-    print("🧹 Тимчасові локальні файли успішно очищені.")
 
 # =====================================================================
 # 🚀 ГОЛОВНА ЛОГІКА СКРИПТА
@@ -441,17 +396,16 @@ def main():
     if mode == 'exchange':
         FOLDER_ID = '1U6QKj7RkEI17gw3V0nMb2RsK6gyDf5no'
         CHAT_ID = '-1003606633217'
-        print("🌟 РЕЖИМ: ФОТООБМІННИК (Канал -1003606633217)")
+        print("🌟 РЕЖИМ: ФОТООБМІННИК")
     else:
         FOLDER_ID = '1MFTlnTVwOuPysxtdS-FzQSZAhFnbzTwz'
         CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
-        print("👪 РЕЖИМ: СІМЕЙНИЙ АРХІВ (Основний чат)")
+        print("👪 РЕЖИМ: СІМЕЙНИЙ АРХІВ")
 
     if not CHAT_ID:
-        print("❌ ПОМИЛКА: Не вказано ID цільового чату/каналу!")
+        print("❌ ПОМИЛКА: Не вказано ID цільового чату!")
         sys.exit(1)
         
-    print("🚀 Старт синхронізації media...")
     service = get_gdrive_service()
     
     try:
@@ -462,62 +416,51 @@ def main():
             pageSize=50
         ).execute()
     except Exception as e:
-        print(f"❌ ПОМИЛКА під час отримання списку файлів з Google Диску: {e}")
+        print(f"❌ ПОМИЛКА Google Диску: {e}")
         sys.exit(1)
     
-    gdrive_files = results.get('files', [])
-    gdrive_files = [f for f in gdrive_files if f['id'] != TRASH_FOLDER_ID]
-    if not gdrive_files:
-        print("ℹ️ Папка порожня. Немає контенту для публікації.")
+    gdrive_files = [f for f in results.get('files', []) if f['id'] != TRASH_FOLDER_ID]
+    total_files = len(gdrive_files)
+    
+    if not total_files:
+        print("ℹ️ Папка порожня.")
         return
 
-    print(f"Знайдено файлів у папці: {len(gdrive_files)}")
+    print(f"🚀 Знайдено файлів: {total_files}\n")
     processed_items = []
     local_files_to_clean = []
     os.makedirs('downloaded', exist_ok=True)
     
-    for f in gdrive_files:
+    for idx, f in enumerate(gdrive_files, 1):
         mime_type = f['mimeType']
         lower_name = f['name'].lower()
         
-        is_valid_media = mime_type.startswith(('image/', 'video/')) or lower_name.endswith(VALID_EXTENSIONS)
-        if not is_valid_media:
-            print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ: Непідтримуваний файл у папці: {f['name']} ({mime_type})")
+        if not (mime_type.startswith(('image/', 'video/')) or lower_name.endswith(VALID_EXTENSIONS)):
+            print(f"💥 Непідтримуваний файл [{idx}/{total_files}]: {f['name']} ({mime_type})")
             clean_local_files(local_files_to_clean)
             sys.exit(1)
                     
         local_path = os.path.join('downloaded', f['name'])
-        print(f"\n📥 Завантаження {f['name']}...")
         
-        try:
-            request = service.files().get_media(fileId=f['id'])
-            with io.FileIO(local_path, 'wb') as fh:
-                downloader = MediaIoBaseDownload(fh, request)
-                done = False
-                while not done:
-                    _, done = downloader.next_chunk()
-        except Exception as e:
-            print(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося завантажити файл {f['name']}: {e}")
+        if not download_file_with_retry(service, f['id'], local_path, f['name']):
+            print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ на файлі [{idx}/{total_files}]: {f['name']}")
             clean_local_files(local_files_to_clean)
             sys.exit(1)
 
         local_files_to_clean.append(local_path)
 
-        # Перевірка ліміту 2 ГБ
-        file_size = os.path.getsize(local_path)
-        if file_size > 2 * 1024 * 1024 * 1024:
-            print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ: Файл {f['name']} перевищує 2 ГБ.")
-            clean_local_files(local_files_to_clean)
-            sys.exit(1)
-
         final_dt, lat, lon = get_intellectual_date(local_path, f['name'], f)
         file_date = final_dt.strftime('%d.%m.%Y')
         
         display_loc, group_loc = get_location_data(lat, lon, mode=mode)
+        log_loc = group_loc if group_loc else "без GPS"
         if not group_loc:
             group_loc = "Невідоме місце"
 
-        # Обробка GIF
+        # Компактний лог в один рядок
+        print(f"📥 [{idx}/{total_files}] {f['name']} — 📅 {file_date} — 📍 {log_loc}")
+
+        # 1. GIF -> MP4
         if mime_type == 'image/gif' or lower_name.endswith('.gif'):
             mp4_path = os.path.join('downloaded', f['name'].rsplit('.', 1)[0] + '_gif.mp4')
             gif_to_mp4(local_path, mp4_path)
@@ -526,100 +469,48 @@ def main():
                 local_path = mp4_path
                 mime_type = 'video/mp4'
                 
-        # Обробка HEIC
-        elif mime_type in ['image/heic', 'image/heif'] or lower_name.endswith(('.heic', '.heif')):
-            print(f"📸 Конвертуємо HEIC-фото в JPG...")
-            jpg_path = os.path.join('downloaded', f['name'].rsplit('.', 1)[0] + '.jpg')
-            try:
-                with Image.open(local_path) as img:
-                    img = ImageOps.exif_transpose(img)
-                    img.convert('RGB').save(jpg_path, 'JPEG', quality=90)
-                local_files_to_clean.append(jpg_path)
-                local_path = jpg_path
-                mime_type = 'image/jpeg'
-            except Exception as e:
-                print(f"❌ АВАРІЙНЕ ЗАВЕРШЕННЯ: Помилка HEIC {f['name']}: {e}")
-                clean_local_files(local_files_to_clean)
-                sys.exit(1)
-
-        lower_name = os.path.basename(local_path).lower()
-
-        # 🚨 НОРМАЛІЗАЦІЯ ТА ОПТИМІЗАЦІЯ ФОТО
-        if mime_type.startswith('image/'):
-            prepared_path = prepare_image_for_telegram(local_path)
+        # 2. Будь-яке фото (включно з HEIC, PNG, WEBP, JPG) -> стандартний JPEG до 2560px
+        if mime_type.startswith('image/') or lower_name.endswith(('.heic', '.heif')):
+            prepared_path = compress_photo_like_telegram(local_path)
             if prepared_path != local_path:
                 local_files_to_clean.append(prepared_path)
                 local_path = prepared_path
                 mime_type = 'image/jpeg'
-                
-            current_size = os.path.getsize(local_path)
-            send_as_doc = False
-            
-            if current_size > 10 * 1024 * 1024:
-                print(f"⚠️ Фото після оптимізації більше 10 MB. Відправляємо як файл.")
-                send_as_doc = True
 
             processed_items.append({
                 'id': f['id'],
                 'original_name': f['name'],
-                'name': f['name'],
                 'mime': mime_type,
                 'local_path': local_path,
                 'date': file_date,
                 'group_location': group_loc,
-                'display_location': display_loc,
-                'send_as_doc': send_as_doc
+                'display_location': display_loc
             })
 
-        # 🚨 ОБРОБКА ТА ОПТИМІЗАЦІЯ ВІДЕО
+        # 3. Будь-яке відео -> стискаємо як у Telegram (720p H.264)
         elif mime_type.startswith('video/') or lower_name.endswith(('.mov', '.avi', '.mkv', '.3gp', '.mpeg', '.mpg', '.swf')):
-            is_mp4 = lower_name.endswith('.mp4') and mime_type == 'video/mp4'
-            current_size = os.path.getsize(local_path)
-            
-            if current_size > 50 * 1024 * 1024 or not is_mp4 or lower_name.endswith('.swf'):
-                compressed_path = os.path.join('downloaded', 'opt_' + f['name'].rsplit('.', 1)[0] + '.mp4')
-                convert_to_mp4(local_path, compressed_path)
-                if os.path.exists(compressed_path):
-                    local_files_to_clean.append(compressed_path)
-                    local_path = compressed_path
-                    mime_type = 'video/mp4'
-                    current_size = os.path.getsize(local_path)
+            compressed_path = os.path.join('downloaded', 'tg_' + f['name'].rsplit('.', 1)[0] + '.mp4')
+            compress_video_like_telegram(local_path, compressed_path)
+            if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 0:
+                local_files_to_clean.append(compressed_path)
+                local_path = compressed_path
+                mime_type = 'video/mp4'
 
-            if current_size > 50 * 1024 * 1024:
-                video_parts = split_video(local_path)
-                for idx, part_path in enumerate(video_parts):
+            video_parts = split_video_if_needed(local_path)
+            for part_path in video_parts:
+                if part_path != local_path:
                     local_files_to_clean.append(part_path)
-                    part_name = f"{f['name']} (Частина {idx+1})" if len(video_parts) > 1 else f['name']
-                    processed_items.append({
-                        'id': f['id'],
-                        'original_name': f['name'],
-                        'name': part_name,
-                        'mime': mime_type,
-                        'local_path': part_path,
-                        'date': file_date,
-                        'group_location': group_loc,
-                        'display_location': display_loc,
-                        'send_as_doc': False
-                    })
-            else:
                 processed_items.append({
                     'id': f['id'],
                     'original_name': f['name'],
-                    'name': f['name'],
                     'mime': mime_type,
-                    'local_path': local_path,
+                    'local_path': part_path,
                     'date': file_date,
                     'group_location': group_loc,
-                    'display_location': display_loc,
-                    'send_as_doc': False
+                    'display_location': display_loc
                 })
 
-    if gdrive_files and not processed_items:
-        print("💥 ПОМИЛКА: Файли виявлено, але жоден не зміг обробитися!")
-        clean_local_files(local_files_to_clean)
-        sys.exit(1)
-
-    # Розумне групування за [Дата + Місто]
+    # Групування за [Дата + Місто]
     groups = {}
     for item in processed_items:
         key = (item['date'], item['group_location'])
@@ -630,68 +521,51 @@ def main():
         items = groups[first_key]
         date, group_loc = first_key
         
-        print(f"\n💎 Публікуємо групу: {date} | {group_loc}")
+        print(f"\n💎 Публікуємо групу: 📅 {date} | 📍 {group_loc} (файлів: {len(items)})")
         
         sample_display_loc = items[0]['display_location']
         base_caption = f"📅 {date}"
         if sample_display_loc:
             base_caption += f" 📍 {sample_display_loc}"
             
-        album_items = [i for i in items if not i['send_as_doc']]
-        doc_items = [i for i in items if i['send_as_doc']]
+        sub_batches = []
+        current_batch = []
+        current_batch_size = 0
         
+        for item in items:
+            f_size = os.path.getsize(item['local_path'])
+            if len(current_batch) >= 10 or (current_batch_size + f_size) > 45 * 1024 * 1024:
+                if current_batch:
+                    sub_batches.append(current_batch)
+                current_batch = []
+                current_batch_size = 0
+            current_batch.append(item)
+            current_batch_size += f_size
+        if current_batch:
+            sub_batches.append(current_batch)
+            
         success_ids = set()
-        
-        # 1️⃣ НАДСИЛАННЯ АЛЬБОМУ
-        if album_items:
-            sub_batches = []
-            current_batch = []
-            current_batch_size = 0
-            
-            for item in album_items:
-                f_size = os.path.getsize(item['local_path'])
-                if len(current_batch) >= 10 or (current_batch_size + f_size) > 45 * 1024 * 1024:
-                    if current_batch:
-                        sub_batches.append(current_batch)
-                    current_batch = []
-                    current_batch_size = 0
-                current_batch.append(item)
-                current_batch_size += f_size
-            if current_batch:
-                sub_batches.append(current_batch)
+        for s_idx, sb in enumerate(sub_batches):
+            caption = base_caption
+            if len(sub_batches) > 1:
+                caption += f" (Частина {s_idx + 1}/{len(sub_batches)})"
                 
-            for s_idx, sb in enumerate(sub_batches):
-                caption = base_caption
-                if len(sub_batches) > 1:
-                    caption += f" (Частина {s_idx + 1}/{len(sub_batches)})"
-                    
-                print(f"\n📡 Надсилання альбому (Елементів: {len(sb)})...")
-                if send_media_group(sb, caption, CHAT_ID):
-                    for uploaded_item in sb:
-                        if uploaded_item['id'] not in success_ids:
-                            move_to_gdrive_trash(service, uploaded_item['id'], uploaded_item['original_name'], FOLDER_ID)
-                            success_ids.add(uploaded_item['id'])
-                else:
-                    print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося опублікувати альбом!")
-                    clean_local_files(local_files_to_clean)
-                    sys.exit(1)
-                    
-        # 2️⃣ НАДСИЛАННЯ ФАЙЛІВ ОКРЕМО
-        for doc_item in doc_items:
-            caption = f"{base_caption}\n📄 Файл: <code>{doc_item['name']}</code>"
-            print(f"\n📡 Надсилання файлу: {doc_item['name']}...")
-            
-            if send_document(doc_item['local_path'], caption, CHAT_ID):
-                if doc_item['id'] not in success_ids:
-                    move_to_gdrive_trash(service, doc_item['id'], doc_item['original_name'], FOLDER_ID)
-                    success_ids.add(doc_item['id'])
+            print(f"📡 Відправка альбому {s_idx + 1}/{len(sub_batches)} ({len(sb)} медіа)...")
+            if send_media_group(sb, caption, CHAT_ID):
+                moved_count = 0
+                for uploaded_item in sb:
+                    if uploaded_item['id'] not in success_ids:
+                        if move_to_gdrive_trash(service, uploaded_item['id'], uploaded_item['original_name'], FOLDER_ID):
+                            moved_count += 1
+                        success_ids.add(uploaded_item['id'])
+                print(f"📦 Успішно надіслано та переміщено в кошик: {moved_count} файл(ів)")
             else:
-                print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ: Не вдалося надіслати документ {doc_item['name']}!")
+                print(f"💥 АВАРІЙНЕ ЗАВЕРШЕННЯ під час відправки альбому!")
                 clean_local_files(local_files_to_clean)
                 sys.exit(1)
 
     clean_local_files(local_files_to_clean)
-    print(f"\n🏁 Синхронізацію успішно завершено.")
+    print("🏁 Синхронізацію завершено.")
     sys.exit(0)
 
 if __name__ == '__main__':
